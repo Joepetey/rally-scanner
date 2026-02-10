@@ -135,7 +135,7 @@ def performance_by_year(trades: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
-def print_report(trades: pd.DataFrame, equity: pd.DataFrame, asset_name: str):
+def print_report(trades: pd.DataFrame, equity: pd.DataFrame, asset_name: str) -> dict:
     """Print a full diagnostic report."""
     metrics = compute_metrics(trades, equity)
 

@@ -21,7 +21,7 @@ from config import AssetConfig
 MODELS_DIR = Path(__file__).parent / "models"
 
 
-def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig):
+def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
     """
     Save model artifacts for one asset.
 

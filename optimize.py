@@ -12,7 +12,6 @@ Usage:
 import warnings
 import itertools
 from dataclasses import dataclass
-from typing import List, Dict
 
 import matplotlib
 matplotlib.use("Agg")
@@ -34,12 +33,13 @@ warnings.filterwarnings("ignore")
 # Step 1: Cache model predictions (slow — runs once)
 # ---------------------------------------------------------------------------
 
-def cache_all_predictions() -> Dict[str, pd.DataFrame]:
+def cache_all_predictions() -> dict[str, pd.DataFrame]:
     """Run model training for all assets, return cached OOS predictions."""
     # Fetch VIX once
     try:
         vix_data = fetch_vix()
-    except Exception:
+    except Exception as e:
+        print(f"  WARNING: VIX data unavailable: {e}")
         vix_data = None
 
     cached = {}
@@ -311,7 +311,7 @@ CONFIGS = [
 ]
 
 
-def main():
+def main() -> None:
     print("=" * 70)
     print("  RALLY DETECTOR — PARAMETER OPTIMIZATION")
     print("=" * 70)

@@ -45,7 +45,7 @@ def _read_wiki(url: str) -> str:
         return resp.read().decode("utf-8")
 
 
-def _fetch_sp500() -> list:
+def _fetch_sp500() -> list[str]:
     """Fetch S&P 500 tickers from Wikipedia."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     html = _read_wiki(url)
@@ -57,7 +57,7 @@ def _fetch_sp500() -> list:
     return tickers
 
 
-def _fetch_nasdaq100() -> list:
+def _fetch_nasdaq100() -> list[str]:
     """Fetch Nasdaq 100 tickers from Wikipedia."""
     url = "https://en.wikipedia.org/wiki/Nasdaq-100"
     html = _read_wiki(url)
@@ -82,12 +82,12 @@ def _load_cache() -> dict | None:
         age_days = (datetime.now() - cached_date).days
         if age_days <= CACHE_MAX_AGE_DAYS:
             return cache
-    except Exception:
+    except (json.JSONDecodeError, KeyError, ValueError):
         pass
     return None
 
 
-def _save_cache(tickers: list, source: str):
+def _save_cache(tickers: list[str], source: str) -> None:
     """Save universe to cache file."""
     CACHE_FILE.parent.mkdir(exist_ok=True)
     cache = {
@@ -100,7 +100,7 @@ def _save_cache(tickers: list, source: str):
         json.dump(cache, f, indent=2)
 
 
-def fetch_universe(force_refresh: bool = False) -> list:
+def fetch_universe(force_refresh: bool = False) -> list[str]:
     """
     Get the combined S&P 500 + Nasdaq 100 universe.
     Caches for 30 days. Falls back to S&P 100 if fetch fails.
@@ -142,6 +142,6 @@ def fetch_universe(force_refresh: bool = False) -> list:
     return SP100_TICKERS
 
 
-def get_universe() -> list:
+def get_universe() -> list[str]:
     """Get the current universe (from cache or fetch)."""
     return fetch_universe(force_refresh=False)

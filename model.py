@@ -3,7 +3,6 @@ Walk-forward logistic regression with isotonic calibration + HMM regime features
 """
 
 from dataclasses import dataclass
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -31,7 +30,7 @@ class FoldResult:
     predictions: pd.DataFrame  # index=date, columns=[P_RALLY, RALLY_ST]
 
 
-def walk_forward_train(df: pd.DataFrame) -> List[FoldResult]:
+def walk_forward_train(df: pd.DataFrame) -> list[FoldResult]:
     """
     Walk-forward: train on `train_years`, test on `test_years`, roll forward.
     Fits HMM on training data per fold, uses state probs as features.
@@ -47,7 +46,7 @@ def walk_forward_train(df: pd.DataFrame) -> List[FoldResult]:
     min_year = int(years.min())
     max_year = int(years.max())
 
-    results: List[FoldResult] = []
+    results: list[FoldResult] = []
 
     fold_start = min_year
     while fold_start + train_yrs + test_yrs - 1 <= max_year:
@@ -155,6 +154,6 @@ def walk_forward_train(df: pd.DataFrame) -> List[FoldResult]:
     return results
 
 
-def combine_predictions(folds: List[FoldResult]) -> pd.DataFrame:
+def combine_predictions(folds: list[FoldResult]) -> pd.DataFrame:
     """Concatenate all out-of-sample predictions across folds."""
     return pd.concat([f.predictions for f in folds], axis=0).sort_index()

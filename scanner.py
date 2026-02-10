@@ -54,7 +54,7 @@ CONFIGS = {
 }
 
 
-def apply_config(config_name: str):
+def apply_config(config_name: str) -> None:
     """Override PARAMS with a named configuration."""
     if config_name not in CONFIGS:
         print(f"  ERROR: Unknown config '{config_name}'. "
@@ -65,7 +65,7 @@ def apply_config(config_name: str):
         setattr(PARAMS, key, val)
 
 
-def scan_single(ticker: str, artifacts: dict, vix_data=None) -> dict:
+def scan_single(ticker: str, artifacts: dict, vix_data: pd.Series | None = None) -> dict:
     """Scan a single asset. Returns dict with signal info."""
     # Reconstruct AssetConfig
     ac = artifacts["asset_config"]
@@ -159,7 +159,7 @@ def scan_single(ticker: str, artifacts: dict, vix_data=None) -> dict:
     }
 
 
-def scan_all(tickers=None, show_positions=False, config_name="baseline"):
+def scan_all(tickers: list[str] | None = None, show_positions: bool = False, config_name: str = "baseline") -> list[dict]:
     # Apply config
     apply_config(config_name)
 
@@ -181,7 +181,8 @@ def scan_all(tickers=None, show_positions=False, config_name="baseline"):
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     try:
         vix_data = fetch_vix(start=start)
-    except Exception:
+    except Exception as e:
+        print(f"  WARNING: VIX data unavailable: {e}")
         vix_data = None
 
     print(f"\n{'='*90}")
@@ -281,7 +282,7 @@ def scan_all(tickers=None, show_positions=False, config_name="baseline"):
     return results
 
 
-def _print_signal_table(signals):
+def _print_signal_table(signals: list[dict]) -> None:
     header = (f"  {'Ticker':<7} {'Close':>8} {'P(rally)':>9} {'Comp':>6} "
               f"{'GC':>3} {'MACD':>7} {'Vol':>5} {'VIX':>4} "
               f"{'Size':>6} {'Stop':>8} {'Target':>8}")
@@ -300,7 +301,7 @@ def _print_signal_table(signals):
               f"{r['range_low']:>8.2f} {target:>8.2f}")
 
 
-def _print_watchlist_table(watchlist):
+def _print_watchlist_table(watchlist: list[dict]) -> None:
     header = (f"  {'Ticker':<7} {'Close':>8} {'P(rally)':>9} {'Comp':>6} "
               f"{'Trend':>5} {'HMM_C':>6} {'RV%':>5} {'RSI':>5} {'Missing':>12}")
     print(header)
@@ -321,7 +322,7 @@ def _print_watchlist_table(watchlist):
               f"{r['rsi']:>5.1f} {missing_str:>12}")
 
 
-def _print_probability_table(results):
+def _print_probability_table(results: list[dict]) -> None:
     """Print every asset ranked by P(rally) with visual probability bar."""
     p = PARAMS
     sorted_r = sorted(results, key=lambda x: x["p_rally"], reverse=True)

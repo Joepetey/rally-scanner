@@ -4,7 +4,6 @@ All thresholds, parameters, and asset definitions in one place.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict
 
 
 @dataclass
@@ -15,7 +14,7 @@ class AssetConfig:
     d_dn: float       # max adverse excursion allowed
 
 
-ASSETS: Dict[str, AssetConfig] = {
+ASSETS: dict[str, AssetConfig] = {
     # --- Indices ---
     "SPY": AssetConfig(ticker="SPY", asset_class="equity", r_up=0.02, d_dn=0.01),
     "QQQ": AssetConfig(ticker="QQQ", asset_class="equity", r_up=0.025, d_dn=0.012),

@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbose: bool = True):
+def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbose: bool = True) -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict]:
     asset = ASSETS[asset_name]
     _p = print if verbose else (lambda *a, **k: None)
 
@@ -49,8 +49,8 @@ def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbos
     try:
         vix_data = fetch_vix()
         df = merge_vix(df, vix_data)
-    except Exception:
-        pass
+    except Exception as e:
+        _p(f"       WARNING: VIX data unavailable: {e}")
     df = build_features(df)
 
     _p(f"[3/6] Computing labels (H={PARAMS.forward_horizon}, "
@@ -125,7 +125,7 @@ def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbos
     return trades, equity, metrics
 
 
-def run_all(plot: bool = False):
+def run_all(plot: bool = False) -> dict:
     """Run backtest across all assets and print a summary table."""
     results = {}
     all_trades = []
@@ -174,7 +174,7 @@ def run_all(plot: bool = False):
 
 
 def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
-                   max_total_exposure: float = 1.0, plot: bool = False):
+                   max_total_exposure: float = 1.0, plot: bool = False) -> None:
     """
     Portfolio-level backtest: all 14 assets share one equity pool.
     Sizes each position from current equity, caps total exposure.

@@ -21,7 +21,6 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
 
 import matplotlib
 matplotlib.use("Agg")
@@ -92,7 +91,7 @@ CONFIGS = [
 # Step 1: Train all assets (slow — cached to disk)
 # ---------------------------------------------------------------------------
 
-def train_single(ticker: str, vix_data=None) -> pd.DataFrame | None:
+def train_single(ticker: str, vix_data: pd.Series | None = None) -> pd.DataFrame | None:
     """Run full walk-forward for a single ticker. Returns OOS predictions or None."""
     try:
         asset_tmp = AssetConfig(ticker=ticker, asset_class="equity",
@@ -126,7 +125,7 @@ def train_single(ticker: str, vix_data=None) -> pd.DataFrame | None:
         return None
 
 
-def cache_all_predictions(tickers: list, resume: bool = False) -> Dict[str, pd.DataFrame]:
+def cache_all_predictions(tickers: list[str], resume: bool = False) -> dict[str, pd.DataFrame]:
     """Train all tickers with walk-forward, cache results to disk."""
     cached = {}
 
@@ -381,7 +380,7 @@ def simulate_portfolio(all_trades: pd.DataFrame, cfg: Config,
 # Step 4: Per-asset stats
 # ---------------------------------------------------------------------------
 
-def compute_per_asset_stats(cached: dict, cfg: Config) -> pd.DataFrame:
+def compute_per_asset_stats(cached: dict[str, pd.DataFrame], cfg: Config) -> pd.DataFrame:
     """Compute per-asset backtest metrics for a given config."""
     rows = []
     for ticker, preds in cached.items():
@@ -418,7 +417,7 @@ def compute_per_asset_stats(cached: dict, cfg: Config) -> pd.DataFrame:
 # Step 5: Plots
 # ---------------------------------------------------------------------------
 
-def plot_results(results: list, per_asset: pd.DataFrame):
+def plot_results(results: list[dict], per_asset: pd.DataFrame) -> None:
     """Generate frontier plot, equity curves, and per-asset distribution."""
     # --- Efficient frontier ---
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
@@ -524,7 +523,7 @@ def plot_results(results: list, per_asset: pd.DataFrame):
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Universe walk-forward backtest")
     parser.add_argument("--tickers", nargs="+", default=None,
                         help="Specific tickers (default: full S&P 500 + Nasdaq 100)")

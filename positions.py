@@ -21,7 +21,7 @@ def load_positions() -> dict:
         return json.load(f)
 
 
-def save_positions(state: dict):
+def save_positions(state: dict) -> None:
     """Save positions to disk."""
     state["last_updated"] = datetime.now().isoformat()
     POSITIONS_FILE.parent.mkdir(exist_ok=True)
@@ -29,7 +29,7 @@ def save_positions(state: dict):
         json.dump(state, f, indent=2, default=str)
 
 
-def update_positions(state: dict, new_signals: list, all_results: list) -> dict:
+def update_positions(state: dict, new_signals: list[dict], all_results: list[dict]) -> dict:
     """
     Update position state:
       1. Update open positions with current prices, check exit conditions
@@ -117,7 +117,7 @@ def update_positions(state: dict, new_signals: list, all_results: list) -> dict:
     return state
 
 
-def print_positions(state: dict):
+def print_positions(state: dict) -> None:
     """Print current positions and today's closes."""
     positions = state.get("positions", [])
     closed = state.get("closed_today", [])

@@ -31,7 +31,7 @@ from universe import get_universe
 warnings.filterwarnings("ignore")
 
 
-def train_last_fold(df: pd.DataFrame, asset: AssetConfig, live_features: bool = True):
+def train_last_fold(df: pd.DataFrame, asset: AssetConfig, live_features: bool = True) -> dict | None:
     """
     Train only the most recent fold (last 5 years of data).
     Returns dict of model artifacts ready for save_model(), or None on failure.
@@ -61,8 +61,8 @@ def train_last_fold(df: pd.DataFrame, asset: AssetConfig, live_features: bool = 
         hmm_model, hmm_scaler, state_order = fit_hmm(df_train_raw)
         hmm_probs = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train_raw)
         df_train_full = df_train_raw.join(hmm_probs)
-    except Exception:
-        # HMM failed — train without HMM features
+    except (ValueError, np.linalg.LinAlgError):
+        # HMM failed (convergence or singular covariance) — train without HMM features
         df_train_full = df_train_raw.copy()
         for col in ["P_compressed", "P_expanding", "HMM_transition_signal"]:
             df_train_full[col] = 0.0
@@ -120,7 +120,7 @@ def train_last_fold(df: pd.DataFrame, asset: AssetConfig, live_features: bool = 
     }
 
 
-def retrain_all(tickers=None, validate=False):
+def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> None:
     if tickers is None:
         print("  Fetching universe...")
         tickers = get_universe()

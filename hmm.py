@@ -20,7 +20,7 @@ HMM_FEATURES = ["RV", "ATR_pct", "BB_width"]
 N_STATES = 3
 
 
-def fit_hmm(df_train: pd.DataFrame) -> tuple:
+def fit_hmm(df_train: pd.DataFrame) -> tuple[GaussianHMM, StandardScaler, np.ndarray]:
     """
     Fit a 3-state Gaussian HMM on volatility features from training data.
     Returns (model, scaler, state_order) where state_order maps
@@ -50,7 +50,7 @@ def fit_hmm(df_train: pd.DataFrame) -> tuple:
     return model, scaler, state_order
 
 
-def predict_hmm_probs(model, scaler, state_order, df: pd.DataFrame) -> pd.DataFrame:
+def predict_hmm_probs(model: GaussianHMM, scaler: StandardScaler, state_order: np.ndarray, df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute filtered state probabilities for each bar.
     Returns DataFrame with columns: P_compressed, P_normal, P_expanding.

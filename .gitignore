@@ -18,6 +18,9 @@ backtest_cache/
 # Position tracking (runtime state)
 positions.json
 
+# Standards reference (external)
+PYTHON_STANDARDS.md
+
 # IDE
 .vscode/
 .idea/
