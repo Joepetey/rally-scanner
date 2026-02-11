@@ -21,6 +21,9 @@ logs/
 # Generated plots
 plots/
 
+# SQLite databases
+*.db
+
 # Environment secrets
 .env
 

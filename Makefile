@@ -1,4 +1,4 @@
-.PHONY: setup scan retrain dashboard health test lint clean
+.PHONY: setup scan retrain dashboard health discord test lint clean
 
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
@@ -19,6 +19,9 @@ dashboard:
 
 health:
 	$(PYTHON) scripts/orchestrator.py health
+
+discord:
+	$(PYTHON) scripts/run_discord.py
 
 test:
 	$(PYTEST) -v

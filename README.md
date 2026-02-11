@@ -2,7 +2,7 @@
 
 A quantitative system that detects the transition from volatility compression to directional rally across equities and crypto. It combines statistical learning (logistic regression + isotonic calibration), hidden Markov models for regime detection, and a multi-factor feature pipeline to generate probabilistic entry signals with structured risk management.
 
-The system runs as an automated pipeline: weekly model retraining, daily scanning with position tracking, Telegram/email alerts, and a terminal dashboard for monitoring.
+The system runs as an automated pipeline: weekly model retraining, daily scanning with position tracking, Discord/Telegram/email alerts, an interactive Discord bot for per-user trade tracking, and a terminal dashboard for monitoring.
 
 ---
 
@@ -18,9 +18,10 @@ The system runs as an automated pipeline: weekly model retraining, daily scannin
 8. [Trading System](#trading-system)
 9. [Auto-Calibration](#auto-calibration)
 10. [Automation & Alerts](#automation--alerts)
-11. [Usage](#usage)
-12. [Configuration](#configuration)
-13. [Caveats & Limitations](#caveats--limitations)
+11. [Discord Bot](#discord-bot)
+12. [Usage](#usage)
+13. [Configuration](#configuration)
+14. [Caveats & Limitations](#caveats--limitations)
 
 ---
 
@@ -40,10 +41,11 @@ make retrain                  # train models for all ~843 tickers
 make scan                     # daily scan + position tracking + alerts
 make dashboard                # terminal portfolio view
 make health                   # model freshness report
-make test                     # run test suite (47 tests)
+make discord                  # start Discord bot
+make test                     # run test suite (74 tests)
 ```
 
-For alerts, copy `.env.example` to `.env` and fill in your Telegram bot token (or SMTP/webhook credentials).
+For alerts, copy `.env.example` to `.env` and fill in your Discord bot token (or Telegram/SMTP/webhook credentials).
 
 ---
 
@@ -66,8 +68,10 @@ market-rally/
         universe.py                 # S&P 500 + Nasdaq Top 500 universe (~843 tickers)
         scanner.py                  # Daily scan — load models, fetch prices, generate alerts
         retrain.py                  # Weekly model retraining (parallel, batch fetch)
-        notify.py                   # Telegram, email, webhook notification backends
+        notify.py                   # Discord, Telegram, email, webhook notification backends
         portfolio.py                # Daily snapshots, trade journal (CSV)
+        discord_db.py               # SQLite persistence for per-user trade tracking
+        discord_bot.py              # Interactive Discord bot (slash commands)
         log.py                      # Centralized logging (console + rotating file)
         main.py                     # Single-asset or 14-asset backtest
         optimize.py                 # Parameter sweep across named configurations
@@ -75,7 +79,8 @@ market-rally/
     scripts/
         orchestrator.py             # Cron entry point: scan, retrain, auto, health
         dashboard.py                # Terminal dashboard for portfolio state
-    tests/                          # pytest test suite (47 tests)
+        run_discord.py              # Discord bot entry point
+    tests/                          # pytest test suite (74 tests)
         conftest.py                 # Synthetic OHLCV fixtures
         test_config.py
         test_features.py
@@ -84,6 +89,8 @@ market-rally/
         test_positions.py
         test_notify.py
         test_portfolio.py
+        test_discord_db.py
+        test_discord_embeds.py
     scanner.py                      # Root shim → rally.scanner
     retrain.py                      # Root shim → rally.retrain
     main.py                         # Root shim → rally.main
@@ -121,7 +128,9 @@ Root-level `.py` files are 3-line shims that forward to the package, so `python 
                       |
               positions.json ──> portfolio.py (snapshots, journal)
                       |
-              notify.py ──> Telegram / email / webhook alerts
+              notify.py ──> Discord / Telegram / email / webhook alerts
+                      |
+              discord_bot.py ──> interactive Discord commands
                       |
               dashboard.py ──> terminal display
 ```
@@ -361,13 +370,14 @@ python scripts/orchestrator.py health    # model freshness report
 
 ### Notifications
 
-Alerts are sent on new signals, position exits, retrain completion, and errors. Three backends are supported — each silently no-ops if not configured:
+Alerts are sent on new signals, position exits, retrain completion, and errors. Four backends are supported — each silently no-ops if not configured:
 
 | Backend | Config (`.env`) | Use case |
 |---------|----------------|----------|
-| **Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Primary — instant mobile alerts |
+| **Discord** | `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID` | Primary — rich embeds in your server |
+| **Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Instant mobile alerts |
 | **Email** | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFY_EMAIL` | Backup / audit trail |
-| **Webhook** | `WEBHOOK_URL` | Integration with Slack, Discord, custom systems |
+| **Webhook** | `WEBHOOK_URL` | Integration with Slack, custom systems |
 
 Copy `.env.example` to `.env` and fill in credentials for your preferred backend(s).
 
@@ -389,6 +399,60 @@ The system automatically tracks:
 - **Trade journal** (`models/trade_journal.csv`): every closed trade with entry/exit dates, P&L, exit reason
 
 Both are updated by the orchestrator after each scan.
+
+---
+
+## Discord Bot
+
+The system includes a full interactive Discord bot for per-user trade tracking and system monitoring.
+
+### Setup
+
+1. Create a bot at [discord.com/developers/applications](https://discord.com/developers/applications)
+2. Enable **MESSAGE CONTENT** intent in Bot settings
+3. Generate an invite URL with `bot` + `applications.commands` scopes
+4. Invite the bot to your server
+5. Add to `.env`:
+   ```
+   DISCORD_BOT_TOKEN=your-token-here
+   DISCORD_CHANNEL_ID=your-alerts-channel-id
+   ```
+6. Install with Discord support: `pip install -e ".[discord]"`
+7. Start the bot: `make discord`
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/signals` | Show recent entry signals from the latest scan |
+| `/positions` | Show system's open positions with P&L |
+| `/enter <ticker> <price> [size] [notes]` | Record a trade entry (per-user) |
+| `/exit <ticker> <price> [notes]` | Close your oldest open trade for that ticker (FIFO) |
+| `/history [ticker] [limit]` | Show your personal trade history |
+| `/pnl [period]` | P&L summary: all-time, 30d, or 7d |
+| `/health` | Model freshness + system status |
+| `/portfolio` | System equity history (last 30 days) |
+
+### Auto-Alerts
+
+The orchestrator pushes rich embeds to your Discord channel automatically (no bot process needed for alerts):
+
+| Event | Embed Color | Content |
+|-------|-------------|---------|
+| New signals | Green | Ticker, P(rally), price, stop, target, size |
+| Position exits | Green/Red | Ticker, exit reason, PnL%, bars held |
+| Retrain complete | Blue | Models fresh/stale count, elapsed time |
+| Errors | Red | Error title + details |
+
+### Per-User Trade Tracking
+
+Each Discord user gets their own trade journal stored in SQLite (`models/rally_discord.db`):
+- `/enter AAPL 185.50` records a trade entry
+- `/exit AAPL 192.00` closes the oldest open AAPL trade (FIFO), computes PnL
+- `/pnl` shows total P&L, win rate, average gain, best/worst trades
+- `/history` shows full trade log with entry/exit dates and PnL
+
+Users are auto-registered on their first command — no setup needed.
 
 ---
 
@@ -415,7 +479,8 @@ pip install -e ".[dev]"
 | `make retrain` | `orchestrator.py retrain` | Weekly model retraining |
 | `make dashboard` | `dashboard.py` | Terminal portfolio view |
 | `make health` | `orchestrator.py health` | Model freshness report |
-| `make test` | `pytest -v` | Run 47 tests |
+| `make discord` | `run_discord.py` | Start Discord bot |
+| `make test` | `pytest -v` | Run 74 tests |
 | `make lint` | `ruff check` | Lint source and tests |
 | `make clean` | rm caches | Remove `__pycache__` and build artifacts |
 
@@ -532,6 +597,8 @@ All plots are saved to the `plots/` directory.
 - lxml (Wikipedia universe scraping)
 - python-dotenv (environment variable management)
 - pyarrow (parquet OHLCV cache)
+
+Optional: discord.py (for Discord bot — install with `pip install -e ".[discord]"`)
 
 Dev dependencies: pytest, ruff
 

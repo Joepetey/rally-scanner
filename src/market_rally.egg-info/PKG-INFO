@@ -15,3 +15,5 @@ Requires-Dist: python-dotenv>=1.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
 Requires-Dist: ruff>=0.1; extra == "dev"
+Provides-Extra: discord
+Requires-Dist: discord.py>=2.3; extra == "discord"
