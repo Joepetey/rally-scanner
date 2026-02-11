@@ -454,6 +454,30 @@ Each Discord user gets their own trade journal stored in SQLite (`models/rally_d
 
 Users are auto-registered on their first command — no setup needed.
 
+### Cloud Deployment (Railway)
+
+The bot includes a built-in scheduler so you don't need cron. One process handles everything: slash commands + daily scans + weekly retrains.
+
+**Deploy to Railway:**
+
+1. Push your repo to GitHub
+2. Go to [railway.app](https://railway.app), create a new project from your repo
+3. Add environment variables in Railway dashboard:
+   ```
+   DISCORD_BOT_TOKEN=your-token
+   DISCORD_CHANNEL_ID=your-channel-id
+   ENABLE_SCHEDULER=1
+   ```
+4. Railway auto-detects the `Procfile` and deploys
+
+The scheduler runs:
+- **Daily scan**: Mon-Fri at 4:30 PM ET (21:30 UTC)
+- **Weekly retrain**: Sunday at 6:00 PM ET (23:00 UTC)
+
+Set `ENABLE_SCHEDULER=1` to activate. When disabled (default), the bot only responds to slash commands.
+
+Railway provides a persistent volume for `models/` and the SQLite database. Add it in the Railway dashboard under your service's Settings > Volumes, mounted at `/app/models`.
+
 ---
 
 ## Usage

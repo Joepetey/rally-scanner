@@ -2,14 +2,19 @@
 
 Reads shared disk state (positions.json, manifest.json, equity_history.csv)
 for system queries. Writes to SQLite for per-user trade tracking.
+
+Includes a built-in scheduler for scan/retrain so no external cron is needed
+(useful for Railway/cloud deployment).
 """
 
+import asyncio
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from .discord_db import (
     close_trade,
@@ -519,5 +524,112 @@ def make_bot(token: str) -> RallyBot:
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ------------------------------------------------------------------
+    # Built-in scheduler (replaces cron for cloud deployment)
+    # Set ENABLE_SCHEDULER=1 in .env to activate
+    # ------------------------------------------------------------------
+    if os.environ.get("ENABLE_SCHEDULER", "").strip() in ("1", "true", "yes"):
+        alert_channel_id = os.environ.get("DISCORD_CHANNEL_ID", "")
+
+        async def _send_alert(embed: discord.Embed) -> None:
+            """Send an embed to the alerts channel."""
+            if not alert_channel_id:
+                return
+            channel = bot.get_channel(int(alert_channel_id))
+            if channel:
+                await channel.send(embed=embed)
+
+        async def _run_scan() -> None:
+            """Run the scan pipeline in a thread, then post results."""
+            from .notify import _exit_embed, _signal_embed
+            from .portfolio import record_closed_trades, update_daily_snapshot
+            from .positions import load_positions
+            from .scanner import scan_all
+
+            logger.info("Scheduler: starting daily scan")
+            results = await asyncio.to_thread(
+                scan_all, None, True, "baseline"
+            )
+            if not results:
+                return
+
+            signals = [r for r in results if r.get("signal")]
+            if signals:
+                await _send_alert(discord.Embed.from_dict(_signal_embed(signals)))
+
+            positions = load_positions()
+            closed = positions.get("closed_today", [])
+            if closed:
+                await _send_alert(discord.Embed.from_dict(_exit_embed(closed)))
+                record_closed_trades(closed)
+
+            update_daily_snapshot(positions, results)
+            logger.info(
+                f"Scheduler: scan complete — {len(signals)} signals, "
+                f"{len(closed)} exits"
+            )
+
+        async def _run_retrain() -> None:
+            """Run retrain in a thread, then post results."""
+            import time as _time
+
+            from .notify import _retrain_embed
+            from .retrain import retrain_all
+
+            logger.info("Scheduler: starting weekly retrain")
+            t0 = _time.time()
+            await asyncio.to_thread(retrain_all)
+            elapsed = _time.time() - t0
+
+            from .persistence import load_manifest
+
+            manifest = load_manifest()
+            health = {
+                "total_count": len(manifest),
+                "fresh_count": len(manifest),
+                "stale_count": 0,
+            }
+            await _send_alert(
+                discord.Embed.from_dict(_retrain_embed(health, elapsed))
+            )
+            logger.info(f"Scheduler: retrain complete ({elapsed:.0f}s)")
+
+        # Daily scan: 4:30 PM ET (21:30 UTC)
+        @tasks.loop(time=time(hour=21, minute=30))
+        async def scheduled_scan() -> None:
+            weekday = datetime.utcnow().weekday()
+            if weekday >= 5:  # skip weekends
+                return
+            try:
+                await _run_scan()
+            except Exception:
+                logger.exception("Scheduled scan failed")
+
+        # Weekly retrain: Sunday 6 PM ET (23:00 UTC)
+        @tasks.loop(time=time(hour=23, minute=0))
+        async def scheduled_retrain() -> None:
+            if datetime.utcnow().weekday() != 6:  # Sunday only
+                return
+            try:
+                await _run_retrain()
+            except Exception:
+                logger.exception("Scheduled retrain failed")
+
+        @bot.event
+        async def on_ready() -> None:
+            logger.info(f"Bot connected as {bot.user} (ID: {bot.user.id})")
+            await bot.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name="rally signals",
+                )
+            )
+            if not scheduled_scan.is_running():
+                scheduled_scan.start()
+                logger.info("Scheduler: daily scan armed (21:30 UTC / 4:30 PM ET)")
+            if not scheduled_retrain.is_running():
+                scheduled_retrain.start()
+                logger.info("Scheduler: weekly retrain armed (Sun 23:00 UTC)")
 
     return bot
