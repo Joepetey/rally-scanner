@@ -39,6 +39,7 @@ def init_db(db_path: str | Path | None = None) -> None:
         CREATE TABLE IF NOT EXISTS users (
             discord_id   INTEGER PRIMARY KEY,
             username     TEXT NOT NULL,
+            capital      REAL DEFAULT 0.0,
             created_at   TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -50,8 +51,11 @@ def init_db(db_path: str | Path | None = None) -> None:
             entry_date   TEXT NOT NULL,
             exit_price   REAL,
             exit_date    TEXT,
+            stop_price   REAL,
+            target_price REAL,
             size         REAL DEFAULT 1.0,
             pnl_pct      REAL,
+            pnl_dollar   REAL,
             status       TEXT NOT NULL DEFAULT 'open',
             notes        TEXT,
             created_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -60,7 +64,29 @@ def init_db(db_path: str | Path | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_trades_user_status
             ON trades(discord_id, status);
     """)
+    # Migrate existing databases: add new columns if missing
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after initial schema."""
+    existing = {
+        row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "capital" not in existing:
+        conn.execute("ALTER TABLE users ADD COLUMN capital REAL DEFAULT 0.0")
+
+    existing = {
+        row[1] for row in conn.execute("PRAGMA table_info(trades)").fetchall()
+    }
+    for col, typ in [
+        ("stop_price", "REAL"),
+        ("target_price", "REAL"),
+        ("pnl_dollar", "REAL"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
 
 
 # ---------------------------------------------------------------------------
@@ -82,12 +108,40 @@ def ensure_user(discord_id: int, username: str, db_path: str | Path | None = Non
 # Trade CRUD
 # ---------------------------------------------------------------------------
 
+def set_capital(
+    discord_id: int,
+    capital: float,
+    db_path: str | Path | None = None,
+) -> None:
+    """Set the user's portfolio capital."""
+    conn = get_db(db_path)
+    conn.execute(
+        "UPDATE users SET capital = ? WHERE discord_id = ?",
+        (capital, discord_id),
+    )
+    conn.commit()
+
+
+def get_capital(
+    discord_id: int,
+    db_path: str | Path | None = None,
+) -> float:
+    """Get the user's portfolio capital. Returns 0.0 if not set."""
+    conn = get_db(db_path)
+    row = conn.execute(
+        "SELECT capital FROM users WHERE discord_id = ?", (discord_id,)
+    ).fetchone()
+    return float(row["capital"]) if row and row["capital"] else 0.0
+
+
 def open_trade(
     discord_id: int,
     ticker: str,
     entry_price: float,
     entry_date: str | None = None,
     size: float = 1.0,
+    stop_price: float | None = None,
+    target_price: float | None = None,
     notes: str | None = None,
     db_path: str | Path | None = None,
 ) -> int:
@@ -96,9 +150,11 @@ def open_trade(
     if entry_date is None:
         entry_date = datetime.now().strftime("%Y-%m-%d")
     cur = conn.execute(
-        "INSERT INTO trades (discord_id, ticker, entry_price, entry_date, size, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (discord_id, ticker.upper(), entry_price, entry_date, size, notes),
+        "INSERT INTO trades (discord_id, ticker, entry_price, entry_date, "
+        "size, stop_price, target_price, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (discord_id, ticker.upper(), entry_price, entry_date, size,
+         stop_price, target_price, notes),
     )
     conn.commit()
     return cur.lastrowid
@@ -119,7 +175,8 @@ def close_trade(
 
     # Find oldest open trade for this ticker
     row = conn.execute(
-        "SELECT id, entry_price, entry_date, size FROM trades "
+        "SELECT id, entry_price, entry_date, size, stop_price, target_price "
+        "FROM trades "
         "WHERE discord_id = ? AND ticker = ? AND status = 'open' "
         "ORDER BY entry_date ASC, id ASC LIMIT 1",
         (discord_id, ticker.upper()),
@@ -130,7 +187,14 @@ def close_trade(
 
     trade_id = row["id"]
     entry_price = row["entry_price"]
+    size = row["size"]
     pnl_pct = round((exit_price / entry_price - 1) * 100, 2)
+
+    # Dollar PnL: uses capital * size fraction * return
+    capital = get_capital(discord_id, db_path)
+    pnl_dollar = None
+    if capital > 0 and size > 0:
+        pnl_dollar = round(capital * size * (exit_price / entry_price - 1), 2)
 
     # Build notes: append exit notes to existing
     existing_notes = conn.execute(
@@ -142,8 +206,9 @@ def close_trade(
 
     conn.execute(
         "UPDATE trades SET exit_price = ?, exit_date = ?, pnl_pct = ?, "
-        "status = 'closed', notes = ? WHERE id = ?",
-        (exit_price, exit_date, pnl_pct, combined_notes or None, trade_id),
+        "pnl_dollar = ?, status = 'closed', notes = ? WHERE id = ?",
+        (exit_price, exit_date, pnl_pct, pnl_dollar, combined_notes or None,
+         trade_id),
     )
     conn.commit()
 
@@ -154,8 +219,11 @@ def close_trade(
         "entry_date": row["entry_date"],
         "exit_price": exit_price,
         "exit_date": exit_date,
-        "size": row["size"],
+        "size": size,
+        "stop_price": row["stop_price"],
+        "target_price": row["target_price"],
         "pnl_pct": pnl_pct,
+        "pnl_dollar": pnl_dollar,
     }
 
 
@@ -169,7 +237,8 @@ def get_open_trades(
     """Get all open trades for a user."""
     conn = get_db(db_path)
     rows = conn.execute(
-        "SELECT id, ticker, entry_price, entry_date, size, notes "
+        "SELECT id, ticker, entry_price, entry_date, size, "
+        "stop_price, target_price, notes "
         "FROM trades WHERE discord_id = ? AND status = 'open' "
         "ORDER BY entry_date DESC",
         (discord_id,),
@@ -187,7 +256,8 @@ def get_trade_history(
     conn = get_db(db_path)
     query = (
         "SELECT id, ticker, entry_price, entry_date, exit_price, exit_date, "
-        "size, pnl_pct, status, notes FROM trades WHERE discord_id = ?"
+        "size, stop_price, target_price, pnl_pct, pnl_dollar, status, notes "
+        "FROM trades WHERE discord_id = ?"
     )
     params: list = [discord_id]
 
@@ -210,7 +280,7 @@ def get_pnl_summary(
     """Compute P&L summary for a user's closed trades."""
     conn = get_db(db_path)
     query = (
-        "SELECT pnl_pct, size FROM trades "
+        "SELECT pnl_pct, pnl_dollar, size FROM trades "
         "WHERE discord_id = ? AND status = 'closed'"
     )
     params: list = [discord_id]
@@ -230,9 +300,11 @@ def get_pnl_summary(
             "win_rate": 0.0,
             "best_trade": 0.0,
             "worst_trade": 0.0,
+            "total_pnl_dollar": 0.0,
         }
 
     pnls = [r["pnl_pct"] for r in rows]
+    dollar_pnls = [r["pnl_dollar"] for r in rows if r["pnl_dollar"] is not None]
     wins = sum(1 for p in pnls if p > 0)
 
     return {
@@ -242,4 +314,5 @@ def get_pnl_summary(
         "win_rate": round(wins / len(pnls) * 100, 1),
         "best_trade": round(max(pnls), 2),
         "worst_trade": round(min(pnls), 2),
+        "total_pnl_dollar": round(sum(dollar_pnls), 2) if dollar_pnls else 0.0,
     }

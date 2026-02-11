@@ -5,12 +5,14 @@ import pytest
 from rally.discord_db import (
     close_trade,
     ensure_user,
+    get_capital,
     get_db,
     get_open_trades,
     get_pnl_summary,
     get_trade_history,
     init_db,
     open_trade,
+    set_capital,
 )
 
 
@@ -197,3 +199,121 @@ def test_multiple_users_isolated(db):
     assert alice_trades[0]["ticker"] == "AAPL"
     assert len(bob_trades) == 1
     assert bob_trades[0]["ticker"] == "MSFT"
+
+
+# ---------------------------------------------------------------------------
+# Capital management
+# ---------------------------------------------------------------------------
+
+
+def test_capital_default_zero(db):
+    ensure_user(1, "alice", db_path=db)
+    assert get_capital(1, db_path=db) == 0.0
+
+
+def test_set_and_get_capital(db):
+    ensure_user(1, "alice", db_path=db)
+    set_capital(1, 100_000.0, db_path=db)
+    assert get_capital(1, db_path=db) == 100_000.0
+
+
+def test_update_capital(db):
+    ensure_user(1, "alice", db_path=db)
+    set_capital(1, 50_000.0, db_path=db)
+    set_capital(1, 75_000.0, db_path=db)
+    assert get_capital(1, db_path=db) == 75_000.0
+
+
+# ---------------------------------------------------------------------------
+# Stop/target on trades
+# ---------------------------------------------------------------------------
+
+
+def test_open_trade_with_stop_target(db):
+    ensure_user(1, "bob", db_path=db)
+    open_trade(
+        1, "AAPL", 150.0, "2024-01-10",
+        stop_price=145.0, target_price=160.0, db_path=db,
+    )
+    trades = get_open_trades(1, db_path=db)
+    assert trades[0]["stop_price"] == 145.0
+    assert trades[0]["target_price"] == 160.0
+
+
+def test_open_trade_stop_target_default_none(db):
+    ensure_user(1, "bob", db_path=db)
+    open_trade(1, "AAPL", 150.0, "2024-01-10", db_path=db)
+    trades = get_open_trades(1, db_path=db)
+    assert trades[0]["stop_price"] is None
+    assert trades[0]["target_price"] is None
+
+
+# ---------------------------------------------------------------------------
+# Dollar PnL
+# ---------------------------------------------------------------------------
+
+
+def test_close_trade_dollar_pnl_with_capital(db):
+    ensure_user(1, "bob", db_path=db)
+    set_capital(1, 100_000.0, db_path=db)
+    open_trade(1, "AAPL", 100.0, "2024-01-10", size=0.15, db_path=db)
+    result = close_trade(1, "AAPL", 110.0, "2024-01-20", db_path=db)
+
+    assert result["pnl_pct"] == 10.0
+    # Dollar PnL: 100k * 0.15 * 0.10 = $1500
+    assert result["pnl_dollar"] == pytest.approx(1500.0, abs=0.01)
+
+
+def test_close_trade_dollar_pnl_without_capital(db):
+    ensure_user(1, "bob", db_path=db)
+    # No capital set
+    open_trade(1, "AAPL", 100.0, "2024-01-10", size=0.15, db_path=db)
+    result = close_trade(1, "AAPL", 110.0, "2024-01-20", db_path=db)
+
+    assert result["pnl_pct"] == 10.0
+    assert result["pnl_dollar"] is None
+
+
+def test_pnl_summary_includes_dollar_total(db):
+    ensure_user(1, "bob", db_path=db)
+    set_capital(1, 100_000.0, db_path=db)
+
+    open_trade(1, "AAPL", 100.0, "2024-01-10", size=0.15, db_path=db)
+    close_trade(1, "AAPL", 110.0, "2024-01-20", db_path=db)
+
+    open_trade(1, "MSFT", 200.0, "2024-01-10", size=0.10, db_path=db)
+    close_trade(1, "MSFT", 190.0, "2024-01-20", db_path=db)
+
+    summary = get_pnl_summary(1, db_path=db)
+    # AAPL: 100k * 0.15 * 10% = +$1500, MSFT: 100k * 0.10 * -5% = -$500
+    assert summary["total_pnl_dollar"] == pytest.approx(1000.0, abs=0.01)
+
+
+def test_pnl_summary_dollar_zero_when_no_capital(db):
+    ensure_user(1, "bob", db_path=db)
+    open_trade(1, "AAPL", 100.0, "2024-01-10", db_path=db)
+    close_trade(1, "AAPL", 110.0, "2024-01-20", db_path=db)
+
+    summary = get_pnl_summary(1, db_path=db)
+    assert summary["total_pnl_dollar"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Migration (existing DB without new columns)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_adds_columns(db):
+    """Simulate a pre-migration DB and verify columns are added."""
+    conn = get_db(db)
+    # Columns should exist after init_db (which calls _migrate)
+    user_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    trade_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(trades)").fetchall()
+    }
+    assert "capital" in user_cols
+    assert "stop_price" in trade_cols
+    assert "target_price" in trade_cols
+    assert "pnl_dollar" in trade_cols

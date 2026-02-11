@@ -19,10 +19,12 @@ from discord.ext import commands, tasks
 from .discord_db import (
     close_trade,
     ensure_user,
+    get_capital,
     get_open_trades,
     get_pnl_summary,
     get_trade_history,
     open_trade,
+    set_capital,
 )
 from .persistence import load_manifest
 from .portfolio import load_equity_history, load_trade_journal
@@ -41,6 +43,30 @@ GRAY = 0x95A5A6
 def _ensure_caller(interaction: discord.Interaction) -> None:
     """Auto-register the calling Discord user."""
     ensure_user(interaction.user.id, str(interaction.user))
+
+
+def _get_system_recommendation(ticker: str) -> dict | None:
+    """Look up the system's current recommendation for a ticker.
+
+    Checks open positions first (already entered by the system), then
+    falls back to the latest scan results cached in positions.json.
+    Returns dict with size, stop_price, target_price, entry_price or None.
+    """
+    from .positions import load_positions
+
+    state = load_positions()
+
+    # Check open positions (system already entered this trade)
+    for p in state.get("positions", []):
+        if p.get("ticker", "").upper() == ticker.upper():
+            return {
+                "entry_price": p.get("entry_price"),
+                "size": p.get("size", 0),
+                "stop_price": p.get("stop_price"),
+                "target_price": p.get("target_price"),
+            }
+
+    return None
 
 
 class RallyBot(commands.Bot):
@@ -94,6 +120,8 @@ def make_bot(token: str) -> RallyBot:
             await interaction.response.send_message(embed=embed)
             return
 
+        capital = get_capital(interaction.user.id)
+
         embed = discord.Embed(
             title=f"Recent Entries ({len(recent_entries)})",
             color=GREEN,
@@ -101,17 +129,38 @@ def make_bot(token: str) -> RallyBot:
         )
         for p in recent_entries:
             pnl = p.get("unrealized_pnl_pct", 0)
+            size = p.get("size", 0)
             sign = "+" if pnl >= 0 else ""
+
+            value_lines = [
+                f"Entry: ${p['entry_price']:.2f}",
+                f"Stop: ${p.get('stop_price', 0):.2f}",
+                f"Target: ${p.get('target_price', 0):.2f}",
+                f"Size: {size:.0%}",
+                f"PnL: {sign}{pnl:.2f}%",
+            ]
+            if capital > 0 and size > 0:
+                dollar_size = capital * size
+                stop = p.get("stop_price", 0)
+                if stop:
+                    dollar_risk = capital * size * (p["entry_price"] - stop) / p["entry_price"]
+                else:
+                    dollar_risk = 0
+                value_lines.append(f"Allocate: ${dollar_size:,.0f}")
+                if dollar_risk > 0:
+                    value_lines.append(f"Risk: ${dollar_risk:,.0f}")
+
             embed.add_field(
                 name=p["ticker"],
-                value=(
-                    f"Entry: ${p['entry_price']:.2f}\n"
-                    f"Stop: ${p.get('stop_price', 0):.2f}\n"
-                    f"Target: ${p.get('target_price', 0):.2f}\n"
-                    f"Size: {p.get('size', 0):.0%}\n"
-                    f"PnL: {sign}{pnl:.2f}%"
-                ),
+                value="\n".join(value_lines),
                 inline=True,
+            )
+
+        if capital > 0:
+            embed.set_footer(text=f"Based on ${capital:,.0f} capital")
+        else:
+            embed.set_footer(
+                text="Set capital with /setcapital to see dollar amounts"
             )
 
         await interaction.response.send_message(embed=embed)
@@ -135,10 +184,16 @@ def make_bot(token: str) -> RallyBot:
             await interaction.response.send_message(embed=embed)
             return
 
+        capital = get_capital(interaction.user.id)
         total_exposure = sum(p.get("size", 0) for p in positions)
+
+        desc = f"Total exposure: {total_exposure:.0%}"
+        if capital > 0:
+            desc += f" (${capital * total_exposure:,.0f} of ${capital:,.0f})"
+
         embed = discord.Embed(
             title=f"Open Positions ({len(positions)})",
-            description=f"Total exposure: {total_exposure:.0%}",
+            description=desc,
             color=BLUE,
             timestamp=datetime.now(),
         )
@@ -147,20 +202,76 @@ def make_bot(token: str) -> RallyBot:
             positions, key=lambda x: x.get("unrealized_pnl_pct", 0), reverse=True
         ):
             pnl = p.get("unrealized_pnl_pct", 0)
+            size = p.get("size", 0)
             sign = "+" if pnl >= 0 else ""
+
+            value_lines = [
+                f"Entry: ${p['entry_price']:.2f}",
+                f"Current: ${p.get('current_price', 0):.2f}",
+                f"Stop: ${p.get('stop_price', 0):.2f}",
+                f"Target: ${p.get('target_price', 0):.2f}",
+                f"Size: {size:.0%} | {p.get('bars_held', 0)} bars",
+            ]
+            if capital > 0 and size > 0:
+                dollar_alloc = capital * size
+                dollar_pnl = dollar_alloc * pnl / 100
+                dsign = "+" if dollar_pnl >= 0 else ""
+                value_lines.append(
+                    f"${dollar_alloc:,.0f} allocated | "
+                    f"{dsign}${abs(dollar_pnl):,.0f} PnL"
+                )
+
             embed.add_field(
                 name=f"{p['ticker']} ({sign}{pnl:.2f}%)",
-                value=(
-                    f"Entry: ${p['entry_price']:.2f}\n"
-                    f"Current: ${p.get('current_price', 0):.2f}\n"
-                    f"Stop: ${p.get('stop_price', 0):.2f}\n"
-                    f"Target: ${p.get('target_price', 0):.2f}\n"
-                    f"Size: {p.get('size', 0):.0%} | {p.get('bars_held', 0)} bars"
-                ),
+                value="\n".join(value_lines),
                 inline=True,
             )
 
         await interaction.response.send_message(embed=embed)
+
+    # ------------------------------------------------------------------
+    # /setcapital — set user's portfolio size
+    # ------------------------------------------------------------------
+    @bot.tree.command(
+        name="setcapital",
+        description="Set your portfolio capital for position sizing",
+    )
+    @app_commands.describe(amount="Your total portfolio capital in dollars")
+    async def cmd_setcapital(
+        interaction: discord.Interaction,
+        amount: float,
+    ) -> None:
+        _ensure_caller(interaction)
+
+        if amount <= 0:
+            embed = discord.Embed(
+                title="Invalid Amount",
+                description="Capital must be a positive number.",
+                color=RED,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        set_capital(interaction.user.id, amount)
+
+        embed = discord.Embed(
+            title="Capital Updated",
+            description=f"Portfolio capital set to **${amount:,.2f}**",
+            color=GREEN,
+            timestamp=datetime.now(),
+        )
+        embed.add_field(
+            name="What this means",
+            value=(
+                "When you enter trades, the bot will compute dollar amounts "
+                "based on this capital and the system's recommended position "
+                "sizes. Use `/enter` with a signal ticker to auto-fill "
+                "the recommended size, stop, and target."
+            ),
+            inline=False,
+        )
+        embed.set_footer(text=str(interaction.user))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
     # /enter — record a trade
@@ -169,23 +280,44 @@ def make_bot(token: str) -> RallyBot:
     @app_commands.describe(
         ticker="Ticker symbol (e.g. AAPL)",
         price="Entry price",
-        size="Position size (default: 1.0)",
+        size="Position size as fraction of capital (auto-filled from system signal)",
+        stop="Stop-loss price (auto-filled from system signal)",
+        target="Profit target price (auto-filled from system signal)",
         notes="Optional notes",
     )
     async def cmd_enter(
         interaction: discord.Interaction,
         ticker: str,
         price: float,
-        size: float = 1.0,
+        size: float | None = None,
+        stop: float | None = None,
+        target: float | None = None,
         notes: str | None = None,
     ) -> None:
         _ensure_caller(interaction)
+
+        # Auto-fill from system recommendation if not provided
+        rec = _get_system_recommendation(ticker)
+        if rec:
+            if size is None:
+                size = rec.get("size", 0)
+            if stop is None:
+                stop = rec.get("stop_price")
+            if target is None:
+                target = rec.get("target_price")
+
+        if size is None:
+            size = 0.0
+
+        capital = get_capital(interaction.user.id)
 
         trade_id = open_trade(
             discord_id=interaction.user.id,
             ticker=ticker.upper(),
             entry_price=price,
             size=size,
+            stop_price=stop,
+            target_price=target,
             notes=notes,
         )
 
@@ -196,8 +328,37 @@ def make_bot(token: str) -> RallyBot:
         )
         embed.add_field(name="Ticker", value=ticker.upper(), inline=True)
         embed.add_field(name="Entry Price", value=f"${price:.2f}", inline=True)
-        embed.add_field(name="Size", value=f"{size}", inline=True)
+        embed.add_field(name="Size", value=f"{size:.1%}", inline=True)
+
+        if stop:
+            risk_pct = (price - stop) / price * 100
+            embed.add_field(
+                name="Stop", value=f"${stop:.2f} (-{risk_pct:.1f}%)", inline=True
+            )
+        if target:
+            reward_pct = (target - price) / price * 100
+            embed.add_field(
+                name="Target", value=f"${target:.2f} (+{reward_pct:.1f}%)", inline=True
+            )
+
+        if capital > 0 and size > 0:
+            dollar_size = capital * size
+            embed.add_field(
+                name="Dollar Size",
+                value=f"${dollar_size:,.0f} of ${capital:,.0f}",
+                inline=True,
+            )
+            if stop:
+                dollar_risk = capital * size * (price - stop) / price
+                embed.add_field(
+                    name="Max Risk", value=f"${dollar_risk:,.0f}", inline=True
+                )
+
         embed.add_field(name="Trade ID", value=str(trade_id), inline=True)
+        if rec:
+            embed.add_field(
+                name="Source", value="Auto-filled from system signal", inline=False
+            )
         if notes:
             embed.add_field(name="Notes", value=notes, inline=False)
         embed.set_footer(text=f"Recorded for {interaction.user}")
@@ -238,6 +399,7 @@ def make_bot(token: str) -> RallyBot:
             return
 
         pnl = result["pnl_pct"]
+        pnl_dollar = result.get("pnl_dollar")
         color = GREEN if pnl >= 0 else RED
         sign = "+" if pnl >= 0 else ""
 
@@ -248,7 +410,16 @@ def make_bot(token: str) -> RallyBot:
         )
         embed.add_field(name="Entry", value=f"${result['entry_price']:.2f}", inline=True)
         embed.add_field(name="Exit", value=f"${result['exit_price']:.2f}", inline=True)
-        embed.add_field(name="PnL", value=f"**{sign}{pnl:.2f}%**", inline=True)
+
+        pnl_text = f"**{sign}{pnl:.2f}%**"
+        if pnl_dollar is not None:
+            dsign = "+" if pnl_dollar >= 0 else ""
+            pnl_text += f"\n{dsign}${abs(pnl_dollar):,.2f}"
+        embed.add_field(name="PnL", value=pnl_text, inline=True)
+
+        embed.add_field(
+            name="Size", value=f"{result['size']:.1%}", inline=True
+        )
         embed.add_field(
             name="Held",
             value=f"{result['entry_date']} → {result['exit_date']}",
@@ -298,16 +469,23 @@ def make_bot(token: str) -> RallyBot:
             if status == "closed":
                 pnl = t["pnl_pct"] or 0
                 sign = "+" if pnl >= 0 else ""
+                pnl_str = f"**{sign}{pnl:.2f}%**"
+                if t.get("pnl_dollar") is not None:
+                    dsign = "+" if t["pnl_dollar"] >= 0 else ""
+                    pnl_str += f" ({dsign}${abs(t['pnl_dollar']):,.0f})"
                 value = (
                     f"Entry: ${t['entry_price']:.2f} ({t['entry_date']})\n"
                     f"Exit: ${t['exit_price']:.2f} ({t['exit_date']})\n"
-                    f"PnL: **{sign}{pnl:.2f}%** | Size: {t['size']}"
+                    f"PnL: {pnl_str} | Size: {t['size']:.1%}"
                 )
             else:
-                value = (
-                    f"Entry: ${t['entry_price']:.2f} ({t['entry_date']})\n"
-                    f"Size: {t['size']} | **OPEN**"
-                )
+                lines = [f"Entry: ${t['entry_price']:.2f} ({t['entry_date']})"]
+                if t.get("stop_price"):
+                    lines.append(f"Stop: ${t['stop_price']:.2f}")
+                if t.get("target_price"):
+                    lines.append(f"Target: ${t['target_price']:.2f}")
+                lines.append(f"Size: {t['size']:.1%} | **OPEN**")
+                value = "\n".join(lines)
 
             if status == "closed":
                 icon = "+" if (t.get("pnl_pct") or 0) >= 0 else "-"
@@ -348,6 +526,7 @@ def make_bot(token: str) -> RallyBot:
 
         summary = get_pnl_summary(discord_id=interaction.user.id, days=days)
         open_trades = get_open_trades(discord_id=interaction.user.id)
+        capital = get_capital(interaction.user.id)
 
         period_label = {"all": "All Time", "30d": "Last 30 Days", "7d": "Last 7 Days"}[period]
 
@@ -359,9 +538,15 @@ def make_bot(token: str) -> RallyBot:
             color=color,
             timestamp=datetime.now(),
         )
-        embed.add_field(
-            name="Total PnL", value=f"**{sign}{summary['total_pnl']:.2f}%**", inline=True
-        )
+
+        # Total PnL — show dollar amount if available
+        pnl_text = f"**{sign}{summary['total_pnl']:.2f}%**"
+        dollar_pnl = summary.get("total_pnl_dollar", 0.0)
+        if dollar_pnl != 0:
+            dsign = "+" if dollar_pnl >= 0 else ""
+            pnl_text += f"\n{dsign}${abs(dollar_pnl):,.2f}"
+        embed.add_field(name="Total PnL", value=pnl_text, inline=True)
+
         embed.add_field(
             name="Avg PnL/Trade", value=f"{summary['avg_pnl']:+.2f}%", inline=True
         )
@@ -380,6 +565,11 @@ def make_bot(token: str) -> RallyBot:
         embed.add_field(
             name="Open Trades", value=str(len(open_trades)), inline=True
         )
+
+        if capital > 0:
+            embed.add_field(
+                name="Capital", value=f"${capital:,.0f}", inline=True
+            )
 
         embed.set_footer(text=str(interaction.user))
         await interaction.response.send_message(embed=embed)
