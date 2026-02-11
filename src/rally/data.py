@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from .config import AssetConfig, PIPELINE
+from .config import PIPELINE, AssetConfig
 
 # Session-level cache for VIX data (fetched once, reused across tickers)
 _vix_cache: dict[str, pd.Series] = {}
@@ -21,7 +21,9 @@ OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 # Single-ticker fetch (unchanged API — used by scanner.py)
 # ---------------------------------------------------------------------------
 
-def fetch_daily(asset: AssetConfig, start: str = "2000-01-01", end: str | None = None) -> pd.DataFrame:
+def fetch_daily(
+    asset: AssetConfig, start: str = "2000-01-01", end: str | None = None,
+) -> pd.DataFrame:
     """
     Return a DataFrame with columns: Open, High, Low, Close, Volume
     indexed by Date (tz-naive).

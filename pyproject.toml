@@ -38,3 +38,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+ignore = ["E402"]  # matplotlib.use("Agg") requires imports after call
+
+[tool.ruff.lint.per-file-ignores]
+"src/rally/main.py" = ["I001"]
+"src/rally/optimize.py" = ["I001"]
+"src/rally/backtest_universe.py" = ["I001"]

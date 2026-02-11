@@ -1,9 +1,8 @@
 """Tests for position tracking — load, save, update, exit logic."""
 
-import json
 
-from rally.positions import load_positions, save_positions, update_positions
 from rally.config import PARAMS
+from rally.positions import load_positions, save_positions, update_positions
 
 
 def test_load_empty(tmp_models_dir):

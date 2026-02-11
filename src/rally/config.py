@@ -3,7 +3,7 @@ Rally Phase-Transition Detector — Configuration
 All thresholds, parameters, and asset definitions in one place.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

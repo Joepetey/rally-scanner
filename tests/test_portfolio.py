@@ -1,10 +1,10 @@
 """Tests for portfolio tracking — CSV round-trip."""
 
 from rally.portfolio import (
-    update_daily_snapshot,
-    record_closed_trades,
     load_equity_history,
     load_trade_journal,
+    record_closed_trades,
+    update_daily_snapshot,
 )
 
 

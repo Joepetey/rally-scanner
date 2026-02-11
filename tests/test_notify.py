@@ -3,13 +3,12 @@
 from unittest.mock import patch
 
 from rally.notify import (
-    notify_signals,
+    notify_error,
     notify_exits,
     notify_retrain_complete,
-    notify_error,
-    notify,
-    send_telegram,
+    notify_signals,
     send_email,
+    send_telegram,
     send_webhook,
 )
 

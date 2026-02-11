@@ -4,7 +4,6 @@ Walk-forward logistic regression with isotonic calibration + HMM regime features
 
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression

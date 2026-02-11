@@ -10,7 +10,7 @@ Usage:
     python backtest_universe.py                           # full universe (~512 assets)
     python backtest_universe.py --tickers AAPL MSFT SPY   # specific tickers
     python backtest_universe.py --resume                  # resume from saved predictions cache
-    python backtest_universe.py --portfolio-only           # skip training, just re-run portfolio sims
+    python backtest_universe.py --portfolio-only  # skip training, re-run portfolio sims
     python backtest_universe.py --workers 4               # limit parallel workers
     python backtest_universe.py --no-cache                # disable OHLCV disk cache
 """
@@ -28,24 +28,22 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import pandas as pd
 
-from .config import PARAMS, PIPELINE, AssetConfig
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-PLOTS_DIR = PROJECT_ROOT / "plots"
+from .calibrate import calibrate_thresholds  # noqa: E402
+from .config import PIPELINE
 from .data import fetch_daily_batch, fetch_vix, merge_vix
 from .features import build_features
 from .labels import compute_labels
-from .model import walk_forward_train, combine_predictions, ALL_FEATURE_COLS
-from .calibrate import calibrate_thresholds
+from .model import combine_predictions, walk_forward_train
 from .universe import get_universe
 
 warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PLOTS_DIR = PROJECT_ROOT / "plots"
 CACHE_DIR = PROJECT_ROOT / "backtest_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 PREDICTIONS_CACHE = CACHE_DIR / "predictions.pkl"
@@ -506,12 +504,18 @@ def plot_results(results: list[dict], per_asset: pd.DataFrame) -> None:
 
         n_profitable = (per_asset["pf"] > 1.0).sum()
         n_total = len(per_asset)
-        axes[0].text(0.95, 0.95, f"{n_profitable}/{n_total} profitable ({n_profitable/n_total:.0%})",
-                     transform=axes[0].transAxes, ha="right", va="top", fontsize=11,
-                     bbox=dict(boxstyle="round", facecolor="lightyellow"))
+        pct = n_profitable / n_total
+        axes[0].text(
+            0.95, 0.95, f"{n_profitable}/{n_total} profitable ({pct:.0%})",
+            transform=axes[0].transAxes, ha="right", va="top", fontsize=11,
+            bbox=dict(boxstyle="round", facecolor="lightyellow"),
+        )
 
         # Win rate distribution
-        axes[1].hist(per_asset["win_rate"] * 100, bins=30, edgecolor="black", alpha=0.7, color="green")
+        axes[1].hist(
+            per_asset["win_rate"] * 100, bins=30,
+            edgecolor="black", alpha=0.7, color="green",
+        )
         axes[1].axvline(50, color="red", linestyle="--", linewidth=2, label="50% line")
         axes[1].set_xlabel("Win Rate (%)")
         axes[1].set_ylabel("# Assets")
@@ -626,7 +630,7 @@ def main() -> None:
               f"PF={metrics['pf']:.2f}  Tr/yr={tr_yr:.0f}")
 
     # Step 3: Per-asset stats (using Baseline config)
-    print(f"\n[3/4] Computing per-asset statistics (Baseline config)...")
+    print("\n[3/4] Computing per-asset statistics (Baseline config)...")
     baseline_cfg = CONFIGS[0]
     per_asset = compute_per_asset_stats(cached, baseline_cfg)
 
@@ -655,7 +659,7 @@ def main() -> None:
         n_total = len(per_asset)
         n_no_trades = len(cached) - n_total
 
-        print(f"\n  PER-ASSET SUMMARY (Baseline config):")
+        print("\n  PER-ASSET SUMMARY (Baseline config):")
         print(f"  Assets with trades: {n_total}/{len(cached)}")
         print(f"  Profitable (PF>1):  {n_profitable}/{n_total} ({n_profitable/n_total:.0%})")
         print(f"  No trades:          {n_no_trades}")
@@ -663,7 +667,7 @@ def main() -> None:
         print(f"  Median Win Rate:    {per_asset['win_rate'].median():.1%}")
         print(f"  Median Trades/Yr:   {per_asset['trades_yr'].median():.1f}")
 
-        print(f"\n  TOP 20 ASSETS:")
+        print("\n  TOP 20 ASSETS:")
         print(f"  {'Ticker':<7} {'Trades':>7} {'Tr/Yr':>6} {'WinRate':>8} "
               f"{'PF':>7} {'AvgPnL':>8} {'TotalPnL':>10} {'Years':>6}")
         print(f"  {'-'*65}")
@@ -673,7 +677,7 @@ def main() -> None:
                   f"{row['avg_pnl']:>+7.2%} {row['total_sized_pnl']:>+9.3f} "
                   f"{row['oos_years']:>5.1f}")
 
-        print(f"\n  BOTTOM 20 ASSETS:")
+        print("\n  BOTTOM 20 ASSETS:")
         print(f"  {'Ticker':<7} {'Trades':>7} {'Tr/Yr':>6} {'WinRate':>8} "
               f"{'PF':>7} {'AvgPnL':>8} {'TotalPnL':>10} {'Years':>6}")
         print(f"  {'-'*65}")
@@ -684,7 +688,7 @@ def main() -> None:
                   f"{row['oos_years']:>5.1f}")
 
     # Step 4: Plots
-    print(f"\n[4/4] Generating plots...")
+    print("\n[4/4] Generating plots...")
     plot_results(results, per_asset)
 
     # Save summary to JSON

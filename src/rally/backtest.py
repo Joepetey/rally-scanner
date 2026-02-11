@@ -157,25 +157,25 @@ def print_report(trades: pd.DataFrame, equity: pd.DataFrame, asset_name: str) ->
     print(f"  Avg MAE:           {metrics['avg_mae_pct']:.2f}%")
     print(f"  Avg MFE:           {metrics['avg_mfe_pct']:+.2f}%")
     print(f"  Avg bars held:     {metrics['avg_bars_held']:.1f}")
-    print(f"\n  Exit reasons:")
+    print("\n  Exit reasons:")
     for reason, cnt in metrics.get("exit_reasons", {}).items():
         print(f"    {reason:20s}  {cnt}")
 
-    print(f"\n  --- Performance by COMP_SCORE decile ---")
+    print("\n  --- Performance by COMP_SCORE decile ---")
     dec = performance_by_comp_decile(trades)
     if not dec.empty:
         print(dec.to_string())
     else:
         print("  (not enough data)")
 
-    print(f"\n  --- Performance by regime (Trend) ---")
+    print("\n  --- Performance by regime (Trend) ---")
     reg = performance_by_regime(trades)
     if not reg.empty:
         print(reg.to_string())
     else:
         print("  (not enough data)")
 
-    print(f"\n  --- Performance by YEAR ---")
+    print("\n  --- Performance by YEAR ---")
     yearly = performance_by_year(trades)
     if not yearly.empty:
         print(yearly.to_string())

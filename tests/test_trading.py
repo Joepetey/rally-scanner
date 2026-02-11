@@ -1,9 +1,8 @@
 """Tests for trading rules — signal generation and position sizing."""
 
-import numpy as np
 import pandas as pd
 
-from rally.trading import generate_signals, compute_position_size
+from rally.trading import compute_position_size, generate_signals
 
 
 def _make_preds(**overrides):
@@ -22,7 +21,7 @@ def _make_preds(**overrides):
 def test_signal_fires_when_above_thresholds():
     preds = _make_preds(P_RALLY=0.65, COMP_SCORE=0.70, FAIL_DN_SCORE=0.5)
     signals = generate_signals(preds)
-    assert signals.iloc[0] is True or signals.iloc[0] == True
+    assert signals.iloc[0]
 
 
 def test_signal_blocked_by_low_p_rally():

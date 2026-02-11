@@ -10,25 +10,23 @@ Usage:
 """
 
 import warnings
-import itertools
 from dataclasses import dataclass
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-PLOTS_DIR = PROJECT_ROOT / "plots"
-
-from .config import ASSETS, PARAMS
+from .config import ASSETS  # noqa: E402
 from .data import fetch_daily, fetch_vix, merge_vix
 from .features import build_features
 from .labels import compute_labels
-from .model import walk_forward_train, combine_predictions
-from .trading import simulate_trades
+from .model import combine_predictions, walk_forward_train
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PLOTS_DIR = PROJECT_ROOT / "plots"
 
 warnings.filterwarnings("ignore")
 
@@ -356,7 +354,7 @@ def main() -> None:
               f"PF={metrics['pf']:.2f}  Tr/yr={tr_yr:.0f}")
 
     # Summary table
-    print(f"\n[3/3] Results")
+    print("\n[3/3] Results")
     print(f"\n{'='*110}")
     print(f"  {'Config':<16s} {'CAGR':>7} {'TotalRet':>9} {'MaxDD':>7} {'Sharpe':>7} "
           f"{'PF':>6} {'WinRate':>8} {'Trades':>7} {'Tr/Yr':>6} {'Leverage':>4}")

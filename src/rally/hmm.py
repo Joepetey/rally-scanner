@@ -53,7 +53,10 @@ def fit_hmm(df_train: pd.DataFrame) -> tuple[GaussianHMM, StandardScaler, np.nda
     return model, scaler, state_order
 
 
-def predict_hmm_probs(model: GaussianHMM, scaler: StandardScaler, state_order: np.ndarray, df: pd.DataFrame) -> pd.DataFrame:
+def predict_hmm_probs(
+    model: GaussianHMM, scaler: StandardScaler,
+    state_order: np.ndarray, df: pd.DataFrame,
+) -> pd.DataFrame:
     """
     Compute filtered state probabilities for each bar.
     Returns DataFrame with columns: P_compressed, P_normal, P_expanding.

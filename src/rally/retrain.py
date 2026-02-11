@@ -22,20 +22,22 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from .config import PARAMS, ASSETS, PIPELINE, AssetConfig
+from .calibrate import calibrate_thresholds
+from .config import ASSETS, PARAMS, PIPELINE, AssetConfig
 from .data import fetch_daily_batch, fetch_vix, merge_vix
 from .features import build_features
-from .labels import compute_labels
 from .hmm import fit_hmm, predict_hmm_probs
+from .labels import compute_labels
 from .model import ALL_FEATURE_COLS
-from .persistence import save_model, load_manifest
-from .calibrate import calibrate_thresholds
+from .persistence import load_manifest, save_model
 from .universe import get_universe
 
 warnings.filterwarnings("ignore")
 
 
-def train_last_fold(df: pd.DataFrame, asset: AssetConfig, live_features: bool = True) -> dict | None:
+def train_last_fold(
+    df: pd.DataFrame, asset: AssetConfig, live_features: bool = True,
+) -> dict | None:
     """
     Train only the most recent fold (last 5 years of data).
     Returns dict of model artifacts ready for save_model(), or None on failure.
@@ -213,7 +215,7 @@ def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> Non
 
     # --- Phase 2: Parallel model training ---
     print(f"\n{'='*70}")
-    print(f"  RALLY DETECTOR — WEEKLY RETRAIN")
+    print("  RALLY DETECTOR — WEEKLY RETRAIN")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  "
           f"{len(fetched)} assets  |  {n_workers} workers")
     print(f"{'='*70}")
@@ -259,7 +261,7 @@ def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> Non
     print(f"  Fetch: {fetch_time:.1f}s  |  Train: {train_time:.1f}s  |  "
           f"Total: {total_time:.1f}s")
     if failed:
-        print(f"  Failed:")
+        print("  Failed:")
         for t, reason in failed[:20]:
             print(f"    {t}: {reason}")
         if len(failed) > 20:

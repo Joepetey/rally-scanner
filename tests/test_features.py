@@ -1,15 +1,14 @@
 """Tests for feature engineering pipeline."""
 
 import numpy as np
-import pandas as pd
 
 from rally.features import (
+    FEATURE_COLS,
     build_features,
     compute_compression,
+    compute_failed_breakdown,
     compute_range,
     compute_trend,
-    compute_failed_breakdown,
-    FEATURE_COLS,
 )
 
 

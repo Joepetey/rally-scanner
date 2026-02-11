@@ -7,33 +7,36 @@ Usage:
 """
 
 import argparse
-import sys
 import warnings
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
+from .backtest import (  # noqa: E402
+    compute_equity_curve, compute_metrics, performance_by_year, print_report,
+)
 from .config import ASSETS, PARAMS
+from .data import fetch_daily, fetch_vix, merge_vix
+from .features import build_features
+from .labels import compute_labels
+from .model import combine_predictions, walk_forward_train
+from .trading import generate_signals, simulate_trades
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PLOTS_DIR = PROJECT_ROOT / "plots"
-from .data import fetch_daily, fetch_vix, merge_vix
-from .features import build_features, FEATURE_COLS
-from .labels import compute_labels
-from .model import walk_forward_train, combine_predictions
-from .trading import generate_signals, simulate_trades
-from .backtest import (compute_equity_curve, print_report, compute_metrics,
-                      performance_by_year)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbose: bool = True) -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict]:
+def run(
+    asset_name: str, require_trend: bool = False,
+    plot: bool = False, verbose: bool = True,
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict]:
     asset = ASSETS[asset_name]
     _p = print if verbose else (lambda *a, **k: None)
 
@@ -49,7 +52,7 @@ def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbos
         _p(f"       SKIP: Not enough data ({len(df)} bars, need 500+)")
         return None, None, {"error": "insufficient data"}
 
-    _p(f"[2/6] Building features ...")
+    _p("[2/6] Building features ...")
     try:
         vix_data = fetch_vix()
         df = merge_vix(df, vix_data)
@@ -66,7 +69,7 @@ def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbos
     _p(f"       Label balance: {pos_rate:.1%} positive  "
        f"({int(valid.sum())}/{len(valid)} bars)")
 
-    _p(f"[4/6] Walk-forward training (with HMM regime features) ...")
+    _p("[4/6] Walk-forward training (with HMM regime features) ...")
     folds = walk_forward_train(df)
     if not folds:
         _p("       ERROR: No folds produced. Need more data.")
@@ -81,7 +84,7 @@ def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbos
     preds = combine_predictions(folds)
     _p(f"       {len(preds)} out-of-sample bars")
 
-    _p(f"[5/6] Generating signals & simulating trades ...")
+    _p("[5/6] Generating signals & simulating trades ...")
     use_trend = require_trend or asset.asset_class == "equity"
     signal = generate_signals(preds, require_trend=use_trend)
     _p(f"       Signal fires on {signal.sum()} bars "
@@ -90,9 +93,10 @@ def run(asset_name: str, require_trend: bool = False, plot: bool = False, verbos
     trades = simulate_trades(preds, signal)
     _p(f"       {len(trades)} completed trades")
 
-    _p(f"[6/6] Computing metrics ...")
+    _p("[6/6] Computing metrics ...")
     equity = compute_equity_curve(trades)
-    metrics = print_report(trades, equity, asset_name) if verbose else compute_metrics(trades, equity)
+    metrics = (print_report(trades, equity, asset_name) if verbose
+                else compute_metrics(trades, equity))
 
     if verbose:
         print("--- SANITY CHECKS ---")
@@ -148,9 +152,10 @@ def run_all(plot: bool = False) -> dict:
 
     # Per-asset summary
     print(f"\n{'='*90}")
-    print(f"  CROSS-ASSET SUMMARY (per-asset)")
+    print("  CROSS-ASSET SUMMARY (per-asset)")
     print(f"{'='*90}")
-    header = f"{'Asset':<8} {'Trades':>7} {'WinRate':>8} {'AvgWin':>8} {'AvgLoss':>8} {'PF':>7} {'CAGR':>7} {'MaxDD':>7} {'Tr/Yr':>6}"
+    header = (f"{'Asset':<8} {'Trades':>7} {'WinRate':>8} {'AvgWin':>8} "
+              f"{'AvgLoss':>8} {'PF':>7} {'CAGR':>7} {'MaxDD':>7} {'Tr/Yr':>6}")
     print(header)
     print("-" * 90)
 
@@ -242,8 +247,6 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     peak = equity_series.cummax()
     drawdown = (equity_series - peak) / peak
 
-    equity_df = pd.DataFrame({"equity": equity_series, "drawdown": drawdown})
-
     # Metrics
     total_return = equity_series.iloc[-1] / initial_capital - 1
     total_days = (dates[-1] - dates[0]).days
@@ -277,7 +280,7 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     print(f"  Period:            {dates[0].date()} → {dates[-1].date()} ({n_years:.1f} years)")
 
     # Per-asset contribution
-    print(f"\n  --- Contribution by asset ---")
+    print("\n  --- Contribution by asset ---")
     asset_contrib = trades.groupby("asset").agg(
         trades=("pnl_pct", "count"),
         total_sized_pnl=("pnl_sized", "sum"),
@@ -287,7 +290,7 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     print(asset_contrib.to_string())
 
     # Per-year
-    print(f"\n  --- Portfolio performance by YEAR ---")
+    print("\n  --- Portfolio performance by YEAR ---")
     yearly = performance_by_year(trades)
     if not yearly.empty:
         print(yearly.to_string())

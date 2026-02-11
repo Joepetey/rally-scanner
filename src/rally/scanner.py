@@ -20,10 +20,9 @@ from .config import PARAMS, AssetConfig
 from .data import fetch_daily, fetch_vix, merge_vix
 from .features import build_features
 from .hmm import predict_hmm_probs
-from .model import ALL_FEATURE_COLS
-from .trading import generate_signals, compute_position_size
-from .persistence import load_model, load_manifest
-from .positions import load_positions, update_positions, print_positions
+from .persistence import load_manifest, load_model
+from .positions import load_positions, print_positions, update_positions
+from .trading import compute_position_size, generate_signals
 
 warnings.filterwarnings("ignore")
 
@@ -161,7 +160,10 @@ def scan_single(ticker: str, artifacts: dict, vix_data: pd.Series | None = None)
     }
 
 
-def scan_all(tickers: list[str] | None = None, show_positions: bool = False, config_name: str = "baseline") -> list[dict]:
+def scan_all(
+    tickers: list[str] | None = None, show_positions: bool = False,
+    config_name: str = "baseline",
+) -> list[dict]:
     # Apply config
     apply_config(config_name)
 
@@ -218,7 +220,10 @@ def scan_all(tickers: list[str] | None = None, show_positions: bool = False, con
 
     # --- MARKET BREADTH ---
     if ok_results:
-        above_ma50 = sum(1 for r in ok_results if r["close"] > r.get("ma50", 0) and r.get("ma50", 0) > 0)
+        above_ma50 = sum(
+            1 for r in ok_results
+            if r["close"] > r.get("ma50", 0) and r.get("ma50", 0) > 0
+        )
         above_ma200 = sum(1 for r in ok_results if r.get("trend", 0))
         golden_crosses = sum(1 for r in ok_results if r.get("golden_cross", 0))
         avg_vix_pctile = np.mean([r.get("vix_pctile", 0.5) for r in ok_results])
@@ -226,16 +231,27 @@ def scan_all(tickers: list[str] | None = None, show_positions: bool = False, con
         breadth_200 = above_ma200 / len(ok_results)
 
         print(f"\n  {'='*86}")
-        print(f"  MARKET BREADTH")
+        print("  MARKET BREADTH")
         print(f"  {'='*86}")
         # Breadth bar
         b50_bar = "#" * int(breadth_50 * 40) + "." * (40 - int(breadth_50 * 40))
         b200_bar = "#" * int(breadth_200 * 40) + "." * (40 - int(breadth_200 * 40))
-        print(f"  Above 50-day MA:  {above_ma50:>3}/{len(ok_results)} ({breadth_50:.0%})  [{b50_bar}]")
-        print(f"  Above 200-day MA: {above_ma200:>3}/{len(ok_results)} ({breadth_200:.0%})  [{b200_bar}]")
-        print(f"  Golden crosses:   {golden_crosses:>3}/{len(ok_results)} ({golden_crosses/len(ok_results):.0%})")
+        n = len(ok_results)
+        print(f"  Above 50-day MA:  {above_ma50:>3}/{n} ({breadth_50:.0%})  [{b50_bar}]")
+        print(f"  Above 200-day MA: {above_ma200:>3}/{n} ({breadth_200:.0%})  [{b200_bar}]")
+        gc_pct = golden_crosses / n
+        print(f"  Golden crosses:   {golden_crosses:>3}/{n} ({gc_pct:.0%})")
         # VIX context
-        vix_label = "EXTREME FEAR" if avg_vix_pctile > 0.80 else "FEAR" if avg_vix_pctile > 0.60 else "NEUTRAL" if avg_vix_pctile > 0.40 else "GREED" if avg_vix_pctile > 0.20 else "EXTREME GREED"
+        if avg_vix_pctile > 0.80:
+            vix_label = "EXTREME FEAR"
+        elif avg_vix_pctile > 0.60:
+            vix_label = "FEAR"
+        elif avg_vix_pctile > 0.40:
+            vix_label = "NEUTRAL"
+        elif avg_vix_pctile > 0.20:
+            vix_label = "GREED"
+        else:
+            vix_label = "EXTREME GREED"
         print(f"  VIX percentile:   {avg_vix_pctile:.0%} ({vix_label})")
 
     # --- NEW SIGNALS ---
