@@ -8,9 +8,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from config import PARAMS
+from .config import PARAMS
 
-POSITIONS_FILE = Path(__file__).parent / "models" / "positions.json"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+POSITIONS_FILE = PROJECT_ROOT / "models" / "positions.json"
 
 
 def load_positions() -> dict:

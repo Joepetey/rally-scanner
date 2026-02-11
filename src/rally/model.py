@@ -10,9 +10,9 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from config import PARAMS
-from features import FEATURE_COLS
-from hmm import fit_hmm, predict_hmm_probs
+from .config import PARAMS
+from .features import FEATURE_COLS
+from .hmm import fit_hmm, predict_hmm_probs
 
 # Extended feature set: original + HMM regime probabilities
 HMM_FEATURE_COLS = ["P_compressed", "P_expanding", "HMM_transition_signal"]

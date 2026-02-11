@@ -5,7 +5,7 @@ Feature engineering — compression, range structure, failed breakdowns, trend.
 import numpy as np
 import pandas as pd
 
-from config import PARAMS
+from .config import PARAMS
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 """
-Universe management — S&P 500 + Nasdaq 100 tickers.
+Universe management — S&P 500 + Nasdaq top 500 tickers.
 
-Fetches from Wikipedia and caches locally. Falls back to hardcoded S&P 100
-if fetch fails.
+Fetches from Wikipedia (S&P 500) and NASDAQ screener API (top 500 by market cap).
+Caches locally. Falls back to hardcoded S&P 100 if all fetches fail.
 """
 
 import io
@@ -13,7 +13,8 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-CACHE_FILE = Path(__file__).parent / "models" / "universe_cache.json"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+CACHE_FILE = PROJECT_ROOT / "models" / "universe_cache.json"
 CACHE_MAX_AGE_DAYS = 30
 
 # Hardcoded fallback (S&P 100)
@@ -71,6 +72,22 @@ def _fetch_nasdaq100() -> list[str]:
     return []
 
 
+def _fetch_nasdaq_top500() -> list[str]:
+    """Fetch top 500 Nasdaq-listed stocks by market cap from NASDAQ screener API."""
+    url = ("https://api.nasdaq.com/api/screener/stocks"
+           "?tableType=traded&exchange=nasdaq&limit=500"
+           "&sortcolumn=marketCap&sortorder=desc")
+    req = Request(url, headers={**_HEADERS, "Accept": "application/json"})
+    with urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    rows = data["data"]["table"]["rows"]
+    tickers = [r["symbol"].strip() for r in rows]
+    # Filter out obvious non-common-stock entries (warrants, units, etc.)
+    tickers = [t for t in tickers if t.isalpha() or "-" in t]
+    tickers = [t.replace(".", "-") for t in tickers]
+    return tickers
+
+
 def _load_cache() -> dict | None:
     """Load cached universe if fresh enough."""
     if not CACHE_FILE.exists():
@@ -102,8 +119,8 @@ def _save_cache(tickers: list[str], source: str) -> None:
 
 def fetch_universe(force_refresh: bool = False) -> list[str]:
     """
-    Get the combined S&P 500 + Nasdaq 100 universe.
-    Caches for 30 days. Falls back to S&P 100 if fetch fails.
+    Get the combined S&P 500 + Nasdaq top 500 universe.
+    Caches for 30 days. Falls back to S&P 100 if all fetches fail.
     """
     # Check cache first
     if not force_refresh:
@@ -124,12 +141,20 @@ def fetch_universe(force_refresh: bool = False) -> list[str]:
         print(f"    WARNING: Could not fetch S&P 500: {e}")
 
     try:
-        ndx100 = _fetch_nasdaq100()
-        all_tickers.update(ndx100)
-        sources.append(f"Nasdaq 100 ({len(ndx100)})")
-        print(f"    Fetched Nasdaq 100: {len(ndx100)} tickers")
+        ndx500 = _fetch_nasdaq_top500()
+        all_tickers.update(ndx500)
+        sources.append(f"Nasdaq Top 500 ({len(ndx500)})")
+        print(f"    Fetched Nasdaq Top 500: {len(ndx500)} tickers")
     except Exception as e:
-        print(f"    WARNING: Could not fetch Nasdaq 100: {e}")
+        print(f"    WARNING: Could not fetch Nasdaq Top 500: {e}")
+        # Fall back to Nasdaq 100 if screener API fails
+        try:
+            ndx100 = _fetch_nasdaq100()
+            all_tickers.update(ndx100)
+            sources.append(f"Nasdaq 100 ({len(ndx100)})")
+            print(f"    Fetched Nasdaq 100 (fallback): {len(ndx100)} tickers")
+        except Exception as e2:
+            print(f"    WARNING: Could not fetch Nasdaq 100: {e2}")
 
     if all_tickers:
         tickers = sorted(all_tickers)

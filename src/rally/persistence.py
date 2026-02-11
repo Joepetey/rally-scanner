@@ -16,9 +16,10 @@ from pathlib import Path
 
 import joblib
 
-from config import AssetConfig
+from .config import AssetConfig
 
-MODELS_DIR = Path(__file__).parent / "models"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+MODELS_DIR = PROJECT_ROOT / "models"
 
 
 def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:

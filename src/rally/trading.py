@@ -5,7 +5,7 @@ Trading rules — entry signals, position sizing, stops, and exits.
 import numpy as np
 import pandas as pd
 
-from config import PARAMS
+from .config import PARAMS
 
 
 def generate_signals(preds: pd.DataFrame, require_trend: bool = False) -> pd.Series:
@@ -26,12 +26,13 @@ def generate_signals(preds: pd.DataFrame, require_trend: bool = False) -> pd.Ser
 
 def compute_position_size(preds: pd.DataFrame) -> pd.Series:
     """
-    Vol-targeted sizing: size = k * (P_RALLY - 0.5) / ATR_pct
-    Clamped to [0, max_risk].
+    Vol-targeted sizing: size = k * (P_RALLY - threshold) / ATR_pct
+    Clamped to [min_position_size, max_risk]. Returns 0 for positions below minimum.
     """
     p = PARAMS
-    raw_size = p.vol_target_k * (preds["P_RALLY"] - 0.5) / preds["ATR_pct"]
-    return raw_size.clip(lower=0.0, upper=p.max_risk_frac)
+    raw_size = p.vol_target_k * (preds["P_RALLY"] - p.p_rally_threshold) / preds["ATR_pct"]
+    clipped = raw_size.clip(lower=0.0, upper=p.max_risk_frac)
+    return clipped.where(clipped >= p.min_position_size, 0.0)
 
 
 def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:

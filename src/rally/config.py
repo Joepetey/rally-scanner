@@ -71,9 +71,28 @@ class Params:
     fail_dn_score_threshold: float = -1.0  # disabled: trap is a model feature, not a gate
     vol_target_k: float = 0.10         # risk budget scalar
     max_risk_frac: float = 0.25        # max position as fraction of equity
+    min_position_size: float = 0.01    # minimum position size (skip if below)
     profit_atr_mult: float = 2.0       # take-profit in ATR multiples
     time_stop_bars: int = 10
     rv_exit_pct: float = 0.80          # RV percentile for exhaustion exit
 
 
 PARAMS = Params()
+
+
+@dataclass
+class PipelineConfig:
+    # --- Parallelism ---
+    n_workers: int = 8              # max parallel training workers
+    # --- OHLCV disk cache ---
+    cache_dir: str = "data_cache"   # parquet cache directory
+    cache_enabled: bool = True
+    # --- HMM ---
+    hmm_n_iter: int = 100           # reduced from 200 (converges in ~50-80)
+    hmm_tol: float = 1e-3           # early stopping tolerance
+    # --- Model freshness ---
+    skip_fresh_days: int = 7        # skip if model trained < N days ago
+    skip_fresh_enabled: bool = False
+
+
+PIPELINE = PipelineConfig()

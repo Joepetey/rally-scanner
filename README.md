@@ -2,21 +2,129 @@
 
 A quantitative system that detects the transition from volatility compression to directional rally across equities and crypto. It combines statistical learning (logistic regression + isotonic calibration), hidden Markov models for regime detection, and a multi-factor feature pipeline to generate probabilistic entry signals with structured risk management.
 
+The system runs as an automated pipeline: weekly model retraining, daily scanning with position tracking, Telegram/email alerts, and a terminal dashboard for monitoring.
+
 ---
 
 ## Table of Contents
 
-1. [Theoretical Foundation](#theoretical-foundation)
-2. [Feature Engineering](#feature-engineering)
-3. [Regime Detection (HMM)](#regime-detection-hmm)
-4. [Label Construction](#label-construction)
-5. [Model Architecture](#model-architecture)
-6. [Trading System](#trading-system)
-7. [Auto-Calibration](#auto-calibration)
-8. [System Architecture](#system-architecture)
-9. [Usage](#usage)
-10. [Configuration](#configuration)
-11. [Caveats & Limitations](#caveats--limitations)
+1. [Quick Start](#quick-start)
+2. [Project Structure](#project-structure)
+3. [Theoretical Foundation](#theoretical-foundation)
+4. [Feature Engineering](#feature-engineering)
+5. [Regime Detection (HMM)](#regime-detection-hmm)
+6. [Label Construction](#label-construction)
+7. [Model Architecture](#model-architecture)
+8. [Trading System](#trading-system)
+9. [Auto-Calibration](#auto-calibration)
+10. [Automation & Alerts](#automation--alerts)
+11. [Usage](#usage)
+12. [Configuration](#configuration)
+13. [Caveats & Limitations](#caveats--limitations)
+
+---
+
+## Quick Start
+
+```bash
+# Setup
+make setup                    # creates .venv, installs package + dev deps
+
+# Or manually:
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Core workflow
+make retrain                  # train models for all ~843 tickers
+make scan                     # daily scan + position tracking + alerts
+make dashboard                # terminal portfolio view
+make health                   # model freshness report
+make test                     # run test suite (47 tests)
+```
+
+For alerts, copy `.env.example` to `.env` and fill in your Telegram bot token (or SMTP/webhook credentials).
+
+---
+
+## Project Structure
+
+```
+market-rally/
+    src/rally/                      # Python package (all core code)
+        config.py                   # Parameters, asset definitions, thresholds
+        data.py                     # yfinance OHLCV + VIX fetcher with batch + caching
+        features.py                 # 10 base features: compression, range, traps, trend, volume, MACD, VIX
+        hmm.py                      # 3-state Gaussian HMM for regime detection (+3 features)
+        labels.py                   # RALLY_ST binary label (forward-looking)
+        model.py                    # Walk-forward logistic regression + isotonic calibration
+        calibrate.py                # Auto-calibrate r_up/d_dn from historical volatility
+        trading.py                  # Signal generation, vol-targeted sizing, trade simulation
+        backtest.py                 # Equity curve computation, metrics, diagnostic reports
+        persistence.py              # Save/load trained models with joblib
+        positions.py                # Track open positions in JSON across scanner runs
+        universe.py                 # S&P 500 + Nasdaq Top 500 universe (~843 tickers)
+        scanner.py                  # Daily scan — load models, fetch prices, generate alerts
+        retrain.py                  # Weekly model retraining (parallel, batch fetch)
+        notify.py                   # Telegram, email, webhook notification backends
+        portfolio.py                # Daily snapshots, trade journal (CSV)
+        log.py                      # Centralized logging (console + rotating file)
+        main.py                     # Single-asset or 14-asset backtest
+        optimize.py                 # Parameter sweep across named configurations
+        backtest_universe.py        # Full universe 20-year backtest with config sweeps
+    scripts/
+        orchestrator.py             # Cron entry point: scan, retrain, auto, health
+        dashboard.py                # Terminal dashboard for portfolio state
+    tests/                          # pytest test suite (47 tests)
+        conftest.py                 # Synthetic OHLCV fixtures
+        test_config.py
+        test_features.py
+        test_labels.py
+        test_trading.py
+        test_positions.py
+        test_notify.py
+        test_portfolio.py
+    scanner.py                      # Root shim → rally.scanner
+    retrain.py                      # Root shim → rally.retrain
+    main.py                         # Root shim → rally.main
+    optimize.py                     # Root shim → rally.optimize
+    backtest_universe.py            # Root shim → rally.backtest_universe
+    models/                         # Trained model artifacts (gitignored)
+    data_cache/                     # OHLCV parquet cache (gitignored)
+    plots/                          # Generated charts (gitignored)
+    logs/                           # Run logs (gitignored)
+    Makefile
+    pyproject.toml
+    requirements.txt
+    .env.example                    # Notification config template
+    STANDARDS.md                    # Project coding standards
+```
+
+Root-level `.py` files are 3-line shims that forward to the package, so `python scanner.py` keeps working.
+
+### Data Flow
+
+```
+                 orchestrator.py retrain (weekly, via cron)
+                      |
+  yfinance ──> data.py ──> features.py ──> labels.py
+                                |               |
+                            hmm.py          model.py
+                                |               |
+                                └──> models/*.joblib
+                                         |
+                 orchestrator.py scan (daily, via cron)
+                      |
+              load model + fetch latest data
+                      |
+              predict P(rally) ──> generate signals
+                      |
+              positions.json ──> portfolio.py (snapshots, journal)
+                      |
+              notify.py ──> Telegram / email / webhook alerts
+                      |
+              dashboard.py ──> terminal display
+```
 
 ---
 
@@ -213,7 +321,7 @@ When running all assets, positions share a single equity pool:
 
 ## Auto-Calibration
 
-For the expanded universe (500+ stocks), hand-tuning `r_up` and `d_dn` per asset is impractical. The auto-calibrator derives thresholds from historical volatility:
+For the expanded universe (800+ stocks), hand-tuning `r_up` and `d_dn` per asset is impractical. The auto-calibrator derives thresholds from historical volatility:
 
 ```
 median_daily_rv = median(20-day rolling RV over last 252 days)
@@ -228,48 +336,59 @@ This preserves the 2:1 ratio observed in the hand-tuned original 14 assets and s
 
 ---
 
-## System Architecture
+## Automation & Alerts
 
-```
-market-rally/
-  config.py          Parameters, asset definitions, thresholds
-  data.py            yfinance daily OHLCV + VIX fetcher with session caching
-  features.py        10 base features: compression, range, traps, trend, volume, MACD, VIX
-  hmm.py             3-state Gaussian HMM for regime detection (+3 features)
-  labels.py          RALLY_ST binary label (forward-looking)
-  model.py           Walk-forward logistic regression + isotonic calibration
-  trading.py         Signal generation, vol-targeted position sizing, trade simulation
-  backtest.py        Equity curve computation, metrics, diagnostic reports
-  calibrate.py       Auto-calibrate r_up/d_dn from historical volatility
-  persistence.py     Save/load trained models with joblib
-  positions.py       Track open positions in JSON across scanner runs
-  universe.py        S&P 500 + Nasdaq 100 universe from Wikipedia (cached 30 days)
-  main.py            CLI: single-asset or 14-asset backtest with walk-forward
-  retrain.py         CLI: weekly model retraining for full universe
-  scanner.py         CLI: daily scan — load models, fetch prices, generate alerts
-  backtest_universe.py  Full universe 20-year backtest with multiple config sweeps
-  optimize.py        Parameter sweep across 11 named configurations
+### Orchestrator
+
+The orchestrator (`scripts/orchestrator.py`) is the cron entry point for automated operation:
+
+```bash
+python scripts/orchestrator.py scan      # daily scan + position updates + alerts
+python scripts/orchestrator.py retrain   # weekly retrain all models
+python scripts/orchestrator.py auto      # auto-detect: Sun=retrain, Mon-Fri=scan
+python scripts/orchestrator.py health    # model freshness report
 ```
 
-### Data Flow
+**Cron setup** (add to `crontab -e`):
 
+```cron
+# Daily scan at 4:30 PM ET on weekdays
+30 16 * * 1-5 cd /path/to/market-rally && .venv/bin/python scripts/orchestrator.py scan
+
+# Weekly retrain on Sunday at 6 PM ET
+0 18 * * 0 cd /path/to/market-rally && .venv/bin/python scripts/orchestrator.py retrain
 ```
-                 retrain.py (weekly)
-                      |
-  yfinance ──> data.py ──> features.py ──> labels.py
-                                |               |
-                            hmm.py          model.py
-                                |               |
-                                └──> models/*.joblib
-                                         |
-                 scanner.py (daily) ─────┘
-                      |
-              load model + fetch latest data
-                      |
-              predict P(rally) ──> generate signals
-                      |
-              positions.json ──> terminal alerts
+
+### Notifications
+
+Alerts are sent on new signals, position exits, retrain completion, and errors. Three backends are supported — each silently no-ops if not configured:
+
+| Backend | Config (`.env`) | Use case |
+|---------|----------------|----------|
+| **Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Primary — instant mobile alerts |
+| **Email** | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFY_EMAIL` | Backup / audit trail |
+| **Webhook** | `WEBHOOK_URL` | Integration with Slack, Discord, custom systems |
+
+Copy `.env.example` to `.env` and fill in credentials for your preferred backend(s).
+
+### Dashboard
+
+The terminal dashboard (`scripts/dashboard.py`) shows current portfolio state:
+
+```bash
+python scripts/dashboard.py              # cached state
+python scripts/dashboard.py --live       # fetch live prices for open positions
+python scripts/dashboard.py --journal 20 # show last 20 closed trades
+python scripts/dashboard.py --equity 90  # show 90-day equity history
 ```
+
+### Portfolio Tracking
+
+The system automatically tracks:
+- **Equity history** (`models/equity_history.csv`): daily snapshots of exposure, unrealized P&L, signal counts
+- **Trade journal** (`models/trade_journal.csv`): every closed trade with entry/exit dates, P&L, exit reason
+
+Both are updated by the orchestrator after each scan.
 
 ---
 
@@ -278,17 +397,34 @@ market-rally/
 ### Setup
 
 ```bash
+# Option 1: Makefile (recommended)
+make setup
+
+# Option 2: Manual
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
+
+### Makefile Targets
+
+| Target | Command | Description |
+|--------|---------|-------------|
+| `make setup` | Create venv + install deps | First-time setup |
+| `make scan` | `orchestrator.py scan` | Daily scan + alerts + portfolio snapshot |
+| `make retrain` | `orchestrator.py retrain` | Weekly model retraining |
+| `make dashboard` | `dashboard.py` | Terminal portfolio view |
+| `make health` | `orchestrator.py health` | Model freshness report |
+| `make test` | `pytest -v` | Run 47 tests |
+| `make lint` | `ruff check` | Lint source and tests |
+| `make clean` | rm caches | Remove `__pycache__` and build artifacts |
 
 ### Weekly Retraining
 
-Train models for the full S&P 500 + Nasdaq 100 universe:
+Train models for the full S&P 500 + Nasdaq Top 500 universe (~843 tickers):
 
 ```bash
-python retrain.py                              # all ~550 tickers
+python retrain.py                              # all tickers (parallel, batch fetch)
 python retrain.py --tickers AAPL MSFT SPY      # specific tickers only
 python retrain.py --validate                   # compare auto-cal vs hand-tuned
 ```
@@ -307,7 +443,7 @@ Scanner output includes:
 - **New signals**: tickers meeting all entry criteria with sizing and levels
 - **Watchlist**: near-miss tickers (P_rally > 35%) approaching signal threshold
 - **Full probability ranking**: all scanned assets sorted by rally probability
-- **Open positions**: current holdings with PnL, stops, targets (with `--positions`)
+- **Open positions**: current holdings with P&L, stops, targets (with `--positions`)
 
 ### Backtesting
 
@@ -318,12 +454,14 @@ python main.py --asset SPY --plot
 # Original 14 assets with portfolio aggregation
 python main.py --run-all --plot
 
-# Full universe backtest (500+ assets, ~2-4 hours)
+# Full universe backtest (800+ assets, ~2-4 hours)
 python backtest_universe.py --plot
 
 # Parameter optimization sweep
 python optimize.py
 ```
+
+All plots are saved to the `plots/` directory.
 
 ---
 
@@ -334,9 +472,9 @@ python optimize.py
 | Config | P(rally) | Comp | MaxSize | ProfitATR | TimeStop |
 |--------|----------|------|---------|-----------|----------|
 | `baseline` | 50% | 0.55 | 25% | 2.0x | 10 bars |
-| `conservative` | 60% | 0.60 | 15% | 1.5x | 8 bars |
-| `aggressive` | 45% | 0.50 | 30% | 2.5x | 12 bars |
-| `concentrated` | 55% | 0.55 | 40% | 2.0x | 10 bars |
+| `conservative` | 55% | 0.60 | 15% | 1.5x | 8 bars |
+| `aggressive` | 40% | 0.45 | 30% | 2.5x | 12 bars |
+| `concentrated` | 55% | 0.60 | 40% | 2.0x | 10 bars |
 
 ### Key Parameters (config.py)
 
@@ -358,6 +496,16 @@ python optimize.py
 | `time_stop_bars` | 10 | Maximum holding period |
 | `rv_exit_pct` | 0.80 | RV percentile for exhaustion exit |
 
+### Pipeline Config (config.py)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `n_workers` | 8 | Max parallel training workers |
+| `cache_dir` | `data_cache` | Parquet OHLCV cache directory |
+| `cache_enabled` | True | Use disk cache for OHLCV data |
+| `hmm_n_iter` | 100 | HMM EM iterations (converges in ~50-80) |
+| `skip_fresh_days` | 7 | Skip retrain if model < N days old |
+
 ---
 
 ## Caveats & Limitations
@@ -369,16 +517,22 @@ python optimize.py
 - **Look-ahead in calibration**: Auto-calibrated thresholds use the full price history, including the test period. In live use this is not an issue (you calibrate on available data), but it flatters backtest results.
 - **Data quality**: yfinance data may have gaps, splits, or adjustments that differ from institutional-grade feeds.
 - **Regime dependence**: The system performs best in markets that exhibit clear compression-expansion cycles. Extended trending or choppy markets may produce poor results.
-- **Model staleness**: Models should be retrained weekly. Stale models (>30 days) may have degraded calibration.
+- **Model staleness**: Models should be retrained weekly. Stale models (>14 days) may have degraded calibration. The orchestrator health check warns when models are stale.
 - **Single timeframe**: All analysis is on daily bars. Intraday dynamics are not captured.
 
 ---
 
 ## Dependencies
 
-- Python 3.10+
+- Python 3.11+
 - numpy, pandas, scikit-learn, matplotlib
 - yfinance (Yahoo Finance API)
 - hmmlearn (Hidden Markov Models)
 - joblib (model persistence)
 - lxml (Wikipedia universe scraping)
+- python-dotenv (environment variable management)
+- pyarrow (parquet OHLCV cache)
+
+Dev dependencies: pytest, ruff
+
+Install everything with `pip install -e ".[dev]"` or `make setup`.

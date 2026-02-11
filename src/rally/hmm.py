@@ -16,6 +16,8 @@ import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 from sklearn.preprocessing import StandardScaler
 
+from .config import PIPELINE
+
 HMM_FEATURES = ["RV", "ATR_pct", "BB_width"]
 N_STATES = 3
 
@@ -37,7 +39,8 @@ def fit_hmm(df_train: pd.DataFrame) -> tuple[GaussianHMM, StandardScaler, np.nda
         model = GaussianHMM(
             n_components=N_STATES,
             covariance_type="full",
-            n_iter=200,
+            n_iter=PIPELINE.hmm_n_iter,
+            tol=PIPELINE.hmm_tol,
             random_state=42,
             verbose=False,
         )
