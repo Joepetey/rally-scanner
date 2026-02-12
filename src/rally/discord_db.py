@@ -3,10 +3,12 @@
 Schema:
     users  — Discord user registration (auto on first command)
     trades — Per-user trade entries with FIFO close logic
+    conversation_history — Claude conversation state per user
 
 Database location: models/rally_discord.db
 """
 
+import json
 import sqlite3
 import threading
 from datetime import datetime
@@ -61,8 +63,18 @@ def init_db(db_path: str | Path | None = None) -> None:
             created_at   TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS conversation_history (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            discord_id   INTEGER NOT NULL REFERENCES users(discord_id),
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            history      TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_trades_user_status
             ON trades(discord_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_conversation_user
+            ON conversation_history(discord_id, created_at DESC);
     """)
     # Migrate existing databases: add new columns if missing
     _migrate(conn)
@@ -316,3 +328,76 @@ def get_pnl_summary(
         "worst_trade": round(min(pnls), 2),
         "total_pnl_dollar": round(sum(dollar_pnls), 2) if dollar_pnls else 0.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Conversation History
+# ---------------------------------------------------------------------------
+
+def get_conversation_history(
+    discord_id: int,
+    limit_messages: int = 20,
+    db_path: str | Path | None = None
+) -> list[dict]:
+    """Get recent conversation history for a user.
+
+    Args:
+        discord_id: Discord user ID
+        limit_messages: Max messages to return (prevents token overflow)
+        db_path: Optional database path
+
+    Returns:
+        List of message dicts in Claude API format
+    """
+    conn = get_db(db_path)
+    row = conn.execute(
+        "SELECT history FROM conversation_history "
+        "WHERE discord_id = ? "
+        "ORDER BY created_at DESC "
+        "LIMIT 1",
+        (discord_id,),
+    ).fetchone()
+
+    if row:
+        history = json.loads(row["history"])
+        # Limit to recent messages to avoid token overflow
+        return history[-limit_messages:]
+    return []
+
+
+def save_conversation_history(
+    discord_id: int,
+    history: list[dict],
+    db_path: str | Path | None = None
+) -> None:
+    """Save updated conversation history for a user.
+
+    Args:
+        discord_id: Discord user ID
+        history: Full conversation history as list of message dicts
+        db_path: Optional database path
+    """
+    conn = get_db(db_path)
+    conn.execute(
+        "INSERT INTO conversation_history (discord_id, history) VALUES (?, ?)",
+        (discord_id, json.dumps(history)),
+    )
+    conn.commit()
+
+
+def clear_conversation_history(
+    discord_id: int,
+    db_path: str | Path | None = None
+) -> None:
+    """Clear conversation history for a user (start fresh conversation).
+
+    Args:
+        discord_id: Discord user ID
+        db_path: Optional database path
+    """
+    conn = get_db(db_path)
+    conn.execute(
+        "DELETE FROM conversation_history WHERE discord_id = ?",
+        (discord_id,),
+    )
+    conn.commit()

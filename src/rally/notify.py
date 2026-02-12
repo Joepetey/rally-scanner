@@ -1,14 +1,12 @@
-"""Multi-backend notification system for market-rally alerts.
+"""Discord notification system for market-rally alerts.
 
-Supports Discord (primary), Telegram, email (SMTP), and generic webhooks.
-Each backend silently no-ops if not configured via environment variables.
+Sends alerts via Discord using either bot token + channel ID or webhook URL.
+Silently no-ops if not configured via environment variables.
 """
 
 import json
 import logging
 import os
-import smtplib
-from email.mime.text import MIMEText
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -19,82 +17,8 @@ def _env(key: str, default: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Backends
+# Discord Backend
 # ---------------------------------------------------------------------------
-
-def send_telegram(text: str) -> bool:
-    """Send Telegram message via Bot API. Returns True on success."""
-    token = _env("TELEGRAM_BOT_TOKEN")
-    chat_id = _env("TELEGRAM_CHAT_ID")
-
-    if not all([token, chat_id]):
-        return False
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown",
-    }).encode()
-
-    try:
-        req = Request(url, data=payload,
-                      headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=10) as resp:
-            resp.read()
-        logger.info("Telegram message sent")
-        return True
-    except Exception as e:
-        logger.error(f"Telegram failed: {e}")
-        return False
-
-
-def send_email(subject: str, body: str) -> bool:
-    """Send email via SMTP/TLS. Returns True on success."""
-    host = _env("SMTP_HOST")
-    port = int(_env("SMTP_PORT", "587"))
-    user = _env("SMTP_USER")
-    password = _env("SMTP_PASSWORD")
-    to_addr = _env("NOTIFY_EMAIL")
-
-    if not all([host, user, password, to_addr]):
-        return False
-
-    msg = MIMEText(body, "plain")
-    msg["Subject"] = f"[Rally] {subject}"
-    msg["From"] = user
-    msg["To"] = to_addr
-
-    try:
-        with smtplib.SMTP(host, port) as server:
-            server.starttls()
-            server.login(user, password)
-            server.send_message(msg)
-        logger.info(f"Email sent: {subject}")
-        return True
-    except Exception as e:
-        logger.error(f"Email failed: {e}")
-        return False
-
-
-def send_webhook(payload: dict) -> bool:
-    """POST JSON to a webhook URL. Returns True on success."""
-    url = _env("WEBHOOK_URL")
-    if not url:
-        return False
-
-    data = json.dumps(payload).encode()
-    try:
-        req = Request(url, data=data,
-                      headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=10) as resp:
-            resp.read()
-        logger.info("Webhook delivered")
-        return True
-    except Exception as e:
-        logger.error(f"Webhook failed: {e}")
-        return False
-
 
 def send_discord(embeds: list[dict]) -> bool:
     """Send Discord embed(s) via bot token + channel, or webhook URL.
@@ -226,11 +150,7 @@ def notify(
     subject: str, body: str,
     payload: dict | None = None, discord_embeds: list[dict] | None = None,
 ) -> None:
-    """Send notification via all configured backends."""
-    send_telegram(body)
-    send_email(subject, body)
-    if payload:
-        send_webhook(payload)
+    """Send notification via Discord (if configured)."""
     if discord_embeds:
         send_discord(discord_embeds)
 
@@ -254,7 +174,6 @@ def notify_signals(signals: list[dict]) -> None:
     body = "\n".join(lines)
     notify(
         "New Signals", body,
-        payload={"type": "signals", "count": len(signals)},
         discord_embeds=[_signal_embed(signals)],
     )
 
@@ -272,7 +191,6 @@ def notify_exits(closed: list[dict]) -> None:
     body = "\n".join(lines)
     notify(
         "Position Exits", body,
-        payload={"type": "exits", "count": len(closed)},
         discord_embeds=[_exit_embed(closed)],
     )
 
@@ -287,7 +205,6 @@ def notify_retrain_complete(health: dict, elapsed: float) -> None:
     )
     notify(
         "Retrain Complete", body,
-        payload={"type": "retrain", "health": health},
         discord_embeds=[_retrain_embed(health, elapsed)],
     )
 
@@ -297,6 +214,5 @@ def notify_error(title: str, details: str) -> None:
     body = f"*ERROR: {title}*\n{details}"
     notify(
         f"Error: {title}", body,
-        payload={"type": "error", "title": title},
         discord_embeds=[_error_embed(title, details)],
     )

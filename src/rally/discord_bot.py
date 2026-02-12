@@ -16,14 +16,18 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from .claude_agent import process_message
 from .discord_db import (
+    clear_conversation_history,
     close_trade,
     ensure_user,
     get_capital,
+    get_conversation_history,
     get_open_trades,
     get_pnl_summary,
     get_trade_history,
     open_trade,
+    save_conversation_history,
     set_capital,
 )
 from .persistence import load_manifest
@@ -43,6 +47,11 @@ GRAY = 0x95A5A6
 def _ensure_caller(interaction: discord.Interaction) -> None:
     """Auto-register the calling Discord user."""
     ensure_user(interaction.user.id, str(interaction.user))
+
+
+def _ensure_caller_from_message(message: discord.Message) -> None:
+    """Auto-register user from message (not interaction)."""
+    ensure_user(message.author.id, str(message.author))
 
 
 def _get_system_recommendation(ticker: str) -> dict | None:
@@ -90,630 +99,80 @@ class RallyBot(commands.Bot):
 
 
 def make_bot(token: str) -> RallyBot:
-    """Create and configure the bot with all slash commands."""
+    """Create and configure the agentic Discord bot."""
     bot = RallyBot()
 
     # ------------------------------------------------------------------
-    # /signals — show latest scan signals
+    # Message handler for natural language interaction via Claude
     # ------------------------------------------------------------------
-    @bot.tree.command(name="signals", description="Show today's rally signals")
-    async def cmd_signals(interaction: discord.Interaction) -> None:
-        _ensure_caller(interaction)
-
-        # Read last scan results from positions file (signals are in the scan output)
-        # We check positions.json for the latest state
-        state = load_positions()
-        positions = state.get("positions", [])
-
-        # We don't have a persistent "last signals" file, so show recent entries
-        recent_entries = [
-            p for p in positions
-            if p.get("bars_held", 99) <= 1
-        ]
-
-        if not recent_entries:
-            embed = discord.Embed(
-                title="No Recent Signals",
-                description="No new entry signals from the latest scan.",
-                color=GRAY,
-            )
-            await interaction.response.send_message(embed=embed)
+    @bot.event
+    async def on_message(message: discord.Message) -> None:
+        """Handle natural language messages via Claude."""
+        # Ignore bot's own messages
+        if message.author == bot.user:
             return
 
-        capital = get_capital(interaction.user.id)
+        # Only respond to DMs or mentions
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_mentioned = bot.user in message.mentions
 
-        embed = discord.Embed(
-            title=f"Recent Entries ({len(recent_entries)})",
-            color=GREEN,
-            timestamp=datetime.now(),
-        )
-        for p in recent_entries:
-            pnl = p.get("unrealized_pnl_pct", 0)
-            size = p.get("size", 0)
-            sign = "+" if pnl >= 0 else ""
-
-            value_lines = [
-                f"Entry: ${p['entry_price']:.2f}",
-                f"Stop: ${p.get('stop_price', 0):.2f}",
-                f"Target: ${p.get('target_price', 0):.2f}",
-                f"Size: {size:.0%}",
-                f"PnL: {sign}{pnl:.2f}%",
-            ]
-            if capital > 0 and size > 0:
-                dollar_size = capital * size
-                stop = p.get("stop_price", 0)
-                if stop:
-                    dollar_risk = capital * size * (p["entry_price"] - stop) / p["entry_price"]
-                else:
-                    dollar_risk = 0
-                value_lines.append(f"Allocate: ${dollar_size:,.0f}")
-                if dollar_risk > 0:
-                    value_lines.append(f"Risk: ${dollar_risk:,.0f}")
-
-            embed.add_field(
-                name=p["ticker"],
-                value="\n".join(value_lines),
-                inline=True,
-            )
-
-        if capital > 0:
-            embed.set_footer(text=f"Based on ${capital:,.0f} capital")
-        else:
-            embed.set_footer(
-                text="Set capital with /setcapital to see dollar amounts"
-            )
-
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /positions — show system open positions
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="positions", description="Show system open positions")
-    async def cmd_positions(interaction: discord.Interaction) -> None:
-        _ensure_caller(interaction)
-
-        state = load_positions()
-        positions = state.get("positions", [])
-
-        if not positions:
-            embed = discord.Embed(
-                title="No Open Positions",
-                description="The system has no open positions.",
-                color=GRAY,
-            )
-            await interaction.response.send_message(embed=embed)
+        if not (is_dm or is_mentioned):
             return
 
-        capital = get_capital(interaction.user.id)
-        total_exposure = sum(p.get("size", 0) for p in positions)
-
-        desc = f"Total exposure: {total_exposure:.0%}"
-        if capital > 0:
-            desc += f" (${capital * total_exposure:,.0f} of ${capital:,.0f})"
-
-        embed = discord.Embed(
-            title=f"Open Positions ({len(positions)})",
-            description=desc,
-            color=BLUE,
-            timestamp=datetime.now(),
-        )
-
-        for p in sorted(
-            positions, key=lambda x: x.get("unrealized_pnl_pct", 0), reverse=True
-        ):
-            pnl = p.get("unrealized_pnl_pct", 0)
-            size = p.get("size", 0)
-            sign = "+" if pnl >= 0 else ""
-
-            value_lines = [
-                f"Entry: ${p['entry_price']:.2f}",
-                f"Current: ${p.get('current_price', 0):.2f}",
-                f"Stop: ${p.get('stop_price', 0):.2f}",
-                f"Target: ${p.get('target_price', 0):.2f}",
-                f"Size: {size:.0%} | {p.get('bars_held', 0)} bars",
-            ]
-            if capital > 0 and size > 0:
-                dollar_alloc = capital * size
-                dollar_pnl = dollar_alloc * pnl / 100
-                dsign = "+" if dollar_pnl >= 0 else ""
-                value_lines.append(
-                    f"${dollar_alloc:,.0f} allocated | "
-                    f"{dsign}${abs(dollar_pnl):,.0f} PnL"
-                )
-
-            embed.add_field(
-                name=f"{p['ticker']} ({sign}{pnl:.2f}%)",
-                value="\n".join(value_lines),
-                inline=True,
+        # Check if Claude is enabled
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            await message.channel.send(
+                "💡 **Tip**: Set `ANTHROPIC_API_KEY` in `.env` to enable the agentic bot!"
             )
-
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /setcapital — set user's portfolio size
-    # ------------------------------------------------------------------
-    @bot.tree.command(
-        name="setcapital",
-        description="Set your portfolio capital for position sizing",
-    )
-    @app_commands.describe(amount="Your total portfolio capital in dollars")
-    async def cmd_setcapital(
-        interaction: discord.Interaction,
-        amount: float,
-    ) -> None:
-        _ensure_caller(interaction)
-
-        if amount <= 0:
-            embed = discord.Embed(
-                title="Invalid Amount",
-                description="Capital must be a positive number.",
-                color=RED,
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        set_capital(interaction.user.id, amount)
+        # Ensure user is registered
+        _ensure_caller_from_message(message)
 
-        embed = discord.Embed(
-            title="Capital Updated",
-            description=f"Portfolio capital set to **${amount:,.2f}**",
-            color=GREEN,
-            timestamp=datetime.now(),
-        )
-        embed.add_field(
-            name="What this means",
-            value=(
-                "When you enter trades, the bot will compute dollar amounts "
-                "based on this capital and the system's recommended position "
-                "sizes. Use `/enter` with a signal ticker to auto-fill "
-                "the recommended size, stop, and target."
-            ),
-            inline=False,
-        )
-        embed.set_footer(text=str(interaction.user))
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ------------------------------------------------------------------
-    # /enter — record a trade
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="enter", description="Record a new trade entry")
-    @app_commands.describe(
-        ticker="Ticker symbol (e.g. AAPL)",
-        price="Entry price",
-        size="Position size as fraction of capital (auto-filled from system signal)",
-        stop="Stop-loss price (auto-filled from system signal)",
-        target="Profit target price (auto-filled from system signal)",
-        notes="Optional notes",
-    )
-    async def cmd_enter(
-        interaction: discord.Interaction,
-        ticker: str,
-        price: float,
-        size: float | None = None,
-        stop: float | None = None,
-        target: float | None = None,
-        notes: str | None = None,
-    ) -> None:
-        _ensure_caller(interaction)
-
-        # Auto-fill from system recommendation if not provided
-        rec = _get_system_recommendation(ticker)
-        if rec:
-            if size is None:
-                size = rec.get("size", 0)
-            if stop is None:
-                stop = rec.get("stop_price")
-            if target is None:
-                target = rec.get("target_price")
-
-        if size is None:
-            size = 0.0
-
-        capital = get_capital(interaction.user.id)
-
-        trade_id = open_trade(
-            discord_id=interaction.user.id,
-            ticker=ticker.upper(),
-            entry_price=price,
-            size=size,
-            stop_price=stop,
-            target_price=target,
-            notes=notes,
+        # Get conversation history
+        history = await asyncio.to_thread(
+            get_conversation_history,
+            message.author.id
         )
 
-        embed = discord.Embed(
-            title="Trade Entered",
-            color=GREEN,
-            timestamp=datetime.now(),
-        )
-        embed.add_field(name="Ticker", value=ticker.upper(), inline=True)
-        embed.add_field(name="Entry Price", value=f"${price:.2f}", inline=True)
-        embed.add_field(name="Size", value=f"{size:.1%}", inline=True)
-
-        if stop:
-            risk_pct = (price - stop) / price * 100
-            embed.add_field(
-                name="Stop", value=f"${stop:.2f} (-{risk_pct:.1f}%)", inline=True
-            )
-        if target:
-            reward_pct = (target - price) / price * 100
-            embed.add_field(
-                name="Target", value=f"${target:.2f} (+{reward_pct:.1f}%)", inline=True
-            )
-
-        if capital > 0 and size > 0:
-            dollar_size = capital * size
-            embed.add_field(
-                name="Dollar Size",
-                value=f"${dollar_size:,.0f} of ${capital:,.0f}",
-                inline=True,
-            )
-            if stop:
-                dollar_risk = capital * size * (price - stop) / price
-                embed.add_field(
-                    name="Max Risk", value=f"${dollar_risk:,.0f}", inline=True
-                )
-
-        embed.add_field(name="Trade ID", value=str(trade_id), inline=True)
-        if rec:
-            embed.add_field(
-                name="Source", value="Auto-filled from system signal", inline=False
-            )
-        if notes:
-            embed.add_field(name="Notes", value=notes, inline=False)
-        embed.set_footer(text=f"Recorded for {interaction.user}")
-
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /exit — close a trade (FIFO)
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="exit", description="Close your oldest open trade for a ticker")
-    @app_commands.describe(
-        ticker="Ticker symbol to close",
-        price="Exit price",
-        notes="Optional notes",
-    )
-    async def cmd_exit(
-        interaction: discord.Interaction,
-        ticker: str,
-        price: float,
-        notes: str | None = None,
-    ) -> None:
-        _ensure_caller(interaction)
-
-        result = close_trade(
-            discord_id=interaction.user.id,
-            ticker=ticker.upper(),
-            exit_price=price,
-            notes=notes,
-        )
-
-        if result is None:
-            embed = discord.Embed(
-                title="No Open Trade Found",
-                description=f"You have no open trades in **{ticker.upper()}**.",
-                color=RED,
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-
-        pnl = result["pnl_pct"]
-        pnl_dollar = result.get("pnl_dollar")
-        color = GREEN if pnl >= 0 else RED
-        sign = "+" if pnl >= 0 else ""
-
-        embed = discord.Embed(
-            title=f"Trade Closed — {result['ticker']}",
-            color=color,
-            timestamp=datetime.now(),
-        )
-        embed.add_field(name="Entry", value=f"${result['entry_price']:.2f}", inline=True)
-        embed.add_field(name="Exit", value=f"${result['exit_price']:.2f}", inline=True)
-
-        pnl_text = f"**{sign}{pnl:.2f}%**"
-        if pnl_dollar is not None:
-            dsign = "+" if pnl_dollar >= 0 else ""
-            pnl_text += f"\n{dsign}${abs(pnl_dollar):,.2f}"
-        embed.add_field(name="PnL", value=pnl_text, inline=True)
-
-        embed.add_field(
-            name="Size", value=f"{result['size']:.1%}", inline=True
-        )
-        embed.add_field(
-            name="Held",
-            value=f"{result['entry_date']} → {result['exit_date']}",
-            inline=False,
-        )
-        embed.set_footer(text=f"Trade #{result['id']} | {interaction.user}")
-
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /history — show user's trade history
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="history", description="Show your trade history")
-    @app_commands.describe(
-        ticker="Filter by ticker (optional)",
-        limit="Number of trades to show (default: 10)",
-    )
-    async def cmd_history(
-        interaction: discord.Interaction,
-        ticker: str | None = None,
-        limit: int = 10,
-    ) -> None:
-        _ensure_caller(interaction)
-
-        trades = get_trade_history(
-            discord_id=interaction.user.id,
-            ticker=ticker,
-            limit=limit,
-        )
-
-        if not trades:
-            title = f"No trades found for {ticker.upper()}" if ticker else "No trade history"
-            embed = discord.Embed(title=title, color=GRAY)
-            await interaction.response.send_message(embed=embed)
-            return
-
-        title = f"Trade History — {ticker.upper()}" if ticker else "Trade History"
-        embed = discord.Embed(
-            title=title,
-            description=f"Showing {len(trades)} trades",
-            color=BLUE,
-            timestamp=datetime.now(),
-        )
-
-        for t in trades:
-            status = t["status"]
-            if status == "closed":
-                pnl = t["pnl_pct"] or 0
-                sign = "+" if pnl >= 0 else ""
-                pnl_str = f"**{sign}{pnl:.2f}%**"
-                if t.get("pnl_dollar") is not None:
-                    dsign = "+" if t["pnl_dollar"] >= 0 else ""
-                    pnl_str += f" ({dsign}${abs(t['pnl_dollar']):,.0f})"
-                value = (
-                    f"Entry: ${t['entry_price']:.2f} ({t['entry_date']})\n"
-                    f"Exit: ${t['exit_price']:.2f} ({t['exit_date']})\n"
-                    f"PnL: {pnl_str} | Size: {t['size']:.1%}"
-                )
-            else:
-                lines = [f"Entry: ${t['entry_price']:.2f} ({t['entry_date']})"]
-                if t.get("stop_price"):
-                    lines.append(f"Stop: ${t['stop_price']:.2f}")
-                if t.get("target_price"):
-                    lines.append(f"Target: ${t['target_price']:.2f}")
-                lines.append(f"Size: {t['size']:.1%} | **OPEN**")
-                value = "\n".join(lines)
-
-            if status == "closed":
-                icon = "+" if (t.get("pnl_pct") or 0) >= 0 else "-"
-            else:
-                icon = "~"
-            name = f"[{icon}] {t['ticker']}"
-            embed.add_field(name=name, value=value, inline=False)
-
-            if len(embed.fields) >= 25:
-                break
-
-        embed.set_footer(text=str(interaction.user))
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /pnl — P&L summary
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="pnl", description="Show your P&L summary")
-    @app_commands.describe(
-        period="Time period: all, 30d, 7d (default: all)",
-    )
-    @app_commands.choices(period=[
-        app_commands.Choice(name="All time", value="all"),
-        app_commands.Choice(name="Last 30 days", value="30d"),
-        app_commands.Choice(name="Last 7 days", value="7d"),
-    ])
-    async def cmd_pnl(
-        interaction: discord.Interaction,
-        period: str = "all",
-    ) -> None:
-        _ensure_caller(interaction)
-
-        days = None
-        if period == "30d":
-            days = 30
-        elif period == "7d":
-            days = 7
-
-        summary = get_pnl_summary(discord_id=interaction.user.id, days=days)
-        open_trades = get_open_trades(discord_id=interaction.user.id)
-        capital = get_capital(interaction.user.id)
-
-        period_label = {"all": "All Time", "30d": "Last 30 Days", "7d": "Last 7 Days"}[period]
-
-        color = GREEN if summary["total_pnl"] >= 0 else RED
-        sign = "+" if summary["total_pnl"] >= 0 else ""
-
-        embed = discord.Embed(
-            title=f"P&L Summary — {period_label}",
-            color=color,
-            timestamp=datetime.now(),
-        )
-
-        # Total PnL — show dollar amount if available
-        pnl_text = f"**{sign}{summary['total_pnl']:.2f}%**"
-        dollar_pnl = summary.get("total_pnl_dollar", 0.0)
-        if dollar_pnl != 0:
-            dsign = "+" if dollar_pnl >= 0 else ""
-            pnl_text += f"\n{dsign}${abs(dollar_pnl):,.2f}"
-        embed.add_field(name="Total PnL", value=pnl_text, inline=True)
-
-        embed.add_field(
-            name="Avg PnL/Trade", value=f"{summary['avg_pnl']:+.2f}%", inline=True
-        )
-        embed.add_field(
-            name="Win Rate", value=f"{summary['win_rate']:.0f}%", inline=True
-        )
-        embed.add_field(
-            name="Closed Trades", value=str(summary["n_trades"]), inline=True
-        )
-        embed.add_field(
-            name="Best Trade", value=f"+{summary['best_trade']:.2f}%", inline=True
-        )
-        embed.add_field(
-            name="Worst Trade", value=f"{summary['worst_trade']:.2f}%", inline=True
-        )
-        embed.add_field(
-            name="Open Trades", value=str(len(open_trades)), inline=True
-        )
-
-        if capital > 0:
-            embed.add_field(
-                name="Capital", value=f"${capital:,.0f}", inline=True
-            )
-
-        embed.set_footer(text=str(interaction.user))
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /health — model health report
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="health", description="Show model health and system status")
-    async def cmd_health(interaction: discord.Interaction) -> None:
-        _ensure_caller(interaction)
-
-        manifest = load_manifest()
-        now = datetime.now()
-
-        stale, fresh = [], []
-        for ticker, info in manifest.items():
+        # Show typing indicator
+        async with message.channel.typing():
             try:
-                saved_at = datetime.fromisoformat(info["saved_at"])
-                age_days = (now - saved_at).days
-                if age_days > 14:
-                    stale.append((ticker, age_days))
-                else:
-                    fresh.append(ticker)
-            except (KeyError, ValueError):
-                stale.append((ticker, 999))
+                # Remove mention from message if present
+                content = message.content
+                if bot.user.mentioned_in(message):
+                    content = content.replace(f"<@{bot.user.id}>", "").strip()
 
-        state = load_positions()
-        positions = state.get("positions", [])
-
-        color = GREEN if len(stale) == 0 else (GOLD if len(stale) < 5 else RED)
-
-        embed = discord.Embed(
-            title="System Health",
-            color=color,
-            timestamp=now,
-        )
-        embed.add_field(
-            name="Total Models", value=str(len(manifest)), inline=True
-        )
-        embed.add_field(
-            name="Fresh (<14d)", value=str(len(fresh)), inline=True
-        )
-        embed.add_field(
-            name="Stale (>14d)", value=str(len(stale)), inline=True
-        )
-        embed.add_field(
-            name="Open Positions", value=str(len(positions)), inline=True
-        )
-
-        if stale:
-            stale_sorted = sorted(stale, key=lambda x: -x[1])[:10]
-            stale_text = "\n".join(f"{t}: {d}d old" for t, d in stale_sorted)
-            embed.add_field(
-                name="Stalest Models", value=f"```\n{stale_text}\n```", inline=False
-            )
-
-        if positions:
-            total_exposure = sum(p.get("size", 0) for p in positions)
-            embed.add_field(
-                name="Total Exposure", value=f"{total_exposure:.0%}", inline=True
-            )
-
-        await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /portfolio — system equity history
-    # ------------------------------------------------------------------
-    @bot.tree.command(name="portfolio", description="Show system portfolio equity history")
-    @app_commands.describe(days="Number of days to show (default: 30)")
-    async def cmd_portfolio(
-        interaction: discord.Interaction,
-        days: int = 30,
-    ) -> None:
-        _ensure_caller(interaction)
-
-        history = load_equity_history(days=days)
-        trades = load_trade_journal(limit=10)
-
-        embed = discord.Embed(
-            title=f"Portfolio — Last {days} Days",
-            color=BLUE,
-            timestamp=datetime.now(),
-        )
-
-        if not history:
-            embed.description = "No equity history yet. Run the orchestrator scan to start."
-            await interaction.response.send_message(embed=embed)
-            return
-
-        # Summary from history
-        latest = history[-1]
-        embed.add_field(
-            name="Date", value=latest.get("date", "?"), inline=True
-        )
-        embed.add_field(
-            name="Positions", value=latest.get("n_positions", 0), inline=True
-        )
-        embed.add_field(
-            name="Exposure",
-            value=f"{float(latest.get('total_exposure', 0)):.0%}",
-            inline=True,
-        )
-        embed.add_field(
-            name="Signals Today", value=latest.get("n_signals_today", 0), inline=True
-        )
-        embed.add_field(
-            name="Assets Scanned", value=latest.get("n_scanned", 0), inline=True
-        )
-
-        # Recent trades summary
-        if trades:
-            trade_lines = []
-            for t in trades[-5:]:
-                pnl = float(t.get("realized_pnl_pct", 0))
-                sign = "+" if pnl >= 0 else ""
-                trade_lines.append(
-                    f"{t.get('ticker', '?')}: {sign}{pnl:.2f}% ({t.get('exit_reason', '?')})"
+                # Process message with Claude (runs in thread to avoid blocking)
+                response_text, updated_history = await asyncio.to_thread(
+                    process_message,
+                    content,
+                    message.author.id,
+                    str(message.author),
+                    history
                 )
-            embed.add_field(
-                name="Recent Closed Trades",
-                value="\n".join(trade_lines),
-                inline=False,
-            )
 
-        await interaction.response.send_message(embed=embed)
+                # Save updated history
+                await asyncio.to_thread(
+                    save_conversation_history,
+                    message.author.id,
+                    updated_history
+                )
 
-    # ------------------------------------------------------------------
-    # Global error handler
-    # ------------------------------------------------------------------
-    @bot.tree.error
-    async def on_app_command_error(
-        interaction: discord.Interaction, error: app_commands.AppCommandError
-    ) -> None:
-        logger.error(f"Command error: {error}", exc_info=error)
+                # Send response (split if too long for Discord's 2000 char limit)
+                if len(response_text) <= 2000:
+                    await message.channel.send(response_text)
+                else:
+                    # Split into chunks
+                    chunks = [response_text[i:i+2000] for i in range(0, len(response_text), 2000)]
+                    for chunk in chunks:
+                        await message.channel.send(chunk)
 
-        embed = discord.Embed(
-            title="Command Error",
-            description=str(error)[:4096],
-            color=RED,
-        )
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            except Exception as e:
+                logger.exception("Claude message processing failed")
+                await message.channel.send(
+                    f"⚠️ Error processing your request: {str(e)}"
+                )
 
     # ------------------------------------------------------------------
     # Built-in scheduler (replaces cron for cloud deployment)
