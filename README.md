@@ -1,6 +1,6 @@
 # Rally Phase-Transition Detector
 
-A quantitative system that detects the transition from volatility compression to directional rally across equities and crypto. Automated pipeline: weekly model retraining, daily scanning with position tracking, Discord/Telegram/email alerts, interactive Discord bot for per-user trade tracking, and a terminal dashboard.
+A quantitative system that detects the transition from volatility compression to directional rally across equities and crypto. Automated pipeline: weekly model retraining, daily scanning with position tracking, Discord alerts, interactive Discord bot for per-user trade tracking, and a terminal dashboard.
 
 For strategy theory, feature engineering, model architecture, and trading rules, see [THEORY.md](THEORY.md).
 
@@ -26,7 +26,7 @@ make discord                  # start Discord bot
 make test                     # run test suite (84 tests)
 ```
 
-For alerts, copy `.env.example` to `.env` and fill in your Discord bot token (or Telegram/SMTP/webhook credentials).
+For alerts, run `python3 scripts/setup_env.py` to interactively create your `.env` file with credentials.
 
 ---
 
@@ -49,7 +49,7 @@ market-rally/
         universe.py                 # S&P 500 + Nasdaq Top 500 universe (~843 tickers)
         scanner.py                  # Daily scan — load models, fetch prices, generate alerts
         retrain.py                  # Weekly model retraining (parallel, batch fetch)
-        notify.py                   # Discord, Telegram, email, webhook notification backends
+        notify.py                   # Discord notification backend
         portfolio.py                # Daily snapshots, trade journal (CSV)
         discord_db.py               # SQLite persistence for per-user trade tracking
         discord_bot.py              # Interactive Discord bot (slash commands)
@@ -89,7 +89,7 @@ market-rally/
     STANDARDS.md                    # Project coding standards
 ```
 
-Root-level `.py` files are 3-line shims that forward to the package, so `python scanner.py` keeps working.
+Root-level `.py` files are 3-line shims that forward to the package, so `python3 scanner.py` keeps working.
 
 ### Data Flow
 
@@ -110,7 +110,7 @@ Root-level `.py` files are 3-line shims that forward to the package, so `python 
                       |
               positions.json ──> portfolio.py (snapshots, journal)
                       |
-              notify.py ──> Discord / Telegram / email / webhook alerts
+              notify.py ──> Discord alerts
                       |
               discord_bot.py ──> interactive Discord commands
                       |
@@ -150,18 +150,18 @@ pip install -e ".[dev]"
 ### Weekly Retraining
 
 ```bash
-python retrain.py                              # all tickers (parallel, batch fetch)
-python retrain.py --tickers AAPL MSFT SPY      # specific tickers only
-python retrain.py --validate                   # compare auto-cal vs hand-tuned
+python3 retrain.py                              # all tickers (parallel, batch fetch)
+python3 retrain.py --tickers AAPL MSFT SPY      # specific tickers only
+python3 retrain.py --validate                   # compare auto-cal vs hand-tuned
 ```
 
 ### Daily Scanning
 
 ```bash
-python scanner.py                              # scan all trained assets
-python scanner.py --positions                  # include open position tracking
-python scanner.py --config conservative        # use conservative thresholds
-python scanner.py --tickers AAPL NVDA MSFT     # scan specific tickers
+python3 scanner.py                              # scan all trained assets
+python3 scanner.py --positions                  # include open position tracking
+python3 scanner.py --config conservative        # use conservative thresholds
+python3 scanner.py --tickers AAPL NVDA MSFT     # scan specific tickers
 ```
 
 Scanner output includes:
@@ -175,16 +175,16 @@ Scanner output includes:
 
 ```bash
 # Single asset
-python main.py --asset SPY --plot
+python3 main.py --asset SPY --plot
 
 # Original 14 assets with portfolio aggregation
-python main.py --run-all --plot
+python3 main.py --run-all --plot
 
 # Full universe backtest (800+ assets, ~2-4 hours)
-python backtest_universe.py --plot
+python3 backtest_universe.py --plot
 
 # Parameter optimization sweep
-python optimize.py
+python3 optimize.py
 ```
 
 All plots are saved to the `plots/` directory.
@@ -198,42 +198,40 @@ All plots are saved to the `plots/` directory.
 The orchestrator (`scripts/orchestrator.py`) is the cron entry point:
 
 ```bash
-python scripts/orchestrator.py scan      # daily scan + position updates + alerts
-python scripts/orchestrator.py retrain   # weekly retrain all models
-python scripts/orchestrator.py auto      # auto-detect: Sun=retrain, Mon-Fri=scan
-python scripts/orchestrator.py health    # model freshness report
+python3 scripts/orchestrator.py scan      # daily scan + position updates + alerts
+python3 scripts/orchestrator.py retrain   # weekly retrain all models
+python3 scripts/orchestrator.py auto      # auto-detect: Sun=retrain, Mon-Fri=scan
+python3 scripts/orchestrator.py health    # model freshness report
 ```
 
 **Cron setup** (add to `crontab -e`):
 
 ```cron
 # Daily scan at 4:30 PM ET on weekdays
-30 16 * * 1-5 cd /path/to/market-rally && .venv/bin/python scripts/orchestrator.py scan
+30 16 * * 1-5 cd /path/to/market-rally && .venv/bin/python3 scripts/orchestrator.py scan
 
 # Weekly retrain on Sunday at 6 PM ET
-0 18 * * 0 cd /path/to/market-rally && .venv/bin/python scripts/orchestrator.py retrain
+0 18 * * 0 cd /path/to/market-rally && .venv/bin/python3 scripts/orchestrator.py retrain
 ```
 
 ### Notifications
 
-Four backends — each silently no-ops if not configured:
+Discord notifications are sent via bot token + channel ID or webhook URL. Silently no-ops if not configured.
 
-| Backend | Config (`.env`) | Use case |
-|---------|----------------|----------|
-| **Discord** | `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID` | Primary — rich embeds in your server |
-| **Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Instant mobile alerts |
-| **Email** | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFY_EMAIL` | Backup / audit trail |
-| **Webhook** | `WEBHOOK_URL` | Integration with Slack, custom systems |
+**Configuration (`.env`):**
+- `DISCORD_BOT_TOKEN` — Your Discord bot token (for bot method)
+- `DISCORD_CHANNEL_ID` — Target channel ID (for bot method)
+- `DISCORD_WEBHOOK_URL` — Webhook URL (alternative to bot method)
 
-Copy `.env.example` to `.env` and fill in credentials for your preferred backend(s).
+Copy `.env.example` to `.env` and fill in your Discord credentials.
 
 ### Dashboard
 
 ```bash
-python scripts/dashboard.py              # cached state
-python scripts/dashboard.py --live       # fetch live prices for open positions
-python scripts/dashboard.py --journal 20 # show last 20 closed trades
-python scripts/dashboard.py --equity 90  # show 90-day equity history
+python3 scripts/dashboard.py              # cached state
+python3 scripts/dashboard.py --live       # fetch live prices for open positions
+python3 scripts/dashboard.py --journal 20 # show last 20 closed trades
+python3 scripts/dashboard.py --equity 90  # show 90-day equity history
 ```
 
 ### Portfolio Tracking
@@ -246,35 +244,87 @@ Automatically maintained by the orchestrator:
 
 ## Discord Bot
 
-Interactive Discord bot for per-user trade tracking and system monitoring.
+Agentic Discord bot powered by Claude API for natural language trade tracking and system monitoring.
 
 ### Setup
 
+**Interactive Setup (Recommended):**
+
+Run the interactive environment setup script to safely create your `.env` file:
+
+```bash
+python3 scripts/setup_env.py
+```
+
+The script will guide you through:
+- Discord bot token and channel ID (with format validation)
+- Claude API key and model selection
+- Scheduler settings for cloud deployment
+- Optional webhooks and notifications
+
+Features:
+- ✅ Validates all credential formats before accepting
+- ✅ Automatically adds `.env` to `.gitignore` if missing
+- ✅ Sets secure file permissions (600 - owner read/write only)
+- ✅ Prevents accidental git commits of secrets
+- ✅ Direct links to credential sources (Discord Developer Portal, Anthropic Console)
+
+**Manual Setup:**
+
+Alternatively, you can manually configure:
+
 1. Create a bot at [discord.com/developers/applications](https://discord.com/developers/applications)
 2. Enable **MESSAGE CONTENT** intent in Bot settings
-3. Generate an invite URL with `bot` + `applications.commands` scopes
+3. Generate an invite URL with `bot` scope
 4. Invite the bot to your server
-5. Add to `.env`:
+5. Get a Claude API key from [console.anthropic.com](https://console.anthropic.com)
+6. Copy `.env.example` to `.env` and fill in:
    ```
    DISCORD_BOT_TOKEN=your-token-here
    DISCORD_CHANNEL_ID=your-alerts-channel-id
+   ANTHROPIC_API_KEY=sk-ant-...
+   CLAUDE_MODEL=claude-sonnet-4-5-20250929
    ```
-6. Install with Discord support: `pip install -e ".[discord]"`
-7. Start the bot: `make discord`
 
-### Slash Commands
+**Start the bot:**
 
-| Command | Description |
-|---------|-------------|
-| `/signals` | Show recent entry signals with sizing (dollar amounts if capital is set) |
-| `/positions` | Show system's open positions with P&L and dollar exposure |
-| `/setcapital <amount>` | Set your portfolio capital for dollar-based sizing |
-| `/enter <ticker> <price> [size] [stop] [target]` | Record a trade entry — auto-fills size/stop/target from system signal |
-| `/exit <ticker> <price> [notes]` | Close your oldest open trade for that ticker (FIFO) |
-| `/history [ticker] [limit]` | Show your trade history with stop/target levels and dollar P&L |
-| `/pnl [period]` | P&L summary with dollar amounts: all-time, 30d, or 7d |
-| `/health` | Model freshness + system status |
-| `/portfolio` | System equity history (last 30 days) |
+```bash
+pip install -e ".[discord]"
+make discord
+```
+
+### Natural Language Interface
+
+Message the bot directly (DM) or mention it in a channel with natural language. Claude will understand your intent and take action:
+
+**Query signals and positions:**
+- "What are today's signals?"
+- "Show me my open positions"
+- "What's the system's current exposure?"
+- "How many models are stale?"
+
+**Execute trades:**
+- "Enter AAPL at $185"
+- "Enter NVDA at current price"
+- "Exit my AAPL position at $192"
+- "Close my worst performing trade"
+
+**Track performance:**
+- "How's my portfolio doing?"
+- "Show my P&L for the last 30 days"
+- "What's my best trade this month?"
+- "Show me my trade history for NVDA"
+
+**Manage capital:**
+- "Set my capital to $100,000"
+- "What's my current capital?"
+
+**Conversation memory:**
+The bot maintains context across messages, so you can have natural conversations:
+- You: "What are my positions?"
+- Bot: [Shows 3 positions]
+- You: "Exit the one with the biggest loss"
+- Bot: [Closes that position]
 
 ### Auto-Alerts
 
@@ -291,19 +341,19 @@ The orchestrator pushes rich embeds to your Discord channel automatically (no bo
 
 Each Discord user gets their own trade journal stored in SQLite (`models/rally_discord.db`):
 
-1. **Set your capital**: `/setcapital 100000` — tells the bot your portfolio size
-2. **Enter trades**: `/enter AAPL 185.50` — auto-fills the system's recommended position size (e.g., 15%), stop price, and profit target from the active signal. Shows dollar allocation ("$15,000 of $100,000") and max risk.
-3. **Exit trades**: `/exit AAPL 192.00` — closes the oldest open AAPL trade (FIFO), shows both percentage and dollar P&L ("+3.51% / +$527")
-4. **Track performance**: `/pnl` — cumulative P&L in both % and $, win rate, best/worst trades
-5. **Review history**: `/history` — full trade log with entry/exit dates, stop/target levels, and dollar P&L
+1. **Set your capital**: "Set my capital to $100,000" — tells the bot your portfolio size
+2. **Enter trades**: "Enter AAPL at $185.50" — auto-fills the system's recommended position size (e.g., 15%), stop price, and profit target from active signals. Shows dollar allocation ("$15,000 of $100,000") and max risk.
+3. **Exit trades**: "Exit AAPL at $192" — closes the oldest open AAPL trade (FIFO), shows both percentage and dollar P&L ("+3.51% / +$527")
+4. **Track performance**: "Show my P&L" — cumulative P&L in both % and $, win rate, best/worst trades
+5. **Review history**: "Show my trade history" — full trade log with entry/exit dates, stop/target levels, and dollar P&L
 
-Users are auto-registered on their first command — no setup needed. Capital can be updated anytime with `/setcapital`.
+Users are auto-registered on their first message — no setup needed. Capital can be updated anytime by asking.
 
-The bot is **capital-aware**: when you set your portfolio size, every command shows dollar amounts alongside percentages — position allocations, risk per trade, unrealized P&L on open positions, and cumulative returns.
+The bot is **capital-aware**: when you set your portfolio size, responses include dollar amounts alongside percentages — position allocations, risk per trade, unrealized P&L on open positions, and cumulative returns.
 
 ### Cloud Deployment (Railway)
 
-The bot includes a built-in scheduler so you don't need cron. One process handles everything: slash commands + daily scans + weekly retrains.
+The bot includes a built-in scheduler so you don't need cron. One process handles everything: natural language chat + daily scans + weekly retrains.
 
 **Deploy to Railway:**
 
@@ -313,6 +363,7 @@ The bot includes a built-in scheduler so you don't need cron. One process handle
    ```
    DISCORD_BOT_TOKEN=your-token
    DISCORD_CHANNEL_ID=your-channel-id
+   ANTHROPIC_API_KEY=sk-ant-your-key
    ENABLE_SCHEDULER=1
    ```
 4. Railway auto-detects the `Procfile` and deploys
