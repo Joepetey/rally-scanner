@@ -145,6 +145,21 @@ TOOLS = [
             "required": []
         }
     },
+    {
+        "name": "run_scan",
+        "description": "Run the market scanner to find new rally signals. This scans all trained tickers and updates positions. Returns scan results and timestamp.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "string",
+                    "description": "Scan configuration: 'baseline' (default), 'conservative', 'aggressive', or 'concentrated'",
+                    "enum": ["baseline", "conservative", "aggressive", "concentrated"]
+                }
+            },
+            "required": []
+        }
+    },
 ]
 
 
@@ -506,6 +521,62 @@ def _get_health() -> dict[str, Any]:
     return result
 
 
+def _run_scan(config: str = "baseline") -> dict[str, Any]:
+    """Run the market scanner and return results."""
+    from datetime import datetime
+    from .scanner import scan_all
+    from .positions import load_positions
+
+    try:
+        # Run the scan
+        logger.info(f"Running market scan with config: {config}")
+        results = scan_all(tickers=None, show_positions=False, config_name=config)
+
+        if not results:
+            return {
+                "success": False,
+                "error": "No models found. Run retrain first."
+            }
+
+        # Get updated positions
+        state = load_positions()
+        positions = state.get("positions", [])
+
+        # Find new signals (bars_held <= 1)
+        new_signals = [p for p in positions if p.get("bars_held", 99) <= 1]
+
+        # Count closed positions
+        closed_today = state.get("closed_today", [])
+
+        scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        return {
+            "success": True,
+            "scan_time": scan_time,
+            "config": config,
+            "tickers_scanned": len(results),
+            "new_signals": len(new_signals),
+            "total_open": len(positions),
+            "closed_today": len(closed_today),
+            "signals": [
+                {
+                    "ticker": p["ticker"],
+                    "entry_price": p["entry_price"],
+                    "size_pct": p.get("size", 0) * 100,
+                    "stop_price": p.get("stop_price"),
+                    "target_price": p.get("target_price"),
+                }
+                for p in new_signals
+            ]
+        }
+    except Exception as e:
+        logger.exception("Scan failed")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 def execute_tool(
     tool_name: str,
     tool_input: dict[str, Any],
@@ -535,6 +606,9 @@ def execute_tool(
         return _get_portfolio(days)
     elif tool_name == "get_health":
         return _get_health()
+    elif tool_name == "run_scan":
+        config = tool_input.get("config", "baseline")
+        return _run_scan(config)
     else:
         return {"error": f"Unknown tool: {tool_name}"}
 
