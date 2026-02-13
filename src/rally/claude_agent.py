@@ -114,6 +114,17 @@ TOOLS = [
         }
     },
     {
+        "name": "set_capital",
+        "description": "Set the user's portfolio capital amount. This is used to calculate position sizes and dollar-based P&L.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "amount": {"type": "number", "description": "Portfolio capital in dollars (e.g., 10000 for $10,000)"}
+            },
+            "required": ["amount"]
+        }
+    },
+    {
         "name": "get_trade_history",
         "description": "Show the user's trade history with entry/exit details and P&L.",
         "input_schema": {
@@ -426,6 +437,20 @@ def _get_pnl(discord_id: int, period: str = "all") -> dict[str, Any]:
     return result
 
 
+def _set_capital(discord_id: int, amount: float) -> dict[str, Any]:
+    """Set user's portfolio capital."""
+    if amount <= 0:
+        return {"error": "Capital amount must be greater than 0"}
+
+    set_capital(discord_id, amount)
+
+    return {
+        "success": True,
+        "capital": amount,
+        "message": f"Portfolio capital set to ${amount:,.2f}"
+    }
+
+
 def _get_trade_history(discord_id: int, ticker: str | None = None, limit: int = 10) -> dict[str, Any]:
     """Get trade history."""
     trades = get_trade_history(discord_id, ticker=ticker, limit=limit)
@@ -612,6 +637,9 @@ def execute_tool(
     elif tool_name == "get_pnl":
         period = tool_input.get("period", "all")
         return _get_pnl(discord_id, period)
+    elif tool_name == "set_capital":
+        amount = tool_input.get("amount")
+        return _set_capital(discord_id, amount)
     elif tool_name == "get_trade_history":
         ticker = tool_input.get("ticker")
         limit = tool_input.get("limit", 10)
