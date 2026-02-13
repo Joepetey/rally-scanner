@@ -22,6 +22,7 @@ from .discord_db import (
     get_pnl_summary,
     get_trade_history,
     open_trade,
+    set_capital,
 )
 from .persistence import load_manifest
 from .portfolio import load_equity_history, load_trade_journal
