@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .config import PARAMS, AssetConfig
-from .data import fetch_daily, fetch_vix, merge_vix
+from .data import fetch_daily, fetch_daily_batch, fetch_vix, merge_vix
 from .features import build_features
 from .hmm import predict_hmm_probs
 from .persistence import load_manifest, load_model
@@ -64,15 +64,22 @@ def apply_config(config_name: str) -> None:
         setattr(PARAMS, key, val)
 
 
-def scan_single(ticker: str, artifacts: dict, vix_data: pd.Series | None = None) -> dict:
+def scan_single(
+    ticker: str, artifacts: dict,
+    vix_data: pd.Series | None = None,
+    ohlcv_data: pd.DataFrame | None = None,
+) -> dict:
     """Scan a single asset. Returns dict with signal info."""
     # Reconstruct AssetConfig
     ac = artifacts["asset_config"]
     asset = AssetConfig(**ac)
 
-    # Fetch recent data
-    start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    df = fetch_daily(asset, start=start)
+    # Use pre-fetched data if available, otherwise fetch individually
+    if ohlcv_data is not None:
+        df = ohlcv_data.copy()
+    else:
+        start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        df = fetch_daily(asset, start=start)
 
     if len(df) < 300:
         return {"ticker": ticker, "status": "insufficient_data", "bars": len(df)}
@@ -189,6 +196,14 @@ def scan_all(
         print(f"  WARNING: VIX data unavailable: {e}")
         vix_data = None
 
+    # Batch-fetch OHLCV for all tickers at once (much faster than individual fetches)
+    print("  Batch-fetching OHLCV data...", end="\r", flush=True)
+    try:
+        ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
+    except Exception as e:
+        print(f"  WARNING: Batch fetch failed ({e}), falling back to individual fetches")
+        ohlcv_cache = {}
+
     print(f"\n{'='*90}")
     print(f"  RALLY DETECTOR — DAILY SCAN  [{config_name.upper()}]")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  {len(scan_tickers)} assets")
@@ -202,7 +217,11 @@ def scan_all(
         print(f"  Scanning {ticker:<6} ({i}/{len(scan_tickers)})...", end="\r", flush=True)
         try:
             artifacts = load_model(ticker)
-            result = scan_single(ticker, artifacts, vix_data=vix_data)
+            result = scan_single(
+                ticker, artifacts,
+                vix_data=vix_data,
+                ohlcv_data=ohlcv_cache.get(ticker),
+            )
             results.append(result)
         except Exception as e:
             results.append({"ticker": ticker, "status": f"error: {e}"})
