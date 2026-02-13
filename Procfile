@@ -1,1 +1,1 @@
-worker: python3 scripts/run_discord.py
+worker: bash start.sh
