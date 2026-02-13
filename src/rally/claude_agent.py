@@ -635,10 +635,10 @@ Key conventions:
                     "content": json.dumps(result)
                 })
 
-        # Add assistant response to history
+        # Add assistant response to history (convert TextBlocks to dicts)
         conversation_history.append({
             "role": "assistant",
-            "content": response.content
+            "content": [block.model_dump() for block in response.content]
         })
 
         # Add tool results
@@ -662,10 +662,10 @@ Key conventions:
         if hasattr(block, "text"):
             response_text += block.text
 
-    # Add final response to history
+    # Add final response to history (convert TextBlocks to dicts)
     conversation_history.append({
         "role": "assistant",
-        "content": response.content
+        "content": [block.model_dump() for block in response.content]
     })
 
     logger.info(f"Claude response for {discord_username}: {response_text[:100]}...")
