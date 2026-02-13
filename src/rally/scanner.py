@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -167,6 +168,20 @@ def scan_single(
     }
 
 
+def _scan_one(args: tuple) -> dict:
+    """Worker function for parallel scanning (must be top-level for pickling)."""
+    ticker, vix_data, ohlcv_df = args
+    try:
+        artifacts = load_model(ticker)
+        return scan_single(
+            ticker, artifacts,
+            vix_data=vix_data,
+            ohlcv_data=ohlcv_df,
+        )
+    except Exception as e:
+        return {"ticker": ticker, "status": f"error: {e}"}
+
+
 def scan_all(
     tickers: list[str] | None = None, show_positions: bool = False,
     config_name: str = "baseline",
@@ -212,19 +227,24 @@ def scan_all(
           f"TimeStop={PARAMS.time_stop_bars}")
     print(f"{'='*90}")
 
+    # Scan all tickers in parallel using process pool
+    n_workers = min(8, len(scan_tickers))
+    work_items = [
+        (ticker, vix_data, ohlcv_cache.get(ticker))
+        for ticker in scan_tickers
+    ]
+
     results = []
-    for i, ticker in enumerate(scan_tickers, 1):
-        print(f"  Scanning {ticker:<6} ({i}/{len(scan_tickers)})...", end="\r", flush=True)
-        try:
-            artifacts = load_model(ticker)
-            result = scan_single(
-                ticker, artifacts,
-                vix_data=vix_data,
-                ohlcv_data=ohlcv_cache.get(ticker),
-            )
-            results.append(result)
-        except Exception as e:
-            results.append({"ticker": ticker, "status": f"error: {e}"})
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {
+            pool.submit(_scan_one, item): item[0]
+            for item in work_items
+        }
+        for i, future in enumerate(as_completed(futures), 1):
+            ticker = futures[future]
+            print(f"  Scanned {ticker:<6} ({i}/{len(scan_tickers)})...",
+                  end="\r", flush=True)
+            results.append(future.result())
 
     # Clear progress line
     print(" " * 60, end="\r")

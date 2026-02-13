@@ -85,7 +85,7 @@ class PipelineConfig:
     # --- Parallelism ---
     n_workers: int = 8              # max parallel training workers
     # --- OHLCV disk cache ---
-    cache_dir: str = "data_cache"   # parquet cache directory
+    cache_dir: str = "models/data_cache"  # under models/ for Railway volume
     cache_enabled: bool = True
     # --- HMM ---
     hmm_n_iter: int = 100           # reduced from 200 (converges in ~50-80)
