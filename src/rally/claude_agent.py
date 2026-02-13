@@ -160,6 +160,21 @@ TOOLS = [
             "required": []
         }
     },
+    {
+        "name": "run_retrain",
+        "description": "Retrain models for all tickers in the universe. This is a long-running operation (can take 10-30+ minutes). The user will receive progress updates during training and a completion notification.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tickers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of specific tickers to retrain. If not provided, retrains all tickers in universe."
+                }
+            },
+            "required": []
+        }
+    },
 ]
 
 
@@ -609,6 +624,14 @@ def execute_tool(
     elif tool_name == "run_scan":
         config = tool_input.get("config", "baseline")
         return _run_scan(config)
+    elif tool_name == "run_retrain":
+        # Mark as async task - will be handled specially by discord_bot
+        tickers = tool_input.get("tickers")
+        return {
+            "_async_task": "retrain",
+            "tickers": tickers,
+            "message": "Starting model retraining... This will take 10-30+ minutes. You'll receive progress updates."
+        }
     else:
         return {"error": f"Unknown tool: {tool_name}"}
 
@@ -622,7 +645,7 @@ def process_message(
     discord_id: int,
     discord_username: str,
     conversation_history: list[dict] | None = None,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], list[dict]]:
     """Process a user message with Claude, execute tools as needed.
 
     Args:
@@ -632,13 +655,15 @@ def process_message(
         conversation_history: Previous messages (optional)
 
     Returns:
-        Tuple of (response_text, updated_conversation_history)
+        Tuple of (response_text, updated_conversation_history, async_tasks)
     """
+    async_tasks = []  # Track async tasks to run
     client = _get_client()
     if not client:
         return (
             "Claude API not configured. Use slash commands instead.",
-            conversation_history or []
+            conversation_history or [],
+            []
         )
 
     # Ensure user exists and get their capital
@@ -703,6 +728,11 @@ Key conventions:
                     discord_id,
                     capital
                 )
+
+                # Check if this is an async task
+                if isinstance(result, dict) and "_async_task" in result:
+                    async_tasks.append(result)
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -744,4 +774,4 @@ Key conventions:
 
     logger.info(f"Claude response for {discord_username}: {response_text[:100]}...")
 
-    return response_text, conversation_history
+    return response_text, conversation_history, async_tasks

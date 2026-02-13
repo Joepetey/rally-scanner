@@ -103,6 +103,68 @@ def make_bot(token: str) -> RallyBot:
     bot = RallyBot()
 
     # ------------------------------------------------------------------
+    # Async task handlers for long-running operations
+    # ------------------------------------------------------------------
+    async def _run_retrain_task(
+        channel: discord.abc.Messageable,
+        tickers: list[str] | None = None
+    ) -> None:
+        """Run model retraining with progress updates."""
+        import time
+        from .retrain import retrain_all
+        from .persistence import load_manifest
+
+        try:
+            # Send initial message
+            await channel.send("🔄 **Starting model retraining...**\nThis will take 10-30+ minutes depending on the number of tickers.")
+
+            # Run retrain in thread and time it
+            start_time = time.time()
+
+            # Send progress update every 5 minutes
+            async def send_updates():
+                elapsed = 0
+                while True:
+                    await asyncio.sleep(300)  # 5 minutes
+                    elapsed += 5
+                    await channel.send(f"⏳ Still training... {elapsed} minutes elapsed")
+
+            # Start update task
+            update_task = asyncio.create_task(send_updates())
+
+            try:
+                # Run the actual retraining
+                await asyncio.to_thread(retrain_all, tickers)
+            finally:
+                # Cancel update task
+                update_task.cancel()
+                try:
+                    await update_task
+                except asyncio.CancelledError:
+                    pass
+
+            # Calculate elapsed time
+            elapsed = time.time() - start_time
+            minutes = int(elapsed / 60)
+            seconds = int(elapsed % 60)
+
+            # Get model count
+            manifest = load_manifest()
+            model_count = len(manifest) if manifest else 0
+
+            # Send completion message
+            await channel.send(
+                f"✅ **Retraining complete!**\n"
+                f"• Trained: {model_count} models\n"
+                f"• Time: {minutes}m {seconds}s\n"
+                f"• You can now run scans to find signals!"
+            )
+
+        except Exception as e:
+            logger.exception("Retrain task failed")
+            await channel.send(f"❌ **Retraining failed:** {str(e)}")
+
+    # ------------------------------------------------------------------
     # Message handler for natural language interaction via Claude
     # ------------------------------------------------------------------
     @bot.event
@@ -144,7 +206,7 @@ def make_bot(token: str) -> RallyBot:
                     content = content.replace(f"<@{bot.user.id}>", "").strip()
 
                 # Process message with Claude (runs in thread to avoid blocking)
-                response_text, updated_history = await asyncio.to_thread(
+                response_text, updated_history, async_tasks = await asyncio.to_thread(
                     process_message,
                     content,
                     message.author.id,
@@ -167,6 +229,15 @@ def make_bot(token: str) -> RallyBot:
                     chunks = [response_text[i:i+2000] for i in range(0, len(response_text), 2000)]
                     for chunk in chunks:
                         await message.channel.send(chunk)
+
+                # Handle async tasks (long-running operations like retrain)
+                for task in async_tasks:
+                    if task.get("_async_task") == "retrain":
+                        # Spawn retrain task in background
+                        asyncio.create_task(_run_retrain_task(
+                            message.channel,
+                            task.get("tickers")
+                        ))
 
             except Exception as e:
                 logger.exception("Claude message processing failed")
