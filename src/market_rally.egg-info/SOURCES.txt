@@ -9,6 +9,7 @@ src/rally/__init__.py
 src/rally/backtest.py
 src/rally/backtest_universe.py
 src/rally/calibrate.py
+src/rally/claude_agent.py
 src/rally/config.py
 src/rally/data.py
 src/rally/discord_bot.py
@@ -29,6 +30,8 @@ src/rally/scanner.py
 src/rally/trading.py
 src/rally/universe.py
 tests/test_config.py
+tests/test_discord_db.py
+tests/test_discord_embeds.py
 tests/test_features.py
 tests/test_labels.py
 tests/test_notify.py

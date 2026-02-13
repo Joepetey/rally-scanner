@@ -4,8 +4,8 @@ PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
 
 setup:
-	python -m venv .venv
-	.venv/bin/pip install -e ".[dev]"
+	python3 -m venv .venv
+	.venv/bin/pip install -e ".[dev,discord]"
 	@echo "Done. Activate with: source .venv/bin/activate"
 
 scan:
