@@ -3,15 +3,18 @@
 import pytest
 
 from rally.discord_db import (
+    clear_conversation_history,
     close_trade,
     ensure_user,
     get_capital,
+    get_conversation_history,
     get_db,
     get_open_trades,
     get_pnl_summary,
     get_trade_history,
     init_db,
     open_trade,
+    save_conversation_history,
     set_capital,
 )
 
@@ -317,3 +320,119 @@ def test_migration_adds_columns(db):
     assert "stop_price" in trade_cols
     assert "target_price" in trade_cols
     assert "pnl_dollar" in trade_cols
+
+
+# ---------------------------------------------------------------------------
+# Conversation history — truncation safety
+# ---------------------------------------------------------------------------
+
+
+def _tool_use_msg():
+    """Assistant message containing a tool_use block."""
+    return {
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_abc123", "name": "get_signals",
+             "input": {}},
+        ],
+    }
+
+
+def _tool_result_msg():
+    """User message containing a tool_result block."""
+    return {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_abc123",
+             "content": '{"signals": []}'},
+        ],
+    }
+
+
+def _user_msg(text="hello"):
+    return {"role": "user", "content": text}
+
+
+def _asst_msg(text="Hi there"):
+    return {"role": "assistant", "content": [{"type": "text", "text": text}]}
+
+
+def test_conversation_history_round_trip(db):
+    """Save and retrieve basic conversation history."""
+    ensure_user(1, "alice", db_path=db)
+    history = [_user_msg(), _asst_msg()]
+    save_conversation_history(1, history, db_path=db)
+    got = get_conversation_history(1, db_path=db)
+    assert got == history
+
+
+def test_conversation_truncation_skips_orphan_tool_result(db):
+    """Truncation must not start on an orphaned tool_result message."""
+    ensure_user(1, "alice", db_path=db)
+    # Build history: plain user, assistant tool_use, tool_result, assistant text, plain user, assistant text
+    history = [
+        _user_msg("first"),           # 0
+        _tool_use_msg(),              # 1 — assistant with tool_use
+        _tool_result_msg(),           # 2 — user with tool_result
+        _asst_msg("tool done"),       # 3
+        _user_msg("second"),          # 4
+        _asst_msg("reply"),           # 5
+    ]
+    save_conversation_history(1, history, db_path=db)
+
+    # Limit=4 would naively slice to [2,3,4,5] starting on tool_result
+    got = get_conversation_history(1, limit_messages=4, db_path=db)
+
+    # Should skip the orphaned tool_result and start at msg 4 (plain user)
+    assert got[0]["role"] == "user"
+    assert got[0]["content"] == "second"
+
+
+def test_conversation_truncation_skips_assistant_start(db):
+    """History must not start with an assistant message."""
+    ensure_user(1, "alice", db_path=db)
+    history = [
+        _user_msg("old"),
+        _asst_msg("old reply"),
+        _user_msg("new"),
+        _asst_msg("new reply"),
+    ]
+    save_conversation_history(1, history, db_path=db)
+
+    # limit=3 slices to [assistant "old reply", user "new", assistant "new reply"]
+    got = get_conversation_history(1, limit_messages=3, db_path=db)
+
+    # Should start at the first plain user message in the slice
+    assert got[0]["role"] == "user"
+    assert got[0]["content"] == "new"
+
+
+def test_conversation_no_truncation_when_small(db):
+    """Short history is returned as-is."""
+    ensure_user(1, "alice", db_path=db)
+    history = [_user_msg(), _asst_msg()]
+    save_conversation_history(1, history, db_path=db)
+    got = get_conversation_history(1, limit_messages=20, db_path=db)
+    assert got == history
+
+
+def test_conversation_truncation_no_safe_start_returns_empty(db):
+    """If no plain user message exists in the slice, return empty."""
+    ensure_user(1, "alice", db_path=db)
+    # All tool interactions — no plain user message
+    history = [
+        _tool_use_msg(),
+        _tool_result_msg(),
+        _asst_msg("done"),
+    ]
+    save_conversation_history(1, history, db_path=db)
+    got = get_conversation_history(1, limit_messages=3, db_path=db)
+    assert got == []
+
+
+def test_clear_conversation_history(db):
+    ensure_user(1, "alice", db_path=db)
+    save_conversation_history(1, [_user_msg()], db_path=db)
+    clear_conversation_history(1, db_path=db)
+    got = get_conversation_history(1, db_path=db)
+    assert got == []

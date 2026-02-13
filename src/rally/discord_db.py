@@ -361,7 +361,28 @@ def get_conversation_history(
     if row:
         history = json.loads(row["history"])
         # Limit to recent messages to avoid token overflow
-        return history[-limit_messages:]
+        history = history[-limit_messages:]
+        # Ensure truncation doesn't break tool_use/tool_result pairs.
+        # The Claude API requires: (1) first message is role="user",
+        # (2) every tool_result has a matching tool_use in the prior
+        # assistant message.  Walk forward to find a safe start.
+        def _is_tool_result(msg):
+            content = msg.get("content")
+            return isinstance(content, list) and any(
+                isinstance(c, dict) and c.get("type") == "tool_result"
+                for c in content
+            )
+
+        def _is_plain_user(msg):
+            return msg.get("role") == "user" and not _is_tool_result(msg)
+
+        # Find first plain user message — the only safe start boundary
+        for i, msg in enumerate(history):
+            if _is_plain_user(msg):
+                return history[i:]
+        # No safe start found — drop the whole slice rather than
+        # sending malformed history to the API
+        return []
     return []
 
 
