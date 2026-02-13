@@ -216,3 +216,42 @@ def fetch_daily_batch(
                 continue
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Real-time quotes (used by Claude agent get_price tool)
+# ---------------------------------------------------------------------------
+
+
+def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
+    """Fetch real-time quote data for one or more tickers via yfinance fast_info.
+
+    Returns dict keyed by uppercase ticker.  Each value is either a quote dict
+    or ``{"error": "..."}`` if the ticker could not be fetched.
+    """
+    results: dict[str, dict] = {}
+    for symbol in tickers:
+        symbol = symbol.upper().strip()
+        if not symbol:
+            continue
+        try:
+            fi = yf.Ticker(symbol).fast_info
+            price = fi["lastPrice"]
+            prev_close = fi["regularMarketPreviousClose"]
+            change = price - prev_close
+            change_pct = (change / prev_close * 100) if prev_close else 0.0
+            results[symbol] = {
+                "price": round(price, 2),
+                "prev_close": round(prev_close, 2),
+                "change": round(change, 2),
+                "change_pct": round(change_pct, 2),
+                "open": round(fi["open"], 2),
+                "day_high": round(fi["dayHigh"], 2),
+                "day_low": round(fi["dayLow"], 2),
+                "volume": fi["lastVolume"],
+                "market_cap": fi.get("marketCap"),
+                "currency": fi.get("currency", "USD"),
+            }
+        except Exception as e:
+            results[symbol] = {"error": f"Could not fetch {symbol}: {e}"}
+    return results

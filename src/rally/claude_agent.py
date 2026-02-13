@@ -187,6 +187,21 @@ TOOLS = [
             "required": []
         }
     },
+    {
+        "name": "get_price",
+        "description": "Look up current stock prices for one or more tickers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tickers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of stock ticker symbols (e.g. ['HD', 'AAPL'])"
+                }
+            },
+            "required": ["tickers"]
+        }
+    },
 ]
 
 
@@ -618,6 +633,26 @@ def _run_scan(config: str = "baseline") -> dict[str, Any]:
         }
 
 
+def _get_price(tickers: list[str]) -> dict[str, Any]:
+    """Fetch current quotes for one or more tickers."""
+    from .data import fetch_quotes
+
+    if not tickers:
+        return {"error": "No tickers provided"}
+    if len(tickers) > 10:
+        tickers = tickers[:10]
+
+    try:
+        quotes = fetch_quotes(tickers)
+    except Exception as e:
+        return {"error": f"Failed to fetch prices: {e}"}
+
+    if not quotes:
+        return {"error": "No results returned"}
+
+    return {"count": len(quotes), "quotes": quotes}
+
+
 def execute_tool(
     tool_name: str,
     tool_input: dict[str, Any],
@@ -661,6 +696,8 @@ def execute_tool(
             "tickers": tickers,
             "message": "Starting model retraining... This will take 10-30+ minutes. You'll receive progress updates."
         }
+    elif tool_name == "get_price":
+        return _get_price(tool_input.get("tickers", []))
     else:
         return {"error": f"Unknown tool: {tool_name}"}
 
@@ -711,6 +748,7 @@ The user {discord_username} is asking about their trades and market signals.
 Their portfolio capital is {capital_context}.
 
 Available tools let you:
+- Look up current stock prices
 - View market signals and system positions
 - Track the user's personal trades
 - Enter/exit trades on their behalf
