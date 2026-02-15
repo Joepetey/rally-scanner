@@ -10,6 +10,7 @@ Includes a built-in scheduler for scan/retrain so no external cron is needed
 import asyncio
 import logging
 import os
+import zoneinfo
 from datetime import datetime, time
 
 import discord
@@ -315,6 +316,152 @@ def make_bot(token: str) -> RallyBot:
             )
             logger.info(f"Scheduler: retrain complete ({elapsed:.0f}s)")
 
+        # -- Price alert configuration --
+        _alert_interval = int(os.environ.get("PRICE_ALERT_INTERVAL_MINUTES", "15"))
+        _alert_proximity_pct = float(os.environ.get("ALERT_PROXIMITY_PCT", "1.5"))
+        _sent_alerts: set[tuple[str, str, str]] = set()  # (ticker, alert_type, date)
+
+        _ET = zoneinfo.ZoneInfo("America/New_York")
+
+        def _is_market_open() -> bool:
+            """True if Mon-Fri 9:30 AM - 4:00 PM ET."""
+            now = datetime.now(_ET)
+            if now.weekday() >= 5:
+                return False
+            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            return market_open <= now <= market_close
+
+        async def _check_price_alerts() -> None:
+            """Fetch live prices for open positions and alert on breaches."""
+            from .data import fetch_quotes
+            from .notify import _approaching_alert_embed, _price_alert_embed
+            from .positions import load_positions
+
+            if not _is_market_open():
+                return
+
+            state = load_positions()
+            positions = state.get("positions", [])
+            if not positions:
+                return
+
+            today = datetime.now(_ET).strftime("%Y-%m-%d")
+
+            # Clear stale alerts from previous days
+            stale = {k for k in _sent_alerts if k[2] != today}
+            _sent_alerts.difference_update(stale)
+
+            tickers = [p["ticker"] for p in positions]
+            quotes = await asyncio.to_thread(fetch_quotes, tickers)
+
+            breach_alerts: list[dict] = []
+            approach_alerts: list[dict] = []
+
+            for pos in positions:
+                ticker = pos["ticker"]
+                quote = quotes.get(ticker)
+                if not quote or "error" in quote:
+                    continue
+
+                price = quote["price"]
+                entry = pos["entry_price"]
+                stop = pos.get("stop_price", 0)
+                target = pos.get("target_price", 0)
+                trailing = pos.get("trailing_stop", 0)
+                effective_stop = max(stop, trailing)
+                pnl_pct = round((price / entry - 1) * 100, 2) if entry else 0
+
+                # Check stop breach
+                if effective_stop > 0 and price <= effective_stop:
+                    key = (ticker, "stop_breached", today)
+                    if key not in _sent_alerts:
+                        _sent_alerts.add(key)
+                        level_name = "Trailing Stop" if trailing > stop else "Stop"
+                        breach_alerts.append({
+                            "ticker": ticker,
+                            "alert_type": "stop_breached",
+                            "current_price": price,
+                            "level_price": effective_stop,
+                            "level_name": level_name,
+                            "entry_price": entry,
+                            "pnl_pct": pnl_pct,
+                        })
+
+                # Check target breach
+                elif target > 0 and price >= target:
+                    key = (ticker, "target_breached", today)
+                    if key not in _sent_alerts:
+                        _sent_alerts.add(key)
+                        breach_alerts.append({
+                            "ticker": ticker,
+                            "alert_type": "target_breached",
+                            "current_price": price,
+                            "level_price": target,
+                            "level_name": "Target",
+                            "entry_price": entry,
+                            "pnl_pct": pnl_pct,
+                        })
+
+                # Check approaching stop
+                elif _alert_proximity_pct > 0 and effective_stop > 0:
+                    distance = (price / effective_stop - 1) * 100
+                    if 0 < distance <= _alert_proximity_pct:
+                        key = (ticker, "near_stop", today)
+                        if key not in _sent_alerts:
+                            _sent_alerts.add(key)
+                            level_name = "Trailing Stop" if trailing > stop else "Stop"
+                            approach_alerts.append({
+                                "ticker": ticker,
+                                "alert_type": "near_stop",
+                                "current_price": price,
+                                "level_price": effective_stop,
+                                "level_name": level_name,
+                                "distance_pct": round(distance, 1),
+                                "entry_price": entry,
+                                "pnl_pct": pnl_pct,
+                            })
+
+                # Check approaching target
+                elif _alert_proximity_pct > 0 and target > 0:
+                    distance = (target / price - 1) * 100
+                    if 0 < distance <= _alert_proximity_pct:
+                        key = (ticker, "near_target", today)
+                        if key not in _sent_alerts:
+                            _sent_alerts.add(key)
+                            approach_alerts.append({
+                                "ticker": ticker,
+                                "alert_type": "near_target",
+                                "current_price": price,
+                                "level_price": target,
+                                "level_name": "Target",
+                                "distance_pct": round(distance, 1),
+                                "entry_price": entry,
+                                "pnl_pct": pnl_pct,
+                            })
+
+            if breach_alerts:
+                await _send_alert(
+                    discord.Embed.from_dict(_price_alert_embed(breach_alerts))
+                )
+            if approach_alerts:
+                await _send_alert(
+                    discord.Embed.from_dict(_approaching_alert_embed(approach_alerts))
+                )
+
+            n = len(breach_alerts) + len(approach_alerts)
+            if n:
+                logger.info(f"Price alerts: {len(breach_alerts)} breaches, "
+                            f"{len(approach_alerts)} warnings")
+
+        # Price alerts: every N minutes during market hours
+        @tasks.loop(minutes=_alert_interval)
+        async def scheduled_price_alerts() -> None:
+            try:
+                await _check_price_alerts()
+            except Exception:
+                logger.exception("Price alert check failed")
+
         # Daily scan: 4:30 PM ET (21:30 UTC)
         @tasks.loop(time=time(hour=21, minute=30))
         async def scheduled_scan() -> None:
@@ -351,5 +498,11 @@ def make_bot(token: str) -> RallyBot:
             if not scheduled_retrain.is_running():
                 scheduled_retrain.start()
                 logger.info("Scheduler: weekly retrain armed (Sun 23:00 UTC)")
+            if not scheduled_price_alerts.is_running():
+                scheduled_price_alerts.start()
+                logger.info(
+                    f"Scheduler: price alerts armed "
+                    f"(every {_alert_interval}m during market hours)"
+                )
 
     return bot

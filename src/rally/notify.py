@@ -133,6 +133,65 @@ def _retrain_embed(health: dict, elapsed: float) -> dict:
     }
 
 
+def _price_alert_embed(alerts: list[dict]) -> dict:
+    """Build a Discord embed for price breach alerts.
+
+    Each alert dict: {ticker, alert_type, current_price, level_price,
+                      level_name, entry_price, pnl_pct}
+    """
+    fields = []
+    for a in alerts:
+        pnl = a.get("pnl_pct", 0)
+        sign = "+" if pnl >= 0 else ""
+        emoji = "\u26a0\ufe0f" if "stop" in a["alert_type"] else "\u2705"
+        fields.append({
+            "name": f"{emoji} {a['ticker']}",
+            "value": (
+                f"**{a['level_name']} BREACHED**\n"
+                f"Level: ${a['level_price']:.2f}\n"
+                f"Current: ${a['current_price']:.2f}\n"
+                f"Entry: ${a['entry_price']:.2f}\n"
+                f"PnL: {sign}{pnl:.2f}%"
+            ),
+            "inline": True,
+        })
+    any_stop = any("stop" in a["alert_type"] for a in alerts)
+    return {
+        "title": f"Price Alert ({len(alerts)})",
+        "color": 0xFF0000 if any_stop else 0x00FF00,
+        "fields": fields[:25],
+        "footer": {"text": "Intraday alert \u2014 daily scan handles exits"},
+    }
+
+
+def _approaching_alert_embed(alerts: list[dict]) -> dict:
+    """Build a Discord embed for 'approaching level' warnings.
+
+    Each alert dict: {ticker, alert_type, current_price, level_price,
+                      level_name, distance_pct, entry_price, pnl_pct}
+    """
+    fields = []
+    for a in alerts:
+        pnl = a.get("pnl_pct", 0)
+        sign = "+" if pnl >= 0 else ""
+        fields.append({
+            "name": a["ticker"],
+            "value": (
+                f"Approaching **{a['level_name']}**\n"
+                f"Level: ${a['level_price']:.2f} ({a['distance_pct']:.1f}% away)\n"
+                f"Current: ${a['current_price']:.2f}\n"
+                f"PnL: {sign}{pnl:.2f}%"
+            ),
+            "inline": True,
+        })
+    return {
+        "title": f"Price Warning ({len(alerts)})",
+        "color": 0xFF8C00,
+        "fields": fields[:25],
+        "footer": {"text": "Intraday warning \u2014 daily scan handles exits"},
+    }
+
+
 def _error_embed(title: str, details: str) -> dict:
     """Build a Discord embed for error alerts."""
     return {
