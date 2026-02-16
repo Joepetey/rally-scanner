@@ -334,7 +334,7 @@ def make_bot(token: str) -> RallyBot:
             )
 
         def _store_order_ids(results: list) -> None:
-            """Save Alpaca order IDs to positions.json for fill tracking."""
+            """Save Alpaca order IDs + trailing stop IDs to positions.json."""
             from .positions import load_positions, save_positions
             state = load_positions()
             for result in results:
@@ -342,6 +342,8 @@ def make_bot(token: str) -> RallyBot:
                     for pos in state["positions"]:
                         if pos["ticker"] == result.ticker:
                             pos["order_id"] = result.order_id
+                            if result.trail_order_id:
+                                pos["trail_order_id"] = result.trail_order_id
                             break
             save_positions(state)
 
@@ -463,7 +465,10 @@ def make_bot(token: str) -> RallyBot:
                             try:
                                 from .alpaca_executor import execute_exit
                                 from .positions import close_position_intraday
-                                result = await execute_exit(ticker)
+                                trail_oid = pos.get("trail_order_id")
+                                result = await execute_exit(
+                                    ticker, trail_order_id=trail_oid,
+                                )
                                 fill = result.fill_price or price
                                 close_position_intraday(ticker, fill, "stop")
                                 alert["order_result"] = result.model_dump()
@@ -490,7 +495,10 @@ def make_bot(token: str) -> RallyBot:
                             try:
                                 from .alpaca_executor import execute_exit
                                 from .positions import close_position_intraday
-                                result = await execute_exit(ticker)
+                                trail_oid = pos.get("trail_order_id")
+                                result = await execute_exit(
+                                    ticker, trail_order_id=trail_oid,
+                                )
                                 fill = result.fill_price or price
                                 close_position_intraday(ticker, fill, "profit_target")
                                 alert["order_result"] = result.model_dump()

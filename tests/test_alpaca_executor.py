@@ -1,24 +1,26 @@
 """Tests for Alpaca MCP executor and order embeds."""
 
 import json
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from rally.alpaca_executor import (
     OrderResult,
+    cancel_order,
     check_pending_fills,
+    check_trail_stop_fills,
     execute_entries,
     execute_exit,
     execute_exits,
-    get_account_equity,
-    get_snapshots,
     is_enabled,
 )
 from rally.notify import _order_embed, _order_failure_embed
-from rally.positions import close_position_intraday, update_fill_prices
-
+from rally.positions import (
+    close_position_intraday,
+    get_trail_order_ids,
+    update_fill_prices,
+)
 
 # ---------------------------------------------------------------------------
 # is_enabled()
@@ -62,6 +64,15 @@ def test_order_result_failure():
     assert r.success is False
     assert r.order_id is None
     assert r.fill_price is None
+    assert r.trail_order_id is None
+
+
+def test_order_result_with_trail():
+    r = OrderResult(
+        ticker="AAPL", side="buy", qty=10, success=True,
+        order_id="abc123", trail_order_id="trail-456",
+    )
+    assert r.trail_order_id == "trail-456"
 
 
 # ---------------------------------------------------------------------------
@@ -219,21 +230,27 @@ async def test_execute_entries_skips_crypto():
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_qty_calculation():
-    """Verify qty = int(equity * size / price)."""
+async def test_execute_entries_qty_and_trailing_stop():
+    """Verify qty calculation and trailing stop placement."""
     signals = [
-        {"ticker": "AAPL", "entry_price": 150.0, "size": 0.10},
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    mock_session = AsyncMock()
-    # Mock _call_tool to return order data
-    order_response = MagicMock()
-    order_response.content = [MagicMock(text=json.dumps({
+    # Two call_tool calls: market buy, then trailing stop
+    entry_resp = MagicMock()
+    entry_resp.content = [MagicMock(text=json.dumps({
         "id": "order-abc",
         "status": "accepted",
         "filled_avg_price": None,
     }))]
-    mock_session.call_tool.return_value = order_response
+    trail_resp = MagicMock()
+    trail_resp.content = [MagicMock(text=json.dumps({
+        "id": "trail-xyz",
+        "status": "accepted",
+    }))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.side_effect = [entry_resp, trail_resp]
 
     with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
@@ -249,6 +266,43 @@ async def test_execute_entries_qty_calculation():
     assert r.qty == 66
     assert r.success is True
     assert r.order_id == "order-abc"
+    assert r.trail_order_id == "trail-xyz"
+
+    # Entry buy + trailing stop sell = 2 MCP calls
+    assert mock_session.call_tool.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_entries_trail_percent_calculation():
+    """Trail percent should be 1.5 * atr_pct * 100, minimum 1%."""
+    signals = [
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.005},
+    ]
+
+    mock_session = AsyncMock()
+    entry_resp = MagicMock()
+    entry_resp.content = [MagicMock(text=json.dumps({"id": "e1"}))]
+    trail_resp = MagicMock()
+    trail_resp.content = [MagicMock(text=json.dumps({"id": "t1"}))]
+    mock_session.call_tool.side_effect = [entry_resp, trail_resp]
+
+    with (
+        patch("rally.alpaca_executor._mcp_session") as mock_ctx,
+        patch("rally.alpaca_executor._call_tool") as mock_call,
+    ):
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_call.side_effect = [
+            {"id": "e1", "filled_avg_price": "150.0"},
+            {"id": "t1"},
+        ]
+
+        results = await execute_entries(signals, equity=100_000.0)
+
+    assert results[0].success is True
+    # atr_pct=0.005 -> 1.5 * 0.5 = 0.75% < 1% minimum -> trail_percent = 1.0
+    trail_call_args = mock_call.call_args_list[1][0][2]  # (session, name, args)
+    assert trail_call_args["trail_percent"] == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -315,3 +369,153 @@ async def test_check_pending_fills():
 async def test_check_pending_fills_empty():
     fills = await check_pending_fills([])
     assert fills == {}
+
+
+# ---------------------------------------------------------------------------
+# cancel_order (mocked MCP)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_order_success():
+    mock_session = AsyncMock()
+    cancel_resp = MagicMock()
+    cancel_resp.content = [MagicMock(text=json.dumps({"status": "cancelled"}))]
+    mock_session.call_tool.return_value = cancel_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await cancel_order("trail-123")
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_order_failure():
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(
+            side_effect=Exception("connection failed"),
+        )
+        result = await cancel_order("trail-123")
+
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# execute_exit with trailing stop cancellation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_cancels_trailing_stop():
+    """When trail_order_id is given, it should be cancelled before closing."""
+    cancel_resp = MagicMock()
+    cancel_resp.content = [MagicMock(text=json.dumps({"status": "cancelled"}))]
+    close_resp = MagicMock()
+    close_resp.content = [MagicMock(text=json.dumps({
+        "id": "order-exit-1", "qty": "10", "filled_avg_price": "148.50",
+    }))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.side_effect = [cancel_resp, close_resp]
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await execute_exit("AAPL", trail_order_id="trail-999")
+
+    assert result.success is True
+    assert result.fill_price == 148.50
+    # Both cancel + close called
+    assert mock_session.call_tool.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# execute_exits passes trail_order_id from position
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_exits_passes_trail_order_id():
+    """Closed positions with trail_order_id should pass it to execute_exit."""
+    closed = [
+        {"ticker": "AAPL", "trail_order_id": "trail-111"},
+    ]
+
+    with patch("rally.alpaca_executor.execute_exit", new_callable=AsyncMock) as mock_exit:
+        mock_exit.return_value = OrderResult(
+            ticker="AAPL", side="sell", qty=10, success=True,
+        )
+        results = await execute_exits(closed)
+
+    mock_exit.assert_called_once_with("AAPL", trail_order_id="trail-111")
+    assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# check_trail_stop_fills
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_trail_stop_fills():
+    orders_response = MagicMock()
+    orders_response.content = [MagicMock(text=json.dumps([
+        {"id": "trail-1", "filled_avg_price": "145.00", "status": "filled"},
+        {"id": "trail-other", "filled_avg_price": "99.00", "status": "filled"},
+    ]))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = orders_response
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        fills = await check_trail_stop_fills({"AAPL": "trail-1"})
+
+    assert fills == {"AAPL": 145.00}
+
+
+@pytest.mark.asyncio
+async def test_check_trail_stop_fills_empty():
+    fills = await check_trail_stop_fills({})
+    assert fills == {}
+
+
+# ---------------------------------------------------------------------------
+# get_trail_order_ids (positions helper)
+# ---------------------------------------------------------------------------
+
+
+def test_get_trail_order_ids(tmp_path, monkeypatch):
+    positions_file = tmp_path / "models" / "positions.json"
+    positions_file.parent.mkdir(parents=True)
+    state = {
+        "positions": [
+            {"ticker": "AAPL", "trail_order_id": "trail-1", "status": "open"},
+            {"ticker": "MSFT", "status": "open"},  # no trail order
+            {"ticker": "NVDA", "trail_order_id": "trail-3", "status": "open"},
+        ],
+        "closed_today": [],
+        "last_updated": None,
+    }
+    positions_file.write_text(json.dumps(state))
+    monkeypatch.setattr("rally.positions.POSITIONS_FILE", positions_file)
+
+    result = get_trail_order_ids()
+    assert result == {"AAPL": "trail-1", "NVDA": "trail-3"}
+
+
+def test_get_trail_order_ids_empty(tmp_path, monkeypatch):
+    positions_file = tmp_path / "models" / "positions.json"
+    positions_file.parent.mkdir(parents=True)
+    state = {"positions": [], "closed_today": [], "last_updated": None}
+    positions_file.write_text(json.dumps(state))
+    monkeypatch.setattr("rally.positions.POSITIONS_FILE", positions_file)
+
+    result = get_trail_order_ids()
+    assert result == {}

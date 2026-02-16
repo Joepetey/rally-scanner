@@ -2,8 +2,8 @@
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 # third-party
 from pydantic import BaseModel
@@ -21,6 +21,7 @@ class OrderResult(BaseModel):
     success: bool
     order_id: str | None = None
     fill_price: float | None = None
+    trail_order_id: str | None = None
     error: str | None = None
 
 
@@ -113,7 +114,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
                 continue
 
-            price = sig["entry_price"]
+            price = sig.get("entry_price") or sig["close"]
             size = sig["size"]
             qty = int(equity * size / price)
             if qty < 1:
@@ -124,20 +125,49 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                 continue
 
             try:
+                # Place market buy entry
                 data = await _call_tool(session, "place_stock_order", {
                     "symbol": ticker,
                     "side": "buy",
                     "quantity": qty,
-                    "order_type": "market",
+                    "type": "market",
                     "time_in_force": "day",
                 })
                 fill_price = None
                 if data.get("filled_avg_price"):
                     fill_price = float(data["filled_avg_price"])
+
+                # Place trailing stop sell for downside protection
+                trail_order_id = None
+                atr_pct = sig.get("atr_pct", 0.02)
+                trail_pct = round(1.5 * atr_pct * 100, 2)  # 1.5*ATR as %
+                trail_pct = max(trail_pct, 1.0)  # minimum 1% trail
+                try:
+                    trail_data = await _call_tool(
+                        session, "place_stock_order", {
+                            "symbol": ticker,
+                            "side": "sell",
+                            "quantity": qty,
+                            "type": "trailing_stop",
+                            "trail_percent": trail_pct,
+                            "time_in_force": "gtc",
+                        },
+                    )
+                    trail_order_id = trail_data.get("id")
+                    logger.info(
+                        "Trailing stop placed for %s: %.1f%% trail, order %s",
+                        ticker, trail_pct, trail_order_id,
+                    )
+                except Exception as te:
+                    logger.warning(
+                        "Failed to place trailing stop for %s: %s", ticker, te,
+                    )
+
                 results.append(OrderResult(
                     ticker=ticker, side="buy", qty=qty, success=True,
                     order_id=data.get("id"),
                     fill_price=fill_price,
+                    trail_order_id=trail_order_id,
                 ))
             except Exception as e:
                 results.append(OrderResult(
@@ -148,8 +178,33 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
     return results
 
 
-async def execute_exit(ticker: str) -> OrderResult:
+async def cancel_order(order_id: str) -> bool:
+    """Cancel an open order by ID. Returns True if cancelled successfully."""
+    try:
+        async with _mcp_session() as session:
+            await _call_tool(session, "cancel_order_by_id", {"order_id": order_id})
+            logger.info("Cancelled order %s", order_id)
+            return True
+    except Exception as e:
+        logger.warning("Failed to cancel order %s: %s", order_id, e)
+        return False
+
+
+async def execute_exit(ticker: str, trail_order_id: str | None = None) -> OrderResult:
     async with _mcp_session() as session:
+        # Cancel the associated trailing stop before closing
+        if trail_order_id:
+            try:
+                await _call_tool(
+                    session, "cancel_order_by_id", {"order_id": trail_order_id},
+                )
+                logger.info("Cancelled trailing stop %s for %s", trail_order_id, ticker)
+            except Exception as e:
+                logger.warning(
+                    "Could not cancel trailing stop %s for %s: %s",
+                    trail_order_id, ticker, e,
+                )
+
         data = await _call_tool(session, "close_position", {"symbol": ticker})
 
         # Try to get fill price from the close response
@@ -180,8 +235,9 @@ async def execute_exits(closed: list[dict]) -> list[OrderResult]:
         ticker = pos["ticker"]
         if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
             continue
+        trail_oid = pos.get("trail_order_id")
         try:
-            result = await execute_exit(ticker)
+            result = await execute_exit(ticker, trail_order_id=trail_oid)
             results.append(result)
         except Exception as e:
             results.append(OrderResult(
@@ -206,4 +262,32 @@ async def check_pending_fills(order_ids: list[str]) -> dict[str, float]:
             oid = order.get("id")
             if oid in id_set and order.get("filled_avg_price"):
                 fills[oid] = float(order["filled_avg_price"])
+    return fills
+
+
+async def check_trail_stop_fills(
+    trail_order_ids: dict[str, str],
+) -> dict[str, float]:
+    """Check if any trailing stop orders have filled.
+
+    Args:
+        trail_order_ids: {ticker: trail_order_id} mapping
+
+    Returns:
+        {ticker: fill_price} for filled trailing stops
+    """
+    if not trail_order_ids:
+        return {}
+
+    async with _mcp_session() as session:
+        data = await _call_tool(session, "get_orders", {"status": "filled"})
+
+    # Invert: order_id -> ticker
+    oid_to_ticker = {oid: t for t, oid in trail_order_ids.items()}
+    fills: dict[str, float] = {}
+    if isinstance(data, list):
+        for order in data:
+            oid = order.get("id")
+            if oid in oid_to_ticker and order.get("filled_avg_price"):
+                fills[oid_to_ticker[oid]] = float(order["filled_avg_price"])
     return fills

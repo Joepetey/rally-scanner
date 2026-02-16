@@ -162,6 +162,21 @@ def update_fill_prices(fills: dict[str, float]) -> int:
     return updated
 
 
+def get_trail_order_ids() -> dict[str, str]:
+    """Return {ticker: trail_order_id} for all open positions with trailing stops."""
+    state = load_positions()
+    return {
+        pos["ticker"]: pos["trail_order_id"]
+        for pos in state.get("positions", [])
+        if pos.get("trail_order_id")
+    }
+
+
+def close_position_by_trail_fill(ticker: str, fill_price: float) -> dict | None:
+    """Close a position whose trailing stop filled at the broker."""
+    return close_position_intraday(ticker, fill_price, "trail_stop_filled")
+
+
 def print_positions(state: dict) -> None:
     """Print current positions and today's closes."""
     positions = state.get("positions", [])
