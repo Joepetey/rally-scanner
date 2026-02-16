@@ -15,9 +15,19 @@ if [ -z "$DISCORD_BOT_TOKEN" ]; then
 fi
 echo "✓ DISCORD_BOT_TOKEN is set"
 
+if [ "$ALPACA_AUTO_EXECUTE" = "1" ]; then
+    if [ -z "$ALPACA_API_KEY" ] || [ -z "$ALPACA_SECRET_KEY" ]; then
+        echo "WARNING: ALPACA_AUTO_EXECUTE=1 but API keys not set"
+    else
+        echo "✓ Alpaca auto-execution enabled (paper=${ALPACA_PAPER_TRADE:-true})"
+    fi
+else
+    echo "· Alpaca auto-execution disabled"
+fi
+
 echo ""
 echo "=== Installing Package Dependencies ==="
-pip install --no-cache-dir -e ".[discord]"
+pip install --no-cache-dir -e ".[discord,alpaca]"
 
 echo ""
 echo "=== Setting Up Directories ==="

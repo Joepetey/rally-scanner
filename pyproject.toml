@@ -28,6 +28,10 @@ dev = [
 discord = [
     "discord.py>=2.3",
 ]
+alpaca = [
+    "mcp>=1.0",
+    "alpaca-mcp-server>=0.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

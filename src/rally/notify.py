@@ -192,6 +192,45 @@ def _approaching_alert_embed(alerts: list[dict]) -> dict:
     }
 
 
+def _order_embed(results: list, equity: float) -> dict:
+    """Build a Discord embed for successful Alpaca order executions."""
+    fields = []
+    for r in results:
+        parts = [f"Side: **{r.side.upper()}**", f"Qty: {r.qty}"]
+        if r.fill_price:
+            parts.append(f"Fill: ${r.fill_price:.2f}")
+        if r.order_id:
+            parts.append(f"Order: `{r.order_id[:8]}`")
+        fields.append({
+            "name": r.ticker,
+            "value": "\n".join(parts),
+            "inline": True,
+        })
+    return {
+        "title": f"Alpaca Orders ({len(results)})",
+        "color": 0x87CEEB,
+        "fields": fields[:25],
+        "footer": {"text": f"Account equity: ${equity:,.0f}"},
+    }
+
+
+def _order_failure_embed(results: list) -> dict:
+    """Build a Discord embed for failed Alpaca order executions."""
+    fields = []
+    for r in results:
+        fields.append({
+            "name": r.ticker,
+            "value": f"Side: {r.side.upper()}\nError: {r.error}",
+            "inline": True,
+        })
+    return {
+        "title": f"Alpaca Order Failures ({len(results)})",
+        "color": 0xFF4500,
+        "fields": fields[:25],
+        "footer": {"text": "System positions unaffected"},
+    }
+
+
 def _error_embed(title: str, details: str) -> dict:
     """Build a Discord embed for error alerts."""
     return {

@@ -286,10 +286,64 @@ def make_bot(token: str) -> RallyBot:
                 record_closed_trades(closed)
 
             update_daily_snapshot(positions, results)
+
+            # Auto-execute on Alpaca if enabled
+            from .alpaca_executor import is_enabled as alpaca_enabled
+            if alpaca_enabled():
+                from .alpaca_executor import (
+                    execute_entries,
+                    execute_exits,
+                    get_account_equity,
+                )
+                from .notify import _order_embed, _order_failure_embed
+
+                # External system boundary — broker outage must not break scan
+                try:
+                    equity = await get_account_equity()
+                    if signals:
+                        entry_results = await execute_entries(signals, equity=equity)
+                        _store_order_ids(entry_results)
+                        ok = [r for r in entry_results if r.success]
+                        fail = [r for r in entry_results if not r.success]
+                        if ok:
+                            await _send_alert(
+                                discord.Embed.from_dict(_order_embed(ok, equity))
+                            )
+                        if fail:
+                            await _send_alert(
+                                discord.Embed.from_dict(_order_failure_embed(fail))
+                            )
+                    if closed:
+                        exit_results = await execute_exits(closed)
+                        ok = [r for r in exit_results if r.success]
+                        fail = [r for r in exit_results if not r.success]
+                        if ok:
+                            await _send_alert(
+                                discord.Embed.from_dict(_order_embed(ok, equity))
+                            )
+                        if fail:
+                            await _send_alert(
+                                discord.Embed.from_dict(_order_failure_embed(fail))
+                            )
+                except Exception:
+                    logger.exception("Alpaca execution failed")
+
             logger.info(
                 f"Scheduler: scan complete — {len(signals)} signals, "
                 f"{len(closed)} exits"
             )
+
+        def _store_order_ids(results: list) -> None:
+            """Save Alpaca order IDs to positions.json for fill tracking."""
+            from .positions import load_positions, save_positions
+            state = load_positions()
+            for result in results:
+                if result.success and result.order_id:
+                    for pos in state["positions"]:
+                        if pos["ticker"] == result.ticker:
+                            pos["order_id"] = result.order_id
+                            break
+            save_positions(state)
 
         async def _run_retrain() -> None:
             """Run retrain in a thread, then post results."""
@@ -334,6 +388,7 @@ def make_bot(token: str) -> RallyBot:
 
         async def _check_price_alerts() -> None:
             """Fetch live prices for open positions and alert on breaches."""
+            from .alpaca_executor import is_enabled as alpaca_enabled
             from .data import fetch_quotes
             from .notify import _approaching_alert_embed, _price_alert_embed
             from .positions import load_positions
@@ -353,7 +408,23 @@ def make_bot(token: str) -> RallyBot:
             _sent_alerts.difference_update(stale)
 
             tickers = [p["ticker"] for p in positions]
-            quotes = await asyncio.to_thread(fetch_quotes, tickers)
+
+            if alpaca_enabled():
+                from .alpaca_executor import check_pending_fills, get_snapshots
+                from .positions import update_fill_prices
+
+                quotes = await get_snapshots(tickers)
+
+                # Update entry prices for orders that filled since last check
+                pending_ids = [p.get("order_id") for p in positions if p.get("order_id")]
+                if pending_ids:
+                    fills = await check_pending_fills(pending_ids)
+                    if fills:
+                        n_filled = update_fill_prices(fills)
+                        if n_filled:
+                            logger.info(f"Updated {n_filled} fill prices from Alpaca")
+            else:
+                quotes = await asyncio.to_thread(fetch_quotes, tickers)
 
             breach_alerts: list[dict] = []
             approach_alerts: list[dict] = []
@@ -378,7 +449,7 @@ def make_bot(token: str) -> RallyBot:
                     if key not in _sent_alerts:
                         _sent_alerts.add(key)
                         level_name = "Trailing Stop" if trailing > stop else "Stop"
-                        breach_alerts.append({
+                        alert = {
                             "ticker": ticker,
                             "alert_type": "stop_breached",
                             "current_price": price,
@@ -386,14 +457,26 @@ def make_bot(token: str) -> RallyBot:
                             "level_name": level_name,
                             "entry_price": entry,
                             "pnl_pct": pnl_pct,
-                        })
+                        }
+                        # Execute exit immediately on Alpaca
+                        if alpaca_enabled():
+                            try:
+                                from .alpaca_executor import execute_exit
+                                from .positions import close_position_intraday
+                                result = await execute_exit(ticker)
+                                fill = result.fill_price or price
+                                close_position_intraday(ticker, fill, "stop")
+                                alert["order_result"] = result.model_dump()
+                            except Exception:
+                                logger.exception(f"Alpaca exit failed for {ticker}")
+                        breach_alerts.append(alert)
 
                 # Check target breach
                 elif target > 0 and price >= target:
                     key = (ticker, "target_breached", today)
                     if key not in _sent_alerts:
                         _sent_alerts.add(key)
-                        breach_alerts.append({
+                        alert = {
                             "ticker": ticker,
                             "alert_type": "target_breached",
                             "current_price": price,
@@ -401,7 +484,19 @@ def make_bot(token: str) -> RallyBot:
                             "level_name": "Target",
                             "entry_price": entry,
                             "pnl_pct": pnl_pct,
-                        })
+                        }
+                        # Execute exit immediately on Alpaca
+                        if alpaca_enabled():
+                            try:
+                                from .alpaca_executor import execute_exit
+                                from .positions import close_position_intraday
+                                result = await execute_exit(ticker)
+                                fill = result.fill_price or price
+                                close_position_intraday(ticker, fill, "profit_target")
+                                alert["order_result"] = result.model_dump()
+                            except Exception:
+                                logger.exception(f"Alpaca exit failed for {ticker}")
+                        breach_alerts.append(alert)
 
                 # Check approaching stop
                 elif _alert_proximity_pct > 0 and effective_stop > 0:

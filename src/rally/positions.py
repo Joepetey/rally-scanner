@@ -118,6 +118,50 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
     return state
 
 
+def close_position_intraday(ticker: str, price: float, reason: str) -> dict | None:
+    """Close a single position during market hours. Returns closed position or None."""
+    state = load_positions()
+    positions = state["positions"]
+
+    target_idx = None
+    for i, pos in enumerate(positions):
+        if pos["ticker"] == ticker:
+            target_idx = i
+            break
+
+    if target_idx is None:
+        return None
+
+    pos = positions.pop(target_idx)
+    pos["exit_reason"] = reason
+    pos["exit_price"] = price
+    pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
+    pos["realized_pnl_pct"] = round((price / pos["entry_price"] - 1) * 100, 2)
+    pos["status"] = "closed"
+
+    state["closed_today"].append(pos)
+    save_positions(state)
+    return pos
+
+
+def update_fill_prices(fills: dict[str, float]) -> int:
+    """Update positions that have pending order_ids with actual fill prices."""
+    state = load_positions()
+    updated = 0
+    for pos in state["positions"]:
+        oid = pos.get("order_id")
+        if oid and oid in fills:
+            pos["entry_price"] = fills[oid]
+            pos["unrealized_pnl_pct"] = round(
+                (pos["current_price"] / fills[oid] - 1) * 100, 2
+            )
+            del pos["order_id"]
+            updated += 1
+    if updated:
+        save_positions(state)
+    return updated
+
+
 def print_positions(state: dict) -> None:
     """Print current positions and today's closes."""
     positions = state.get("positions", [])
