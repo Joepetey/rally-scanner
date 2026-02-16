@@ -14,25 +14,15 @@ import zoneinfo
 from datetime import datetime, time
 
 import discord
-from discord import app_commands
 from discord.ext import commands, tasks
 
 from .claude_agent import process_message
 from .discord_db import (
-    clear_conversation_history,
-    close_trade,
     ensure_user,
-    get_capital,
     get_conversation_history,
-    get_open_trades,
-    get_pnl_summary,
-    get_trade_history,
-    open_trade,
     save_conversation_history,
-    set_capital,
 )
 from .persistence import load_manifest
-from .portfolio import load_equity_history, load_trade_journal
 from .positions import load_positions
 
 logger = logging.getLogger(__name__)
@@ -62,7 +52,6 @@ def _get_system_recommendation(ticker: str) -> dict | None:
     falls back to the latest scan results cached in positions.json.
     Returns dict with size, stop_price, target_price, entry_price or None.
     """
-    from .positions import load_positions
 
     state = load_positions()
 
@@ -112,12 +101,15 @@ def make_bot(token: str) -> RallyBot:
     ) -> None:
         """Run model retraining with progress updates."""
         import time
+
         from .retrain import retrain_all
-        from .persistence import load_manifest
 
         try:
             # Send initial message
-            await channel.send("🔄 **Starting model retraining...**\nThis will take 10-30+ minutes depending on the number of tickers.")
+            await channel.send(
+                "🔄 **Starting model retraining...**\n"
+                "This will take 10-30+ minutes depending on the number of tickers."
+            )
 
             # Run retrain in thread and time it
             start_time = time.time()
@@ -261,6 +253,16 @@ def make_bot(token: str) -> RallyBot:
             if channel:
                 await channel.send(embed=embed)
 
+        async def _send_error_alert(task_name: str, error: Exception) -> None:
+            """Send an error embed to the alerts channel."""
+            import traceback
+
+            from .notify import _error_embed
+            tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            details = f"```\n{tb[-3500:]}\n```"
+            embed = discord.Embed.from_dict(_error_embed(f"{task_name} Failed", details))
+            await _send_alert(embed)
+
         async def _run_scan() -> None:
             """Run the scan pipeline in a thread, then post results."""
             from .notify import _exit_embed, _signal_embed
@@ -302,7 +304,7 @@ def make_bot(token: str) -> RallyBot:
                     equity = await get_account_equity()
                     if signals:
                         entry_results = await execute_entries(signals, equity=equity)
-                        _store_order_ids(entry_results)
+                        await _store_order_ids(entry_results)
                         ok = [r for r in entry_results if r.success]
                         fail = [r for r in entry_results if not r.success]
                         if ok:
@@ -325,17 +327,18 @@ def make_bot(token: str) -> RallyBot:
                             await _send_alert(
                                 discord.Embed.from_dict(_order_failure_embed(fail))
                             )
-                except Exception:
+                except Exception as e:
                     logger.exception("Alpaca execution failed")
+                    await _send_error_alert("Alpaca Execution", e)
 
             logger.info(
                 f"Scheduler: scan complete — {len(signals)} signals, "
                 f"{len(closed)} exits"
             )
 
-        def _store_order_ids(results: list) -> None:
+        async def _store_order_ids(results: list) -> None:
             """Save Alpaca order IDs + trailing stop IDs to positions.json."""
-            from .positions import load_positions, save_positions
+            from .positions import async_save_positions, load_positions
             state = load_positions()
             for result in results:
                 if result.success and result.order_id:
@@ -345,7 +348,7 @@ def make_bot(token: str) -> RallyBot:
                             if result.trail_order_id:
                                 pos["trail_order_id"] = result.trail_order_id
                             break
-            save_positions(state)
+            await async_save_positions(state)
 
         async def _run_retrain() -> None:
             """Run retrain in a thread, then post results."""
@@ -412,8 +415,18 @@ def make_bot(token: str) -> RallyBot:
             tickers = [p["ticker"] for p in positions]
 
             if alpaca_enabled():
-                from .alpaca_executor import check_pending_fills, get_snapshots
-                from .positions import update_fill_prices
+                from .alpaca_executor import (
+                    check_pending_fills,
+                    get_snapshots,
+                    place_trailing_stop,
+                )
+                from .positions import (
+                    async_save_positions,
+                    update_fill_prices,
+                )
+                from .positions import (
+                    load_positions as reload_positions,
+                )
 
                 quotes = await get_snapshots(tickers)
 
@@ -425,6 +438,29 @@ def make_bot(token: str) -> RallyBot:
                         n_filled = update_fill_prices(fills)
                         if n_filled:
                             logger.info(f"Updated {n_filled} fill prices from Alpaca")
+
+                # Place deferred trailing stops for filled entries without one
+                fresh_state = reload_positions()
+                for pos in fresh_state.get("positions", []):
+                    if (not pos.get("order_id")        # fill confirmed (order_id removed)
+                            and not pos.get("trail_order_id")  # no trailing stop yet
+                            and pos.get("entry_price")):
+                        atr_pct = pos.get("atr", 0) / pos["entry_price"] if pos.get("atr") else 0.02
+                        trail_pct = round(max(1.5 * atr_pct * 100, 1.0), 2)
+                        qty = int(pos.get("qty", 0)) if pos.get("qty") else None
+                        if not qty:
+                            # Estimate qty from size and entry price
+                            continue
+                        trail_id = await place_trailing_stop(
+                            pos["ticker"], qty, trail_pct,
+                        )
+                        if trail_id:
+                            pos["trail_order_id"] = trail_id
+                            logger.info(
+                                "Deferred trailing stop placed for %s: %s",
+                                pos["ticker"], trail_id,
+                            )
+                await async_save_positions(fresh_state)
             else:
                 quotes = await asyncio.to_thread(fetch_quotes, tickers)
 
@@ -464,13 +500,13 @@ def make_bot(token: str) -> RallyBot:
                         if alpaca_enabled():
                             try:
                                 from .alpaca_executor import execute_exit
-                                from .positions import close_position_intraday
+                                from .positions import async_close_position
                                 trail_oid = pos.get("trail_order_id")
                                 result = await execute_exit(
                                     ticker, trail_order_id=trail_oid,
                                 )
                                 fill = result.fill_price or price
-                                close_position_intraday(ticker, fill, "stop")
+                                await async_close_position(ticker, fill, "stop")
                                 alert["order_result"] = result.model_dump()
                             except Exception:
                                 logger.exception(f"Alpaca exit failed for {ticker}")
@@ -494,13 +530,13 @@ def make_bot(token: str) -> RallyBot:
                         if alpaca_enabled():
                             try:
                                 from .alpaca_executor import execute_exit
-                                from .positions import close_position_intraday
+                                from .positions import async_close_position
                                 trail_oid = pos.get("trail_order_id")
                                 result = await execute_exit(
                                     ticker, trail_order_id=trail_oid,
                                 )
                                 fill = result.fill_price or price
-                                close_position_intraday(ticker, fill, "profit_target")
+                                await async_close_position(ticker, fill, "profit_target")
                                 alert["order_result"] = result.model_dump()
                             except Exception:
                                 logger.exception(f"Alpaca exit failed for {ticker}")
@@ -557,13 +593,44 @@ def make_bot(token: str) -> RallyBot:
                 logger.info(f"Price alerts: {len(breach_alerts)} breaches, "
                             f"{len(approach_alerts)} warnings")
 
+        async def _reconcile() -> None:
+            """Reconcile local positions with broker state."""
+            from .alpaca_executor import (
+                check_trail_stop_fills,
+                get_all_positions,
+            )
+            from .alpaca_executor import (
+                is_enabled as alpaca_enabled,
+            )
+            from .notify import _error_embed
+            from .positions import get_trail_order_ids, reconcile_with_broker
+
+            if not alpaca_enabled() or not _is_market_open():
+                return
+
+            broker_positions = await get_all_positions()
+            trail_ids = get_trail_order_ids()
+            trail_fills = await check_trail_stop_fills(trail_ids) if trail_ids else {}
+
+            warnings = reconcile_with_broker(broker_positions, trail_fills)
+            if warnings:
+                details = "\n".join(f"- {w}" for w in warnings)
+                embed = discord.Embed.from_dict(
+                    _error_embed("Position Reconciliation", details)
+                )
+                # Use orange for warnings, not red
+                embed.color = 0xFF8C00
+                await _send_alert(embed)
+                logger.info(f"Reconciliation: {len(warnings)} issues found")
+
         # Price alerts: every N minutes during market hours
         @tasks.loop(minutes=_alert_interval)
         async def scheduled_price_alerts() -> None:
             try:
                 await _check_price_alerts()
-            except Exception:
+            except Exception as e:
                 logger.exception("Price alert check failed")
+                await _send_error_alert("Price Alerts", e)
 
         # Daily scan: 4:30 PM ET (21:30 UTC)
         @tasks.loop(time=time(hour=21, minute=30))
@@ -573,8 +640,18 @@ def make_bot(token: str) -> RallyBot:
                 return
             try:
                 await _run_scan()
-            except Exception:
+            except Exception as e:
                 logger.exception("Scheduled scan failed")
+                await _send_error_alert("Daily Scan", e)
+
+        # Reconciliation: every 30 minutes during market hours
+        @tasks.loop(minutes=30)
+        async def scheduled_reconcile() -> None:
+            try:
+                await _reconcile()
+            except Exception as e:
+                logger.exception("Reconciliation failed")
+                await _send_error_alert("Reconciliation", e)
 
         # Weekly retrain: Sunday 6 PM ET (23:00 UTC)
         @tasks.loop(time=time(hour=23, minute=0))
@@ -583,8 +660,9 @@ def make_bot(token: str) -> RallyBot:
                 return
             try:
                 await _run_retrain()
-            except Exception:
+            except Exception as e:
                 logger.exception("Scheduled retrain failed")
+                await _send_error_alert("Weekly Retrain", e)
 
         @bot.event
         async def on_ready() -> None:
@@ -607,5 +685,8 @@ def make_bot(token: str) -> RallyBot:
                     f"Scheduler: price alerts armed "
                     f"(every {_alert_interval}m during market hours)"
                 )
+            if not scheduled_reconcile.is_running():
+                scheduled_reconcile.start()
+                logger.info("Scheduler: reconciliation armed (every 30m during market hours)")
 
     return bot

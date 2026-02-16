@@ -76,6 +76,30 @@ class Params:
     time_stop_bars: int = 10
     rv_exit_pct: float = 0.80          # RV percentile for exhaustion exit
 
+    # --- Portfolio-level risk ---
+    max_portfolio_exposure: float = 1.0  # max total exposure (1.0 = 100% of equity)
+    max_drawdown_pct: float = 0.15       # circuit breaker threshold
+    circuit_breaker_enabled: bool = True
+    max_group_positions: int = 3         # max positions per asset group
+    max_group_exposure: float = 0.50     # max exposure per asset group
+
+
+# Asset groups for concentration limits
+ASSET_GROUPS: dict[str, list[str]] = {
+    "mega_tech": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOG", "META"],
+    "growth": ["TSLA", "AMD", "NFLX"],
+    "index": ["SPY", "QQQ"],
+    "finance": ["JPM"],
+    "crypto": ["BTC", "ETH"],
+}
+
+# Reverse lookup: ticker -> group
+TICKER_TO_GROUP: dict[str, str] = {
+    ticker: group
+    for group, tickers in ASSET_GROUPS.items()
+    for ticker in tickers
+}
+
 
 PARAMS = Params()
 

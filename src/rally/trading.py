@@ -65,6 +65,8 @@ def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
     size = 0.0
     bars_held = 0
     highest_close = 0.0
+    current_exposure = 0.0
+    max_exposure = p.max_portfolio_exposure
 
     for i in range(n):
         if in_trade:
@@ -128,6 +130,7 @@ def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
                     "p_rally": preds["P_RALLY"].iloc[entry_idx],
                     "trend": preds["Trend"].iloc[entry_idx],
                 })
+                current_exposure -= size
                 in_trade = False
 
         if not in_trade and signal.iloc[i]:
@@ -137,10 +140,11 @@ def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
             if np.isnan(stop_price) or stop_price >= entry_price:
                 stop_price = entry_price * 0.97  # fallback: 3% stop
             size = compute_position_size(preds.iloc[[i]]).iloc[0]
-            if size > 0:
+            if size > 0 and current_exposure + size <= max_exposure:
                 in_trade = True
                 bars_held = 0
                 highest_close = entry_price
                 trailing_stop = entry_price - 1.5 * atr[i]
+                current_exposure += size
 
     return pd.DataFrame(trades) if trades else pd.DataFrame()

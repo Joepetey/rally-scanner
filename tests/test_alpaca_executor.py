@@ -219,10 +219,12 @@ async def test_execute_entries_skips_crypto():
     ]
 
     mock_session = AsyncMock()
-    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx, \
+         patch("rally.positions.get_total_exposure", return_value=0.0), \
+         patch("rally.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("rally.portfolio.is_circuit_breaker_active", return_value=False):
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 0
@@ -230,32 +232,28 @@ async def test_execute_entries_skips_crypto():
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_qty_and_trailing_stop():
-    """Verify qty calculation and trailing stop placement."""
+async def test_execute_entries_qty():
+    """Verify qty calculation (trailing stop is now deferred)."""
     signals = [
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    # Two call_tool calls: market buy, then trailing stop
     entry_resp = MagicMock()
     entry_resp.content = [MagicMock(text=json.dumps({
         "id": "order-abc",
         "status": "accepted",
         "filled_avg_price": None,
     }))]
-    trail_resp = MagicMock()
-    trail_resp.content = [MagicMock(text=json.dumps({
-        "id": "trail-xyz",
-        "status": "accepted",
-    }))]
 
     mock_session = AsyncMock()
-    mock_session.call_tool.side_effect = [entry_resp, trail_resp]
+    mock_session.call_tool.side_effect = [entry_resp]
 
-    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx, \
+         patch("rally.positions.get_total_exposure", return_value=0.0), \
+         patch("rally.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("rally.portfolio.is_circuit_breaker_active", return_value=False):
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -266,43 +264,68 @@ async def test_execute_entries_qty_and_trailing_stop():
     assert r.qty == 66
     assert r.success is True
     assert r.order_id == "order-abc"
-    assert r.trail_order_id == "trail-xyz"
+    # Trailing stop is deferred — no trail_order_id yet
+    assert r.trail_order_id is None
 
-    # Entry buy + trailing stop sell = 2 MCP calls
-    assert mock_session.call_tool.call_count == 2
+    # Only market buy call (trailing stop deferred)
+    assert mock_session.call_tool.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_trail_percent_calculation():
-    """Trail percent should be 1.5 * atr_pct * 100, minimum 1%."""
+async def test_execute_entries_exposure_cap():
+    """Entries should be skipped when portfolio exposure cap is reached."""
     signals = [
-        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.005},
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    mock_session = AsyncMock()
-    entry_resp = MagicMock()
-    entry_resp.content = [MagicMock(text=json.dumps({"id": "e1"}))]
-    trail_resp = MagicMock()
-    trail_resp.content = [MagicMock(text=json.dumps({"id": "t1"}))]
-    mock_session.call_tool.side_effect = [entry_resp, trail_resp]
-
-    with (
-        patch("rally.alpaca_executor._mcp_session") as mock_ctx,
-        patch("rally.alpaca_executor._call_tool") as mock_call,
-    ):
-        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx, \
+         patch("rally.positions.get_total_exposure", return_value=0.95), \
+         patch("rally.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("rally.portfolio.is_circuit_breaker_active", return_value=False):
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-        mock_call.side_effect = [
-            {"id": "e1", "filled_avg_price": "150.0"},
-            {"id": "t1"},
-        ]
-
         results = await execute_entries(signals, equity=100_000.0)
 
-    assert results[0].success is True
-    # atr_pct=0.005 -> 1.5 * 0.5 = 0.75% < 1% minimum -> trail_percent = 1.0
-    trail_call_args = mock_call.call_args_list[1][0][2]  # (session, name, args)
-    assert trail_call_args["trail_percent"] == 1.0
+    assert len(results) == 1
+    assert results[0].success is False
+    assert "exposure cap" in results[0].error.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_entries_circuit_breaker():
+    """Entries should be blocked when circuit breaker is active."""
+    signals = [
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
+    ]
+
+    with patch("rally.portfolio.is_circuit_breaker_active", return_value=True), \
+         patch("rally.positions.get_total_exposure", return_value=0.0), \
+         patch("rally.positions.get_group_exposure", return_value=(0, 0.0)):
+        results = await execute_entries(signals, equity=100_000.0)
+
+    assert len(results) == 1
+    assert results[0].success is False
+    assert "circuit breaker" in results[0].error.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_entries_group_limit():
+    """Entries should be skipped when group position limit is reached."""
+    signals = [
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
+    ]
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx, \
+         patch("rally.positions.get_total_exposure", return_value=0.0), \
+         patch("rally.positions.get_group_exposure", return_value=(3, 0.3)), \
+         patch("rally.portfolio.is_circuit_breaker_active", return_value=False):
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+        results = await execute_entries(signals, equity=100_000.0)
+
+    assert len(results) == 1
+    assert results[0].success is False
+    assert "max positions" in results[0].error.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -440,18 +463,26 @@ async def test_execute_exit_cancels_trailing_stop():
 
 @pytest.mark.asyncio
 async def test_execute_exits_passes_trail_order_id():
-    """Closed positions with trail_order_id should pass it to execute_exit."""
+    """Closed positions with trail_order_id should pass it to exit."""
     closed = [
         {"ticker": "AAPL", "trail_order_id": "trail-111"},
     ]
 
-    with patch("rally.alpaca_executor.execute_exit", new_callable=AsyncMock) as mock_exit:
+    with patch(
+        "rally.alpaca_executor._execute_exit_with_session",
+        new_callable=AsyncMock,
+    ) as mock_exit, \
+         patch("rally.alpaca_executor._mcp_session") as mock_ctx:
         mock_exit.return_value = OrderResult(
             ticker="AAPL", side="sell", qty=10, success=True,
         )
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
         results = await execute_exits(closed)
 
-    mock_exit.assert_called_once_with("AAPL", trail_order_id="trail-111")
+    mock_exit.assert_called_once()
+    call_args = mock_exit.call_args
+    assert call_args[1]["trail_order_id"] == "trail-111"
     assert len(results) == 1
 
 

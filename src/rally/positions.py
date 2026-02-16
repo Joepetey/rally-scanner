@@ -4,14 +4,22 @@ Position state tracking — persists open positions across scanner runs.
 Storage: models/positions.json
 """
 
+import asyncio
 import json
+import logging
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from .config import PARAMS
+from .config import PARAMS, TICKER_TO_GROUP
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 POSITIONS_FILE = PROJECT_ROOT / "models" / "positions.json"
+
+# Async lock for concurrent position writes (scan + price alerts + reconciliation)
+_positions_lock = asyncio.Lock()
 
 
 def load_positions() -> dict:
@@ -23,11 +31,20 @@ def load_positions() -> dict:
 
 
 def save_positions(state: dict) -> None:
-    """Save positions to disk."""
+    """Save positions to disk atomically (write to temp, then rename)."""
     state["last_updated"] = datetime.now().isoformat()
     POSITIONS_FILE.parent.mkdir(exist_ok=True)
-    with open(POSITIONS_FILE, "w") as f:
-        json.dump(state, f, indent=2, default=str)
+    # Atomic write: write to temp file in same directory, then os.replace
+    fd, tmp_path = tempfile.mkstemp(
+        dir=POSITIONS_FILE.parent, suffix=".tmp", prefix="positions_",
+    )
+    try:
+        with open(fd, "w") as f:
+            json.dump(state, f, indent=2, default=str)
+        Path(tmp_path).replace(POSITIONS_FILE)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
 
 
 def update_positions(state: dict, new_signals: list[dict], all_results: list[dict]) -> dict:
@@ -90,27 +107,56 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
         else:
             still_open.append(pos)
 
-    # Add new positions from signals
-    open_tickers = {p["ticker"] for p in still_open}
+    # Add new positions from signals (respecting portfolio + group exposure caps)
+    open_tickers = {pos["ticker"] for pos in still_open}
+    current_exposure = sum(pos.get("size", 0) for pos in still_open)
+    max_exposure = p.max_portfolio_exposure
+
+    # Pre-compute group counts/exposure from current open positions
+    group_counts: dict[str, int] = {}
+    group_exposures: dict[str, float] = {}
+    for pos in still_open:
+        g = TICKER_TO_GROUP.get(pos["ticker"])
+        if g:
+            group_counts[g] = group_counts.get(g, 0) + 1
+            group_exposures[g] = group_exposures.get(g, 0) + pos.get("size", 0)
+
     for sig in new_signals:
-        if sig["ticker"] not in open_tickers:
-            atr_pct = sig.get("atr_pct", 0.02)
-            atr_val = sig["close"] * atr_pct
-            still_open.append({
-                "ticker": sig["ticker"],
-                "entry_date": sig["date"],
-                "entry_price": sig["close"],
-                "size": sig["size"],
-                "stop_price": sig["range_low"],
-                "target_price": round(sig["close"] + p.profit_atr_mult * atr_val, 2),
-                "trailing_stop": round(sig["close"] - 1.5 * atr_val, 2),
-                "highest_close": sig["close"],
-                "atr": round(atr_val, 4),
-                "bars_held": 0,
-                "current_price": sig["close"],
-                "unrealized_pnl_pct": 0.0,
-                "status": "open",
-            })
+        if sig["ticker"] in open_tickers:
+            continue
+        sig_size = sig.get("size", 0)
+        if current_exposure + sig_size > max_exposure:
+            continue
+        # Group concentration check
+        g = TICKER_TO_GROUP.get(sig["ticker"])
+        if g:
+            if group_counts.get(g, 0) >= p.max_group_positions:
+                continue
+            if group_exposures.get(g, 0) + sig_size > p.max_group_exposure:
+                continue
+        atr_pct = sig.get("atr_pct", 0.02)
+        atr_val = sig["close"] * atr_pct
+        still_open.append({
+            "ticker": sig["ticker"],
+            "entry_date": sig["date"],
+            "entry_price": sig["close"],
+            "size": sig["size"],
+            "stop_price": sig["range_low"],
+            "target_price": round(sig["close"] + p.profit_atr_mult * atr_val, 2),
+            "trailing_stop": round(sig["close"] - 1.5 * atr_val, 2),
+            "highest_close": sig["close"],
+            "atr": round(atr_val, 4),
+            "bars_held": 0,
+            "current_price": sig["close"],
+            "unrealized_pnl_pct": 0.0,
+            "status": "open",
+        })
+        current_exposure += sig["size"]
+        # Update group tracking
+        g = TICKER_TO_GROUP.get(sig["ticker"])
+        if g:
+            group_counts[g] = group_counts.get(g, 0) + 1
+            group_exposures[g] = group_exposures.get(g, 0) + sig["size"]
 
     state["positions"] = still_open
     state["closed_today"] = closed_today
@@ -175,6 +221,79 @@ def get_trail_order_ids() -> dict[str, str]:
 def close_position_by_trail_fill(ticker: str, fill_price: float) -> dict | None:
     """Close a position whose trailing stop filled at the broker."""
     return close_position_intraday(ticker, fill_price, "trail_stop_filled")
+
+
+def get_total_exposure() -> float:
+    """Return sum of size (fraction of equity) across all open positions."""
+    state = load_positions()
+    return sum(p.get("size", 0) for p in state.get("positions", []))
+
+
+def get_group_exposure(group: str) -> tuple[int, float]:
+    """Return (count, total_exposure) for positions in the given asset group."""
+    state = load_positions()
+    count = 0
+    exposure = 0.0
+    for p in state.get("positions", []):
+        if TICKER_TO_GROUP.get(p["ticker"]) == group:
+            count += 1
+            exposure += p.get("size", 0)
+    return count, exposure
+
+
+def reconcile_with_broker(
+    broker_positions: list[dict],
+    trail_fills: dict[str, float],
+) -> list[str]:
+    """Compare local positions with broker state. Returns list of warning messages.
+
+    - Auto-closes local positions whose trailing stops filled at broker.
+    - Logs warnings for ghost positions (local but not at broker) and
+      orphaned positions (at broker but not local).
+    """
+    warnings: list[str] = []
+    state = load_positions()
+    local_tickers = {p["ticker"] for p in state.get("positions", [])}
+    broker_tickers = {p["ticker"] for p in broker_positions}
+
+    # Trailing stop fills: close local positions
+    for ticker, fill_price in trail_fills.items():
+        if ticker in local_tickers:
+            close_position_by_trail_fill(ticker, fill_price)
+            warnings.append(
+                f"Trailing stop filled for {ticker} at ${fill_price:.2f} — position closed"
+            )
+
+    # Ghost positions: we think we hold it but broker doesn't
+    for ticker in local_tickers - broker_tickers:
+        if ticker not in trail_fills:
+            warnings.append(
+                f"Ghost position: {ticker} in local state but not at broker"
+            )
+
+    # Orphaned positions: broker holds it but we don't track it
+    for ticker in broker_tickers - local_tickers:
+        warnings.append(
+            f"Orphaned position: {ticker} at broker but not in local state"
+        )
+
+    if warnings:
+        for w in warnings:
+            logger.warning("Reconciliation: %s", w)
+
+    return warnings
+
+
+async def async_close_position(ticker: str, price: float, reason: str) -> dict | None:
+    """Thread-safe close via asyncio.Lock."""
+    async with _positions_lock:
+        return close_position_intraday(ticker, price, reason)
+
+
+async def async_save_positions(state: dict) -> None:
+    """Thread-safe save via asyncio.Lock."""
+    async with _positions_lock:
+        save_positions(state)
 
 
 def print_positions(state: dict) -> None:

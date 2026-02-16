@@ -85,6 +85,57 @@ def load_equity_history(days: int | None = None) -> list[dict]:
     return rows
 
 
+def compute_drawdown(equity: float) -> float:
+    """Compute current drawdown from equity high-water mark.
+
+    Uses the equity history to find the peak, then compares to current equity.
+    Returns drawdown as a positive fraction (e.g. 0.10 = 10% drawdown).
+    Returns 0.0 if no history or equity is at/above the high-water mark.
+    """
+    rows = load_equity_history()
+    if not rows or equity <= 0:
+        return 0.0
+
+    # The equity history stores total_unrealized_pnl_pct (weighted by size).
+    # For the circuit breaker we need to track actual equity values.
+    # Use a simple approach: if the caller provides current equity (from Alpaca),
+    # compare to the max equity we've seen.
+    # For now, we approximate: use equity directly vs stored high-water mark.
+    hwm_file = DATA_DIR / "high_water_mark.txt"
+    if hwm_file.exists():
+        try:
+            hwm = float(hwm_file.read_text().strip())
+        except (ValueError, OSError):
+            hwm = equity
+    else:
+        hwm = equity
+
+    # Update high-water mark if equity is higher
+    if equity >= hwm:
+        hwm = equity
+        DATA_DIR.mkdir(exist_ok=True)
+        hwm_file.write_text(str(hwm))
+        return 0.0
+
+    drawdown = (hwm - equity) / hwm
+    return drawdown
+
+
+def is_circuit_breaker_active(equity: float) -> bool:
+    """Check if the drawdown circuit breaker should block new entries."""
+    from .config import PARAMS
+    if not PARAMS.circuit_breaker_enabled:
+        return False
+    dd = compute_drawdown(equity)
+    if dd >= PARAMS.max_drawdown_pct:
+        logger.warning(
+            "Circuit breaker ACTIVE: drawdown %.1f%% >= threshold %.1f%%",
+            dd * 100, PARAMS.max_drawdown_pct * 100,
+        )
+        return True
+    return False
+
+
 def load_trade_journal(limit: int | None = None) -> list[dict]:
     """Load trade journal from CSV. Optionally limit to most recent N."""
     if not TRADE_JOURNAL.exists():

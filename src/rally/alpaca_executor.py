@@ -104,7 +104,22 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
 
 
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
+    from .portfolio import is_circuit_breaker_active
+    from .positions import get_group_exposure, get_total_exposure
+
     results: list[OrderResult] = []
+
+    # Circuit breaker check
+    if is_circuit_breaker_active(equity):
+        for sig in signals:
+            results.append(OrderResult(
+                ticker=sig["ticker"], side="buy", qty=0, success=False,
+                error="Circuit breaker active — drawdown exceeds threshold",
+            ))
+        return results
+
+    current_exposure = get_total_exposure()
+    max_exposure = config.PARAMS.max_portfolio_exposure
 
     async with _mcp_session() as session:
         for sig in signals:
@@ -116,6 +131,47 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
 
             price = sig.get("entry_price") or sig["close"]
             size = sig["size"]
+
+            # Portfolio exposure cap
+            if current_exposure + size > max_exposure:
+                logger.warning(
+                    "Skipping %s: exposure %.1f%% + %.1f%% > cap %.0f%%",
+                    ticker, current_exposure * 100, size * 100, max_exposure * 100,
+                )
+                results.append(OrderResult(
+                    ticker=ticker, side="buy", qty=0, success=False,
+                    error=f"Portfolio exposure cap ({max_exposure:.0%}) exceeded",
+                ))
+                continue
+
+            # Group concentration check
+            group = config.TICKER_TO_GROUP.get(ticker)
+            if group:
+                g_count, g_exp = get_group_exposure(group)
+                if g_count >= config.PARAMS.max_group_positions:
+                    logger.warning(
+                        "Skipping %s: group '%s' at %d/%d positions",
+                        ticker, group, g_count, config.PARAMS.max_group_positions,
+                    )
+                    results.append(OrderResult(
+                        ticker=ticker, side="buy", qty=0, success=False,
+                        error=f"Group '{group}' at max positions"
+                              f" ({config.PARAMS.max_group_positions})",
+                    ))
+                    continue
+                if g_exp + size > config.PARAMS.max_group_exposure:
+                    logger.warning(
+                        "Skipping %s: group '%s' exposure %.1f%% + %.1f%% > %.0f%%",
+                        ticker, group, g_exp * 100, size * 100,
+                        config.PARAMS.max_group_exposure * 100,
+                    )
+                    results.append(OrderResult(
+                        ticker=ticker, side="buy", qty=0, success=False,
+                        error=f"Group '{group}' exposure cap"
+                              f" ({config.PARAMS.max_group_exposure:.0%})",
+                    ))
+                    continue
+
             qty = int(equity * size / price)
             if qty < 1:
                 results.append(OrderResult(
@@ -137,38 +193,14 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                 if data.get("filled_avg_price"):
                     fill_price = float(data["filled_avg_price"])
 
-                # Place trailing stop sell for downside protection
-                trail_order_id = None
-                atr_pct = sig.get("atr_pct", 0.02)
-                trail_pct = round(1.5 * atr_pct * 100, 2)  # 1.5*ATR as %
-                trail_pct = max(trail_pct, 1.0)  # minimum 1% trail
-                try:
-                    trail_data = await _call_tool(
-                        session, "place_stock_order", {
-                            "symbol": ticker,
-                            "side": "sell",
-                            "quantity": qty,
-                            "type": "trailing_stop",
-                            "trail_percent": trail_pct,
-                            "time_in_force": "gtc",
-                        },
-                    )
-                    trail_order_id = trail_data.get("id")
-                    logger.info(
-                        "Trailing stop placed for %s: %.1f%% trail, order %s",
-                        ticker, trail_pct, trail_order_id,
-                    )
-                except Exception as te:
-                    logger.warning(
-                        "Failed to place trailing stop for %s: %s", ticker, te,
-                    )
-
+                # Trailing stop is deferred until fill is confirmed
+                # (handled by _check_price_alerts in discord_bot.py)
                 results.append(OrderResult(
                     ticker=ticker, side="buy", qty=qty, success=True,
                     order_id=data.get("id"),
                     fill_price=fill_price,
-                    trail_order_id=trail_order_id,
                 ))
+                current_exposure += size
             except Exception as e:
                 results.append(OrderResult(
                     ticker=ticker, side="buy", qty=qty, success=False,
@@ -190,61 +222,122 @@ async def cancel_order(order_id: str) -> bool:
         return False
 
 
+async def _execute_exit_with_session(
+    session, ticker: str, trail_order_id: str | None = None,
+) -> OrderResult:
+    """Execute a single exit using an existing MCP session."""
+    # Cancel the associated trailing stop before closing
+    if trail_order_id:
+        try:
+            await _call_tool(
+                session, "cancel_order_by_id", {"order_id": trail_order_id},
+            )
+            logger.info("Cancelled trailing stop %s for %s", trail_order_id, ticker)
+        except Exception as e:
+            logger.warning(
+                "Could not cancel trailing stop %s for %s: %s",
+                trail_order_id, ticker, e,
+            )
+
+    data = await _call_tool(session, "close_position", {"symbol": ticker})
+
+    # Try to get fill price from the close response
+    fill_price = None
+    if data.get("filled_avg_price"):
+        fill_price = float(data["filled_avg_price"])
+    elif data.get("id"):
+        # Check order status for fill price
+        orders = await _call_tool(session, "get_orders", {
+            "status": "filled",
+            "symbols": ticker,
+            "limit": 1,
+        })
+        if isinstance(orders, list) and orders:
+            fill_price = float(orders[0].get("filled_avg_price", 0)) or None
+
+    qty = int(float(data.get("qty", data.get("filled_qty", 0))))
+    return OrderResult(
+        ticker=ticker, side="sell", qty=qty, success=True,
+        order_id=data.get("id"),
+        fill_price=fill_price,
+    )
+
+
 async def execute_exit(ticker: str, trail_order_id: str | None = None) -> OrderResult:
+    """Execute a single exit, creating a new MCP session."""
     async with _mcp_session() as session:
-        # Cancel the associated trailing stop before closing
-        if trail_order_id:
-            try:
-                await _call_tool(
-                    session, "cancel_order_by_id", {"order_id": trail_order_id},
-                )
-                logger.info("Cancelled trailing stop %s for %s", trail_order_id, ticker)
-            except Exception as e:
-                logger.warning(
-                    "Could not cancel trailing stop %s for %s: %s",
-                    trail_order_id, ticker, e,
-                )
-
-        data = await _call_tool(session, "close_position", {"symbol": ticker})
-
-        # Try to get fill price from the close response
-        fill_price = None
-        if data.get("filled_avg_price"):
-            fill_price = float(data["filled_avg_price"])
-        elif data.get("id"):
-            # Check order status for fill price
-            orders = await _call_tool(session, "get_orders", {
-                "status": "filled",
-                "symbols": ticker,
-                "limit": 1,
-            })
-            if isinstance(orders, list) and orders:
-                fill_price = float(orders[0].get("filled_avg_price", 0)) or None
-
-        qty = int(float(data.get("qty", data.get("filled_qty", 0))))
-        return OrderResult(
-            ticker=ticker, side="sell", qty=qty, success=True,
-            order_id=data.get("id"),
-            fill_price=fill_price,
-        )
+        return await _execute_exit_with_session(session, ticker, trail_order_id)
 
 
 async def execute_exits(closed: list[dict]) -> list[OrderResult]:
+    """Execute multiple exits sharing a single MCP session."""
     results: list[OrderResult] = []
-    for pos in closed:
-        ticker = pos["ticker"]
-        if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
-            continue
-        trail_oid = pos.get("trail_order_id")
-        try:
-            result = await execute_exit(ticker, trail_order_id=trail_oid)
-            results.append(result)
-        except Exception as e:
-            results.append(OrderResult(
-                ticker=ticker, side="sell", qty=0, success=False,
-                error=str(e),
-            ))
+    equity_closed = [
+        pos for pos in closed
+        if not (pos["ticker"] in config.ASSETS
+                and config.ASSETS[pos["ticker"]].asset_class == "crypto")
+    ]
+    if not equity_closed:
+        return results
+
+    async with _mcp_session() as session:
+        for pos in equity_closed:
+            ticker = pos["ticker"]
+            trail_oid = pos.get("trail_order_id")
+            try:
+                result = await _execute_exit_with_session(
+                    session, ticker, trail_order_id=trail_oid,
+                )
+                results.append(result)
+            except Exception as e:
+                results.append(OrderResult(
+                    ticker=ticker, side="sell", qty=0, success=False,
+                    error=str(e),
+                ))
     return results
+
+
+async def get_all_positions() -> list[dict]:
+    """Fetch all open positions from the broker."""
+    async with _mcp_session() as session:
+        data = await _call_tool(session, "get_all_positions", {})
+    if isinstance(data, list):
+        return [
+            {
+                "ticker": p.get("symbol", ""),
+                "qty": int(float(p.get("qty", 0))),
+                "avg_entry_price": float(p.get("avg_entry_price", 0)),
+                "market_value": float(p.get("market_value", 0)),
+                "unrealized_pl": float(p.get("unrealized_pl", 0)),
+            }
+            for p in data
+        ]
+    return []
+
+
+async def place_trailing_stop(
+    ticker: str, qty: int, trail_pct: float,
+) -> str | None:
+    """Place a standalone trailing stop order. Returns trail_order_id or None."""
+    async with _mcp_session() as session:
+        try:
+            data = await _call_tool(session, "place_stock_order", {
+                "symbol": ticker,
+                "side": "sell",
+                "quantity": qty,
+                "type": "trailing_stop",
+                "trail_percent": trail_pct,
+                "time_in_force": "gtc",
+            })
+            trail_id = data.get("id")
+            logger.info(
+                "Trailing stop placed for %s: %.1f%% trail, order %s",
+                ticker, trail_pct, trail_id,
+            )
+            return trail_id
+        except Exception as e:
+            logger.warning("Failed to place trailing stop for %s: %s", ticker, e)
+            return None
 
 
 async def check_pending_fills(order_ids: list[str]) -> dict[str, float]:
