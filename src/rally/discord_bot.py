@@ -766,7 +766,18 @@ def make_bot(token: str) -> RallyBot:
                 scan_watchlist, _watchlist_tickers,
             )
 
-            signals = [r for r in results if r.get("signal")]
+            all_signals = [r for r in results if r.get("signal")]
+
+            # Filter out tickers we already hold
+            from .positions import load_positions as _load_pos
+            open_tickers = {
+                p["ticker"]
+                for p in _load_pos().get("positions", [])
+            }
+            signals = [
+                s for s in all_signals if s["ticker"] not in open_tickers
+            ]
+
             if signals:
                 embed = discord.Embed.from_dict(_signal_embed(signals))
                 embed.title = f"Mid-day Signal ({len(signals)})"
