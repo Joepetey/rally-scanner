@@ -30,8 +30,7 @@ discord = [
     "discord.py>=2.3",
 ]
 alpaca = [
-    "mcp>=1.0",
-    "alpaca-mcp-server>=0.1",
+    "alpaca-py>=0.29",
 ]
 
 [tool.setuptools.packages.find]
