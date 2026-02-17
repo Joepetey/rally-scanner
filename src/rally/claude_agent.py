@@ -205,8 +205,9 @@ TOOLS = [
     {
         "name": "get_watchlist",
         "description": (
-            "Show the current watchlist — tickers with trained models"
-            " that are monitored for signals during mid-day scans."
+            "Show tickers approaching signal threshold (P(rally) > 35%)"
+            " from the last scan, sorted by probability. These may"
+            " become entry signals soon."
         ),
         "input_schema": {
             "type": "object",
@@ -646,16 +647,19 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
 
 
 def _get_watchlist() -> dict[str, Any]:
-    """Return the current watchlist from the trained model manifest."""
-    manifest = load_manifest()
-    if not manifest:
-        return {"message": "No trained models found — watchlist is empty."}
+    """Return tickers near signal threshold from the last scan."""
+    import json
+    from pathlib import Path
 
-    tickers = sorted(manifest.keys())
-    return {
-        "count": len(tickers),
-        "tickers": tickers,
-    }
+    wl_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "models" / "watchlist.json"
+    )
+    if not wl_path.exists():
+        return {"message": "No watchlist yet — run a scan first."}
+
+    with open(wl_path) as f:
+        return json.load(f)
 
 
 def _get_price(tickers: list[str]) -> dict[str, Any]:

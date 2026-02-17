@@ -264,6 +264,45 @@ def make_bot(token: str) -> RallyBot:
             embed = discord.Embed.from_dict(_error_embed(f"{task_name} Failed", details))
             await _send_alert(embed)
 
+        def _save_watchlist(results: list, positions: dict) -> None:
+            """Persist near-signal tickers for agent queries."""
+            import json as _json
+            from pathlib import Path as _Path
+
+            open_tickers = {
+                p["ticker"] for p in positions.get("positions", [])
+            }
+            watchlist = []
+            for r in sorted(
+                results,
+                key=lambda x: x.get("p_rally", 0),
+                reverse=True,
+            ):
+                if r.get("status") != "ok":
+                    continue
+                if r["ticker"] in open_tickers:
+                    continue
+                p_rally = r.get("p_rally", 0)
+                if p_rally < 0.35:
+                    continue
+                watchlist.append({
+                    "ticker": r["ticker"],
+                    "p_rally": round(p_rally * 100, 1),
+                    "comp_score": round(r.get("comp_score", 0), 3),
+                    "close": r.get("close", 0),
+                    "signal": bool(r.get("signal")),
+                })
+
+            wl_path = _Path(__file__).resolve().parent.parent.parent
+            wl_path = wl_path / "models" / "watchlist.json"
+            wl_path.parent.mkdir(exist_ok=True)
+            with open(wl_path, "w") as f:
+                _json.dump({
+                    "updated": datetime.now(_ET).isoformat(),
+                    "count": len(watchlist),
+                    "tickers": watchlist,
+                }, f, indent=2)
+
         async def _run_scan() -> None:
             """Run the scan pipeline in a thread, then post results."""
             from .notify import _exit_embed, _signal_embed
@@ -287,6 +326,9 @@ def make_bot(token: str) -> RallyBot:
                 record_closed_trades(closed)
 
             update_daily_snapshot(positions, results)
+
+            # Persist watchlist (near-signal tickers) for agent queries
+            _save_watchlist(results, positions)
 
             # Filter out signals for tickers we already hold
             open_tickers = {
