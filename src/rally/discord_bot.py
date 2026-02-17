@@ -300,11 +300,19 @@ def make_bot(token: str) -> RallyBot:
                 )
                 from .notify import _order_embed, _order_failure_embed
 
+                # Filter out signals for tickers we already hold
+                open_tickers = {
+                    p["ticker"] for p in positions.get("positions", [])
+                }
+                new_signals = [
+                    s for s in signals if s["ticker"] not in open_tickers
+                ]
+
                 # External system boundary — broker outage must not break scan
                 try:
                     equity = await get_account_equity()
-                    if signals:
-                        entry_results = await execute_entries(signals, equity=equity)
+                    if new_signals:
+                        entry_results = await execute_entries(new_signals, equity=equity)
                         await _store_order_ids(entry_results)
                         ok = [r for r in entry_results if r.success]
                         fail = [r for r in entry_results if not r.success]

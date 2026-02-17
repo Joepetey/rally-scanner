@@ -97,7 +97,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
     from alpaca.trading.requests import MarketOrderRequest
 
     from .portfolio import is_circuit_breaker_active
-    from .positions import get_group_exposure, get_total_exposure
+    from .positions import get_group_exposure, get_total_exposure, load_positions
 
     results: list[OrderResult] = []
 
@@ -112,10 +112,16 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
 
     current_exposure = get_total_exposure()
     max_exposure = config.PARAMS.max_portfolio_exposure
+    open_tickers = {p["ticker"] for p in load_positions().get("positions", [])}
     client = _trading_client()
 
     for sig in signals:
         ticker = sig["ticker"]
+
+        # Skip tickers we already hold
+        if ticker in open_tickers:
+            logger.info("Skipping %s: already in open positions", ticker)
+            continue
 
         # Skip crypto
         if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
