@@ -202,6 +202,18 @@ TOOLS = [
             "required": ["tickers"]
         }
     },
+    {
+        "name": "get_watchlist",
+        "description": (
+            "Show the current watchlist — tickers with trained models"
+            " that are monitored for signals during mid-day scans."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
 ]
 
 
@@ -633,6 +645,19 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
         }
 
 
+def _get_watchlist() -> dict[str, Any]:
+    """Return the current watchlist from the trained model manifest."""
+    manifest = load_manifest()
+    if not manifest:
+        return {"message": "No trained models found — watchlist is empty."}
+
+    tickers = sorted(manifest.keys())
+    return {
+        "count": len(tickers),
+        "tickers": tickers,
+    }
+
+
 def _get_price(tickers: list[str]) -> dict[str, Any]:
     """Fetch current quotes for one or more tickers."""
     from .data import fetch_quotes
@@ -698,6 +723,8 @@ def execute_tool(
         }
     elif tool_name == "get_price":
         return _get_price(tool_input.get("tickers", []))
+    elif tool_name == "get_watchlist":
+        return _get_watchlist()
     else:
         return {"error": f"Unknown tool: {tool_name}"}
 
