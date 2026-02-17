@@ -264,11 +264,17 @@ def reconcile_with_broker(
                 f"Trailing stop filled for {ticker} at ${fill_price:.2f} — position closed"
             )
 
-    # Ghost positions: we think we hold it but broker doesn't
-    for ticker in local_tickers - broker_tickers:
-        if ticker not in trail_fills:
+    # Ghost positions: we think we hold it but broker doesn't — auto-remove
+    ghosts = local_tickers - broker_tickers - set(trail_fills)
+    if ghosts:
+        state = load_positions()
+        state["positions"] = [
+            p for p in state["positions"] if p["ticker"] not in ghosts
+        ]
+        save_positions(state)
+        for ticker in sorted(ghosts):
             warnings.append(
-                f"Ghost position: {ticker} in local state but not at broker"
+                f"Ghost position removed: {ticker} (local only, not at broker)"
             )
 
     # Orphaned positions: broker holds it but we don't track it

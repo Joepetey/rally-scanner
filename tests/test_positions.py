@@ -4,6 +4,7 @@
 from rally.config import PARAMS
 from rally.positions import (
     load_positions,
+    reconcile_with_broker,
     save_positions,
     tighten_trailing_stop,
     update_positions,
@@ -240,3 +241,46 @@ def test_tighten_trailing_stop_not_found(tmp_models_dir):
     save_positions(state)
     result = tighten_trailing_stop("UNKNOWN", 150.0)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# reconcile_with_broker
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_removes_ghost_positions(tmp_models_dir):
+    """Ghost positions (local but not at broker) should be auto-removed."""
+    state = {
+        "positions": [
+            {"ticker": "AAPL", "entry_price": 150.0, "status": "open"},
+            {"ticker": "GHOST1", "entry_price": 50.0, "status": "open"},
+            {"ticker": "GHOST2", "entry_price": 25.0, "status": "open"},
+        ],
+        "closed_today": [],
+    }
+    save_positions(state)
+
+    broker = [{"ticker": "AAPL", "qty": 10}]
+    warnings = reconcile_with_broker(broker, trail_fills={})
+
+    assert len(warnings) == 2
+    assert any("GHOST1" in w for w in warnings)
+    assert any("GHOST2" in w for w in warnings)
+
+    # Verify ghosts removed from disk
+    reloaded = load_positions()
+    tickers = [p["ticker"] for p in reloaded["positions"]]
+    assert tickers == ["AAPL"]
+
+
+def test_reconcile_detects_orphaned_positions(tmp_models_dir):
+    """Orphaned positions (at broker but not local) should be warned about."""
+    state = {"positions": [], "closed_today": []}
+    save_positions(state)
+
+    broker = [{"ticker": "MSFT", "qty": 5}]
+    warnings = reconcile_with_broker(broker, trail_fills={})
+
+    assert len(warnings) == 1
+    assert "Orphaned" in warnings[0]
+    assert "MSFT" in warnings[0]
