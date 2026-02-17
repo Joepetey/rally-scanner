@@ -69,8 +69,15 @@ async def _call_tool(session, name: str, arguments: dict) -> dict:
     result = await session.call_tool(name, arguments=arguments)
     # MCP tool results come back as content blocks
     for block in result.content:
-        if hasattr(block, "text"):
-            return json.loads(block.text)
+        if hasattr(block, "text") and block.text:
+            try:
+                return json.loads(block.text)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "MCP tool %s returned non-JSON: %s",
+                    name, block.text[:200],
+                )
+                return {"_error": f"non-JSON response from {name}"}
     return {}
 
 

@@ -628,7 +628,7 @@ def make_bot(token: str) -> RallyBot:
         _cached_regime_states: dict = {}
         _watchlist_tickers: list[str] = []
         _current_alert_interval = PARAMS.base_alert_interval
-        _last_alert_check = datetime.min
+        _last_alert_check = datetime.min.replace(tzinfo=_ET)
 
         async def _check_regime_shifts() -> None:
             """Check HMM regime states and alert on transitions."""
