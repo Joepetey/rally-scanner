@@ -346,6 +346,8 @@ def make_bot(token: str) -> RallyBot:
                     for pos in state["positions"]:
                         if pos["ticker"] == result.ticker:
                             pos["order_id"] = result.order_id
+                            if result.qty:
+                                pos["qty"] = result.qty
                             if result.trail_order_id:
                                 pos["trail_order_id"] = result.trail_order_id
                             break
@@ -448,9 +450,24 @@ def make_bot(token: str) -> RallyBot:
                             and pos.get("entry_price")):
                         atr_pct = pos.get("atr", 0) / pos["entry_price"] if pos.get("atr") else 0.02
                         trail_pct = round(max(1.5 * atr_pct * 100, 1.0), 2)
-                        qty = int(pos.get("qty", 0)) if pos.get("qty") else None
+                        qty = pos.get("qty")
                         if not qty:
-                            # Estimate qty from size and entry price
+                            # Estimate qty from broker positions
+                            try:
+                                from .alpaca_executor import get_all_positions
+                                broker_pos = await get_all_positions()
+                                for bp in broker_pos:
+                                    if bp["ticker"] == pos["ticker"]:
+                                        qty = bp["qty"]
+                                        pos["qty"] = qty
+                                        break
+                            except Exception:
+                                pass
+                        if not qty:
+                            logger.warning(
+                                "Cannot place trailing stop for %s: qty unknown",
+                                pos["ticker"],
+                            )
                             continue
                         trail_id = await place_trailing_stop(
                             pos["ticker"], qty, trail_pct,
