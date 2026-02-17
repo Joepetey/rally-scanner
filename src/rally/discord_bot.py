@@ -487,6 +487,11 @@ def make_bot(token: str) -> RallyBot:
                                 pos["ticker"], trail_id,
                             )
                 await async_save_positions(fresh_state)
+
+                # Reload positions so breach checks use updated fill prices,
+                # trailing stops, and qty values
+                state = reload_positions()
+                positions = state.get("positions", [])
             else:
                 quotes = await asyncio.to_thread(fetch_quotes, tickers)
 
