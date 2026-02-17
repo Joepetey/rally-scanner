@@ -273,7 +273,7 @@ def make_bot(token: str) -> RallyBot:
 
             logger.info("Scheduler: starting daily scan")
             results = await asyncio.to_thread(
-                scan_all, None, True, "baseline"
+                scan_all, None, True, "conservative"
             )
             if not results:
                 return
@@ -903,5 +903,28 @@ def make_bot(token: str) -> RallyBot:
             if not scheduled_midday_scan.is_running():
                 scheduled_midday_scan.start()
                 logger.info("Scheduler: mid-day scans armed (2 PM, 3 PM ET)")
+
+            # Populate watchlist from manifest so mid-day scans work immediately
+            try:
+                from .persistence import load_manifest
+                manifest = load_manifest()
+                if manifest:
+                    nonlocal _watchlist_tickers
+                    _watchlist_tickers = sorted(manifest.keys())
+                    logger.info(
+                        "Loaded %d tickers into watchlist from manifest",
+                        len(_watchlist_tickers),
+                    )
+            except Exception:
+                logger.debug("No manifest found — watchlist empty until first scan")
+
+            # Run initial scan if market is open (don't wait for 4:30 PM)
+            if _is_market_open():
+                logger.info("Market is open — running startup scan")
+                try:
+                    await _run_scan()
+                except Exception as e:
+                    logger.exception("Startup scan failed")
+                    await _send_error_alert("Startup Scan", e)
 
     return bot
