@@ -6,6 +6,26 @@ import os
 # third-party
 from pydantic import BaseModel
 
+try:
+    from alpaca.data.historical.stock import StockHistoricalDataClient
+    from alpaca.data.requests import StockSnapshotRequest
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import (
+        OrderSide,
+        OrderStatus,
+        QueryOrderStatus,
+        TimeInForce,
+    )
+    from alpaca.trading.requests import (
+        GetOrdersRequest,
+        MarketOrderRequest,
+        TrailingStopOrderRequest,
+    )
+
+    _ALPACA_AVAILABLE = True
+except ImportError:
+    _ALPACA_AVAILABLE = False
+
 # local
 from . import config
 
@@ -28,9 +48,7 @@ def is_enabled() -> bool:
 
 
 def _trading_client():
-    """Create an Alpaca TradingClient (lazy import)."""
-    from alpaca.trading.client import TradingClient
-
+    """Create an Alpaca TradingClient."""
     return TradingClient(
         api_key=os.environ["ALPACA_API_KEY"],
         secret_key=os.environ["ALPACA_SECRET_KEY"],
@@ -39,9 +57,7 @@ def _trading_client():
 
 
 def _data_client():
-    """Create an Alpaca StockHistoricalDataClient (lazy import)."""
-    from alpaca.data.historical.stock import StockHistoricalDataClient
-
+    """Create an Alpaca StockHistoricalDataClient."""
     return StockHistoricalDataClient(
         api_key=os.environ["ALPACA_API_KEY"],
         secret_key=os.environ["ALPACA_SECRET_KEY"],
@@ -67,8 +83,6 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
         return {}
 
     def _sync():
-        from alpaca.data.requests import StockSnapshotRequest
-
         client = _data_client()
         snapshots = client.get_stock_snapshot(
             StockSnapshotRequest(symbol_or_symbols=equity_tickers)
@@ -93,9 +107,6 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
 
 
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
-
     from .portfolio import is_circuit_breaker_active
     from .positions import get_group_exposure, get_total_exposure, load_positions
 
@@ -307,9 +318,6 @@ async def place_trailing_stop(
 ) -> str | None:
     """Place a standalone trailing stop order. Returns trail_order_id or None."""
     def _sync():
-        from alpaca.trading.enums import OrderSide, TimeInForce
-        from alpaca.trading.requests import TrailingStopOrderRequest
-
         client = _trading_client()
         order = client.submit_order(TrailingStopOrderRequest(
             symbol=ticker,
@@ -338,9 +346,6 @@ async def check_pending_fills(order_ids: list[str]) -> dict[str, float]:
         return {}
 
     def _sync():
-        from alpaca.trading.enums import OrderStatus, QueryOrderStatus
-        from alpaca.trading.requests import GetOrdersRequest
-
         client = _trading_client()
         orders = client.get_orders(filter=GetOrdersRequest(
             status=QueryOrderStatus.CLOSED,
@@ -373,9 +378,6 @@ async def check_trail_stop_fills(
         return {}
 
     def _sync():
-        from alpaca.trading.enums import OrderStatus, QueryOrderStatus
-        from alpaca.trading.requests import GetOrdersRequest
-
         client = _trading_client()
         orders = client.get_orders(filter=GetOrdersRequest(
             status=QueryOrderStatus.CLOSED,
