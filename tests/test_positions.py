@@ -2,7 +2,12 @@
 
 
 from rally.config import PARAMS
-from rally.positions import load_positions, save_positions, update_positions
+from rally.positions import (
+    load_positions,
+    save_positions,
+    tighten_trailing_stop,
+    update_positions,
+)
 
 
 def test_load_empty(tmp_models_dir):
@@ -170,3 +175,68 @@ def test_no_duplicate_positions(tmp_models_dir):
     results = [{"ticker": "AAPL", "status": "ok", "close": 155.0, "date": "2024-01-15"}]
     updated = update_positions(state, signals, results)
     assert len(updated["positions"]) == 1
+
+
+def test_tighten_trailing_stop(tmp_models_dir):
+    """tighten_trailing_stop only tightens (never loosens)."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "stop_price": 145.0,
+            "target_price": 160.0,
+            "trailing_stop": 148.0,
+            "highest_close": 155.0,
+            "bars_held": 3,
+            "size": 0.10,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    save_positions(state)
+
+    # Tighten: 148 → 150 (higher = tighter)
+    result = tighten_trailing_stop("AAPL", 150.0)
+    assert result is not None
+    assert result["trailing_stop"] == 150.0
+
+    # Verify persisted
+    loaded = load_positions()
+    assert loaded["positions"][0]["trailing_stop"] == 150.0
+
+
+def test_tighten_trailing_stop_no_loosen(tmp_models_dir):
+    """tighten_trailing_stop refuses to loosen (lower stop)."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "trailing_stop": 148.0,
+            "stop_price": 145.0,
+            "target_price": 160.0,
+            "highest_close": 155.0,
+            "bars_held": 3,
+            "size": 0.10,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    save_positions(state)
+
+    # Try to loosen: 148 → 145 (lower = looser) — should return None
+    result = tighten_trailing_stop("AAPL", 145.0)
+    assert result is None
+
+    # Stop unchanged
+    loaded = load_positions()
+    assert loaded["positions"][0]["trailing_stop"] == 148.0
+
+
+def test_tighten_trailing_stop_not_found(tmp_models_dir):
+    """tighten_trailing_stop returns None for unknown ticker."""
+    state = {"positions": [], "closed_today": []}
+    save_positions(state)
+    result = tighten_trailing_stop("UNKNOWN", 150.0)
+    assert result is None

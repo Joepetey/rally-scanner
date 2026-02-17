@@ -195,7 +195,7 @@ def main() -> int:
 
     # scan
     p_scan = sub.add_parser("scan", help="Run daily scan + alerts")
-    p_scan.add_argument("--config", default="baseline",
+    p_scan.add_argument("--config", default="conservative",
                         choices=["baseline", "conservative", "aggressive", "concentrated"])
 
     # retrain
@@ -203,7 +203,9 @@ def main() -> int:
     p_retrain.add_argument("--tickers", nargs="+", default=None)
 
     # auto
-    sub.add_parser("auto", help="Auto-detect: Sun=retrain, Mon-Fri=scan")
+    p_auto = sub.add_parser("auto", help="Auto-detect: Sun=retrain, Mon-Fri=scan")
+    p_auto.add_argument("--config", default="conservative",
+                        choices=["baseline", "conservative", "aggressive", "concentrated"])
 
     # health
     sub.add_parser("health", help="Print model health report")

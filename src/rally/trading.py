@@ -35,7 +35,10 @@ def compute_position_size(preds: pd.DataFrame) -> pd.Series:
     return clipped.where(clipped >= p.min_position_size, 0.0)
 
 
-def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
+def simulate_trades(
+    preds: pd.DataFrame,
+    signal: pd.Series,
+) -> pd.DataFrame:
     """
     Simulate trades bar-by-bar with exits:
       1. Stop-loss at structural level (RangeLow)
@@ -75,7 +78,6 @@ def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
             # Track highest close for trailing stop
             if close[i] > highest_close:
                 highest_close = close[i]
-                # Ratchet trailing stop up: highest close - 1.5*ATR
                 new_trail = highest_close - 1.5 * atr[entry_idx]
                 trailing_stop = max(trailing_stop, new_trail)
 
@@ -114,7 +116,7 @@ def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
                 mfe = (max(slice_high.max(), entry_price) if len(slice_high) > 0
                        else entry_price) / entry_price - 1
 
-                trades.append({
+                trade = {
                     "entry_date": preds.index[entry_idx],
                     "exit_date": preds.index[i],
                     "entry_price": entry_price,
@@ -129,7 +131,9 @@ def simulate_trades(preds: pd.DataFrame, signal: pd.Series) -> pd.DataFrame:
                     "comp_score": preds["COMP_SCORE"].iloc[entry_idx],
                     "p_rally": preds["P_RALLY"].iloc[entry_idx],
                     "trend": preds["Trend"].iloc[entry_idx],
-                })
+                }
+
+                trades.append(trade)
                 current_exposure -= size
                 in_trade = False
 

@@ -3,7 +3,7 @@ Rally Phase-Transition Detector — Main runner.
 
 Usage:
     python main.py [--asset SPY] [--require-trend] [--plot]
-    python main.py --run-all [--plot]
+    python main.py --run-all [--plot] [--config conservative]
 """
 
 import argparse
@@ -24,6 +24,7 @@ from .data import fetch_daily, fetch_vix, merge_vix
 from .features import build_features
 from .labels import compute_labels
 from .model import combine_predictions, walk_forward_train
+from .scanner import CONFIGS, apply_config
 from .trading import generate_signals, simulate_trades
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -134,14 +135,22 @@ def run(
     return trades, equity, metrics
 
 
-def run_all(plot: bool = False) -> dict:
-    """Run backtest across all assets and print a summary table."""
+def run_all(
+    plot: bool = False,
+    config_name: str = "conservative",
+) -> tuple[dict, dict | None]:
+    """Run backtest across all assets and print a summary table.
+
+    Returns (per_asset_results, portfolio_metrics).
+    """
+    apply_config(config_name)
     results = {}
     all_trades = []
+    label = f" [{config_name}]"
 
     for name in ASSETS:
         print(f"\n{'#'*60}")
-        print(f"  {name}")
+        print(f"  {name}{label}")
         print(f"{'#'*60}")
         trades, equity, metrics = run(name, plot=plot, verbose=True)
         results[name] = metrics
@@ -152,7 +161,7 @@ def run_all(plot: bool = False) -> dict:
 
     # Per-asset summary
     print(f"\n{'='*90}")
-    print("  CROSS-ASSET SUMMARY (per-asset)")
+    print(f"  CROSS-ASSET SUMMARY (per-asset){label}")
     print(f"{'='*90}")
     header = (f"{'Asset':<8} {'Trades':>7} {'WinRate':>8} {'AvgWin':>8} "
               f"{'AvgLoss':>8} {'PF':>7} {'CAGR':>7} {'MaxDD':>7} {'Tr/Yr':>6}")
@@ -176,15 +185,20 @@ def run_all(plot: bool = False) -> dict:
     print(f"{'='*90}")
 
     # Portfolio-level backtest
+    portfolio_metrics = None
     if all_trades:
         portfolio_trades = pd.concat(all_trades, ignore_index=True)
-        _run_portfolio(portfolio_trades, plot=plot)
+        portfolio_metrics = _run_portfolio(portfolio_trades, plot=plot,
+                                           config_name=config_name)
 
-    return results
+    return results, portfolio_metrics
 
 
-def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
-                   max_total_exposure: float = 1.0, plot: bool = False) -> None:
+def _run_portfolio(
+    trades: pd.DataFrame, initial_capital: float = 100_000,
+    max_total_exposure: float = 1.0, plot: bool = False,
+    config_name: str = "conservative",
+) -> dict:
     """
     Portfolio-level backtest: all 14 assets share one equity pool.
     Sizes each position from current equity, caps total exposure.
@@ -197,6 +211,7 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     dates = pd.date_range(min_date, max_date, freq="B")
 
     equity = initial_capital
+    peak_equity = initial_capital
     equity_series = pd.Series(np.nan, index=dates)
     open_positions = []  # list of dicts
 
@@ -209,23 +224,24 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
         still_open = []
         for pos in open_positions:
             if date >= pos["exit_date"]:
-                # Realized PnL
                 sized_pnl = pos["pnl_pct"] * pos["allocated"]
                 equity += sized_pnl
                 daily_pnl[date] += sized_pnl
             else:
-                # Mark-to-market (approximate: distribute PnL linearly)
                 still_open.append(pos)
+
         open_positions = still_open
 
         # Open new positions
-        current_exposure = sum(p["allocated"] for p in open_positions) / equity if equity > 0 else 0
+        current_exposure = (
+            sum(p["allocated"] for p in open_positions) / equity
+            if equity > 0 else 0
+        )
         while trade_idx < len(trade_queue):
             t = trade_queue[trade_idx]
             if t.entry_date > date:
                 break
             if t.entry_date == date:
-                # Size from current equity
                 alloc = t.size * equity
                 new_exposure = current_exposure + alloc / equity
                 if new_exposure <= max_total_exposure:
@@ -233,6 +249,7 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
                         "asset": t.asset,
                         "entry_date": t.entry_date,
                         "exit_date": t.exit_date,
+                        "entry_price": t.entry_price,
                         "pnl_pct": t.pnl_pct,
                         "allocated": alloc,
                         "size": t.size,
@@ -240,6 +257,7 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
                     current_exposure = new_exposure
             trade_idx += 1
 
+        peak_equity = max(peak_equity, equity)
         equity_series[date] = equity
 
     # Forward-fill any NaN
@@ -252,7 +270,10 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     total_days = (dates[-1] - dates[0]).days
     cagr = (1 + total_return) ** (365.25 / max(total_days, 1)) - 1
     max_dd = drawdown.min()
-    sharpe = daily_pnl.mean() / daily_pnl.std() * np.sqrt(252) if daily_pnl.std() > 0 else 0
+    sharpe = (
+        daily_pnl.mean() / daily_pnl.std() * np.sqrt(252)
+        if daily_pnl.std() > 0 else 0
+    )
 
     n_trades = len(trades)
     sized_pnl = trades["pnl_sized"]
@@ -261,9 +282,12 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     pf = gross_profit / gross_loss if gross_loss > 0 else np.inf
 
     n_years = total_days / 365.25
+    win_rate = (trades["pnl_pct"] > 0).mean()
 
+    label = f" [{config_name}]"
     print(f"\n{'='*90}")
-    print(f"  PORTFOLIO BACKTEST — ALL {len(trades['asset'].unique())} ASSETS COMBINED")
+    print(f"  PORTFOLIO BACKTEST — ALL {len(trades['asset'].unique())} "
+          f"ASSETS COMBINED{label}")
     print(f"{'='*90}")
     print(f"  Initial capital:   ${initial_capital:,.0f}")
     print(f"  Final equity:      ${equity_series.iloc[-1]:,.0f}")
@@ -274,10 +298,13 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
     print(f"  Profit factor:     {pf:.2f}")
     print(f"  Total trades:      {n_trades}")
     print(f"  Trades/year:       {n_trades / n_years:.1f}")
-    print(f"  Win rate:          {(trades['pnl_pct'] > 0).mean():.1%}")
-    print(f"  Avg win:           {trades.loc[trades['pnl_pct'] > 0, 'pnl_pct'].mean():+.2%}")
-    print(f"  Avg loss:          {trades.loc[trades['pnl_pct'] <= 0, 'pnl_pct'].mean():+.2%}")
-    print(f"  Period:            {dates[0].date()} → {dates[-1].date()} ({n_years:.1f} years)")
+    print(f"  Win rate:          {win_rate:.1%}")
+    print(f"  Avg win:           "
+          f"{trades.loc[trades['pnl_pct'] > 0, 'pnl_pct'].mean():+.2%}")
+    print(f"  Avg loss:          "
+          f"{trades.loc[trades['pnl_pct'] <= 0, 'pnl_pct'].mean():+.2%}")
+    print(f"  Period:            {dates[0].date()} → {dates[-1].date()} "
+          f"({n_years:.1f} years)")
 
     # Per-asset contribution
     print("\n  --- Contribution by asset ---")
@@ -302,8 +329,11 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
         fig, axes = plt.subplots(3, 1, figsize=(16, 12), sharex=True,
                                  gridspec_kw={"height_ratios": [3, 1, 1]})
 
-        axes[0].plot(equity_series.index, equity_series.values, linewidth=1.2, color="navy")
-        axes[0].set_title("Rally Detector — 14-Asset Portfolio Equity Curve", fontsize=14)
+        axes[0].plot(equity_series.index, equity_series.values,
+                     linewidth=1.2, color="navy")
+        axes[0].set_title(
+            f"Rally Detector — Portfolio Equity Curve{label}", fontsize=14,
+        )
         axes[0].set_ylabel("Equity ($)")
         axes[0].grid(True, alpha=0.3)
         axes[0].axhline(initial_capital, color="gray", linestyle="--", alpha=0.5)
@@ -325,9 +355,22 @@ def _run_portfolio(trades: pd.DataFrame, initial_capital: float = 100_000,
 
         plt.tight_layout()
         PLOTS_DIR.mkdir(exist_ok=True)
-        plt.savefig(PLOTS_DIR / "equity_PORTFOLIO.png", dpi=150)
+        plt.savefig(PLOTS_DIR / f"equity_PORTFOLIO_{config_name}.png", dpi=150)
         plt.close()
-        print(f"  Plot saved: {PLOTS_DIR / 'equity_PORTFOLIO.png'}")
+        print(
+            f"  Plot saved: "
+            f"{PLOTS_DIR / f'equity_PORTFOLIO_{config_name}.png'}"
+        )
+
+    return {
+        "total_return": total_return,
+        "cagr": cagr,
+        "max_dd": max_dd,
+        "sharpe": sharpe,
+        "profit_factor": pf,
+        "n_trades": n_trades,
+        "win_rate": win_rate,
+    }
 
 
 def main() -> None:
@@ -338,11 +381,16 @@ def main() -> None:
     parser.add_argument("--plot", action="store_true", help="Save equity curve plots")
     parser.add_argument("--run-all", action="store_true",
                         help="Run backtest across all assets")
+    parser.add_argument("--config", default="conservative",
+                        choices=list(CONFIGS.keys()),
+                        help="Config preset (conservative, baseline, aggressive, "
+                             "concentrated)")
     args = parser.parse_args()
 
     if args.run_all:
-        run_all(plot=args.plot)
+        run_all(plot=args.plot, config_name=args.config)
     else:
+        apply_config(args.config)
         run(args.asset, require_trend=args.require_trend, plot=args.plot)
 
 

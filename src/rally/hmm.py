@@ -38,7 +38,7 @@ def fit_hmm(df_train: pd.DataFrame) -> tuple[GaussianHMM, StandardScaler, np.nda
         warnings.simplefilter("ignore")
         model = GaussianHMM(
             n_components=N_STATES,
-            covariance_type="full",
+            covariance_type="diag",
             n_iter=PIPELINE.hmm_n_iter,
             tol=PIPELINE.hmm_tol,
             random_state=42,

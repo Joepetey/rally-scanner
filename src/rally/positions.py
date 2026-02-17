@@ -284,6 +284,27 @@ def reconcile_with_broker(
     return warnings
 
 
+def tighten_trailing_stop(ticker: str, new_stop: float) -> dict | None:
+    """Tighten a position's trailing stop (only if new_stop > current).
+
+    Returns the updated position dict, or None if not found or not tightened.
+    """
+    state = load_positions()
+    for pos in state.get("positions", []):
+        if pos["ticker"] == ticker:
+            current = pos.get("trailing_stop", 0)
+            if new_stop > current:
+                pos["trailing_stop"] = round(new_stop, 2)
+                save_positions(state)
+                logger.info(
+                    "Tightened trailing stop for %s: %.2f → %.2f",
+                    ticker, current, new_stop,
+                )
+                return pos
+            return None
+    return None
+
+
 async def async_close_position(ticker: str, price: float, reason: str) -> dict | None:
     """Thread-safe close via asyncio.Lock."""
     async with _positions_lock:

@@ -46,13 +46,23 @@ async def _mcp_session() -> AsyncGenerator:
 
     server_params = StdioServerParameters(
         command="alpaca-mcp-server",
+        args=["serve"],
         env=env,
     )
 
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    try:
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                yield session
+    except BaseExceptionGroup as eg:
+        # anyio TaskGroup wraps MCP connection failures in BaseExceptionGroup
+        # which isn't caught by `except Exception`. Unwrap and re-raise as
+        # ConnectionError so callers can handle it normally.
+        msgs = [str(e) for e in eg.exceptions]
+        raise ConnectionError(
+            f"MCP server connection failed: {'; '.join(msgs)}"
+        ) from eg
 
 
 async def _call_tool(session, name: str, arguments: dict) -> dict:

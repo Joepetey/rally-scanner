@@ -16,6 +16,13 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
+# Limit per-worker thread count BEFORE importing numpy/sklearn/hmmlearn.
+# Without this, each subprocess spawns os.cpu_count() threads → 2 workers × 16
+# threads = 32 threads thrashing 16 cores.
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+
 import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression

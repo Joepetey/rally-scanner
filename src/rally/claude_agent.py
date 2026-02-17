@@ -165,7 +165,7 @@ TOOLS = [
             "properties": {
                 "config": {
                     "type": "string",
-                    "description": "Scan configuration: 'baseline' (default), 'conservative', 'aggressive', or 'concentrated'",
+                    "description": "Scan configuration: 'conservative' (default), 'baseline', 'aggressive', or 'concentrated'",
                     "enum": ["baseline", "conservative", "aggressive", "concentrated"]
                 }
             },
@@ -577,7 +577,7 @@ def _get_health() -> dict[str, Any]:
     return result
 
 
-def _run_scan(config: str = "baseline") -> dict[str, Any]:
+def _run_scan(config: str = "conservative") -> dict[str, Any]:
     """Run the market scanner and return results."""
     from datetime import datetime
     from .scanner import scan_all
@@ -686,7 +686,7 @@ def execute_tool(
     elif tool_name == "get_health":
         return _get_health()
     elif tool_name == "run_scan":
-        config = tool_input.get("config", "baseline")
+        config = tool_input.get("config", "conservative")
         return _run_scan(config)
     elif tool_name == "run_retrain":
         # Mark as async task - will be handled specially by discord_bot

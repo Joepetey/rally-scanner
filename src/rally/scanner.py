@@ -184,7 +184,7 @@ def _scan_one(args: tuple) -> dict:
 
 def scan_all(
     tickers: list[str] | None = None, show_positions: bool = False,
-    config_name: str = "baseline",
+    config_name: str = "conservative",
 ) -> list[dict]:
     # Apply config
     apply_config(config_name)
@@ -412,15 +412,64 @@ def _print_probability_table(results: list[dict]) -> None:
               f"{r['rsi']:>5.1f} {r['close']:>9.2f}{tag}")
 
 
+def scan_watchlist(
+    tickers: list[str],
+    config_name: str = "conservative",
+) -> list[dict]:
+    """Scan a specific set of tickers (e.g. near-threshold watchlist).
+
+    Lighter than scan_all: fewer workers, no console output.
+    Returns list of result dicts (same format as scan_all).
+    """
+    apply_config(config_name)
+
+    manifest = load_manifest()
+    if not manifest:
+        return []
+
+    scan_tickers = [t for t in tickers if t in manifest]
+    if not scan_tickers:
+        return []
+
+    # Fetch data
+    start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    try:
+        vix_data = fetch_vix(start=start)
+    except Exception:
+        vix_data = None
+
+    try:
+        ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
+    except Exception:
+        ohlcv_cache = {}
+
+    n_workers = min(4, len(scan_tickers))
+    work_items = [
+        (ticker, vix_data, ohlcv_cache.get(ticker))
+        for ticker in scan_tickers
+    ]
+
+    results = []
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {
+            pool.submit(_scan_one, item): item[0]
+            for item in work_items
+        }
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Daily rally scanner")
     parser.add_argument("--tickers", nargs="+", default=None,
                         help="Specific tickers to scan (default: all trained)")
     parser.add_argument("--positions", action="store_true",
                         help="Show and update open positions")
-    parser.add_argument("--config", default="baseline",
+    parser.add_argument("--config", default="conservative",
                         choices=list(CONFIGS.keys()),
-                        help="Trading config: baseline, conservative, aggressive, concentrated")
+                        help="Trading config: conservative, baseline, aggressive, concentrated")
     args = parser.parse_args()
     scan_all(tickers=args.tickers, show_positions=args.positions, config_name=args.config)
 

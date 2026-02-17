@@ -17,6 +17,7 @@ import discord
 from discord.ext import commands, tasks
 
 from .claude_agent import process_message
+from .config import PARAMS
 from .discord_db import (
     ensure_user,
     get_conversation_history,
@@ -623,11 +624,187 @@ def make_bot(token: str) -> RallyBot:
                 await _send_alert(embed)
                 logger.info(f"Reconciliation: {len(warnings)} issues found")
 
-        # Price alerts: every N minutes during market hours
-        @tasks.loop(minutes=_alert_interval)
-        async def scheduled_price_alerts() -> None:
+        # -- Proactive state --
+        _cached_regime_states: dict = {}
+        _watchlist_tickers: list[str] = []
+        _current_alert_interval = PARAMS.base_alert_interval
+        _last_alert_check = datetime.min
+
+        async def _check_regime_shifts() -> None:
+            """Check HMM regime states and alert on transitions."""
+            from .notify import _regime_shift_embed
+            from .regime_monitor import check_regime_shifts, is_cascade
+
+            if not PARAMS.regime_check_enabled or not _is_market_open():
+                return
+
+            transitions = await asyncio.to_thread(check_regime_shifts)
+            if not transitions:
+                return
+
+            # Update cached regime states
+            from .regime_monitor import get_regime_states
+            nonlocal _cached_regime_states
+            _cached_regime_states = get_regime_states()
+
+            await _send_alert(
+                discord.Embed.from_dict(_regime_shift_embed(transitions))
+            )
+
+            # Cascade: trigger early scan if many assets shifting
+            if is_cascade(transitions):
+                tickers_shifted = [t["ticker"] for t in transitions]
+                logger.info(
+                    "Regime cascade detected (%d shifts) — triggering early scan",
+                    len(transitions),
+                )
+                await _send_alert(discord.Embed(
+                    title="Regime Cascade — Early Scan Triggered",
+                    description=(
+                        f"{len(transitions)} regime shifts detected simultaneously.\n"
+                        f"Tickers: {', '.join(tickers_shifted)}\n"
+                        "Running full scan now..."
+                    ),
+                    color=0xFF4500,
+                ))
+                await _run_scan()
+
+        async def _run_risk_evaluation() -> None:
+            """Run proactive risk evaluation on current positions."""
+            from .notify import _risk_action_embed
+            from .risk_manager import evaluate, execute_actions
+
+            if not PARAMS.proactive_risk_enabled:
+                return
+
+            state = load_positions()
+            positions = state.get("positions", [])
+            if not positions:
+                return
+
+            # Get equity
             try:
+                from .alpaca_executor import get_account_equity
+                from .alpaca_executor import is_enabled as alpaca_enabled
+                if alpaca_enabled():
+                    equity = await get_account_equity()
+                else:
+                    equity = 100_000  # default for non-Alpaca mode
+            except Exception:
+                equity = 100_000
+
+            actions = await asyncio.to_thread(
+                evaluate, equity, positions, _cached_regime_states,
+            )
+
+            if not actions:
+                return
+
+            results = await execute_actions(actions, positions)
+
+            # Filter to meaningful results (skip no-ops)
+            meaningful = [r for r in results if not r.get("skipped")]
+            if meaningful:
+                await _send_alert(
+                    discord.Embed.from_dict(_risk_action_embed(meaningful))
+                )
+                logger.info(
+                    "Risk evaluation: %d actions taken (%s)",
+                    len(meaningful),
+                    ", ".join(f"{r['ticker']}:{r['action']}" for r in meaningful),
+                )
+
+        async def _run_midday_scan() -> None:
+            """Run a lightweight scan on watchlist tickers only."""
+            from .notify import _signal_embed
+            from .scanner import scan_watchlist
+
+            if not PARAMS.midday_scans_enabled or not _is_market_open():
+                return
+
+            if not _watchlist_tickers:
+                logger.debug("Mid-day scan: empty watchlist, skipping")
+                return
+
+            logger.info(
+                "Mid-day scan: checking %d watchlist tickers",
+                len(_watchlist_tickers),
+            )
+            results = await asyncio.to_thread(
+                scan_watchlist, _watchlist_tickers,
+            )
+
+            signals = [r for r in results if r.get("signal")]
+            if signals:
+                embed = discord.Embed.from_dict(_signal_embed(signals))
+                embed.title = f"Mid-day Signal ({len(signals)})"
+                embed.set_footer(text="From watchlist mid-day scan")
+                await _send_alert(embed)
+
+        def _should_use_fast_alerts() -> bool:
+            """Check if conditions warrant faster alert frequency."""
+            if not PARAMS.adaptive_alerts_enabled:
+                return False
+
+            state = load_positions()
+            positions = state.get("positions", [])
+
+            # Check 1: any position within stop_proximity_pct of stop
+            for pos in positions:
+                price = pos.get("current_price", 0)
+                stop = max(pos.get("stop_price", 0), pos.get("trailing_stop", 0))
+                if stop > 0 and price > 0:
+                    distance_pct = (price / stop - 1) * 100
+                    if 0 < distance_pct <= PARAMS.stop_proximity_pct:
+                        return True
+
+            # Check 2: portfolio drawdown > Tier 1 threshold
+            try:
+                from .alpaca_executor import is_enabled as alpaca_enabled
+                from .portfolio import compute_drawdown
+                if alpaca_enabled():
+                    # Use cached equity if available, skip if not
+                    pass
+                dd = compute_drawdown(100_000)
+                if dd >= PARAMS.risk_tier1_dd:
+                    return True
+            except Exception:
+                pass
+
+            return False
+
+        # Price alerts: runs every 1 minute, checks interval adaptively
+        @tasks.loop(minutes=1)
+        async def scheduled_price_alerts() -> None:
+            nonlocal _current_alert_interval, _last_alert_check
+            try:
+                now = datetime.now(_ET)
+
+                # Determine interval
+                if PARAMS.adaptive_alerts_enabled:
+                    fast = _should_use_fast_alerts()
+                    new_interval = (
+                        PARAMS.fast_alert_interval if fast
+                        else PARAMS.base_alert_interval
+                    )
+                    if new_interval != _current_alert_interval:
+                        logger.info(
+                            "Alert frequency: %dm → %dm (%s mode)",
+                            _current_alert_interval, new_interval,
+                            "fast" if fast else "normal",
+                        )
+                        _current_alert_interval = new_interval
+
+                # Check if enough time has elapsed since last check
+                elapsed = (now - _last_alert_check).total_seconds() / 60
+                if elapsed < _current_alert_interval:
+                    return
+
+                _last_alert_check = now
                 await _check_price_alerts()
+
+                # Run risk evaluation after price alerts
+                await _run_risk_evaluation()
             except Exception as e:
                 logger.exception("Price alert check failed")
                 await _send_error_alert("Price Alerts", e)
@@ -635,14 +812,45 @@ def make_bot(token: str) -> RallyBot:
         # Daily scan: 4:30 PM ET (21:30 UTC)
         @tasks.loop(time=time(hour=21, minute=30))
         async def scheduled_scan() -> None:
+            nonlocal _watchlist_tickers
             weekday = datetime.utcnow().weekday()
             if weekday >= 5:  # skip weekends
                 return
             try:
                 await _run_scan()
+
+                # Update watchlist for mid-day scans
+                from .persistence import load_manifest
+                manifest = load_manifest()
+                if manifest:
+                    _watchlist_tickers = sorted(manifest.keys())
+
+                # Run risk evaluation after scan (picks up regime changes)
+                await _run_risk_evaluation()
             except Exception as e:
                 logger.exception("Scheduled scan failed")
                 await _send_error_alert("Daily Scan", e)
+
+        # Regime check: every 30 minutes during market hours
+        @tasks.loop(minutes=30)
+        async def scheduled_regime_check() -> None:
+            try:
+                await _check_regime_shifts()
+            except Exception as e:
+                logger.exception("Regime check failed")
+                await _send_error_alert("Regime Check", e)
+
+        # Mid-day scans: 2 PM and 3 PM ET (19:00, 20:00 UTC)
+        @tasks.loop(time=[time(hour=19, minute=0), time(hour=20, minute=0)])
+        async def scheduled_midday_scan() -> None:
+            weekday = datetime.utcnow().weekday()
+            if weekday >= 5:
+                return
+            try:
+                await _run_midday_scan()
+            except Exception as e:
+                logger.exception("Mid-day scan failed")
+                await _send_error_alert("Mid-day Scan", e)
 
         # Reconciliation: every 30 minutes during market hours
         @tasks.loop(minutes=30)
@@ -682,11 +890,18 @@ def make_bot(token: str) -> RallyBot:
             if not scheduled_price_alerts.is_running():
                 scheduled_price_alerts.start()
                 logger.info(
-                    f"Scheduler: price alerts armed "
-                    f"(every {_alert_interval}m during market hours)"
+                    "Scheduler: price alerts armed "
+                    f"(adaptive: {PARAMS.base_alert_interval}m / "
+                    f"{PARAMS.fast_alert_interval}m fast)"
                 )
             if not scheduled_reconcile.is_running():
                 scheduled_reconcile.start()
                 logger.info("Scheduler: reconciliation armed (every 30m during market hours)")
+            if not scheduled_regime_check.is_running():
+                scheduled_regime_check.start()
+                logger.info("Scheduler: regime check armed (every 30m during market hours)")
+            if not scheduled_midday_scan.is_running():
+                scheduled_midday_scan.start()
+                logger.info("Scheduler: mid-day scans armed (2 PM, 3 PM ET)")
 
     return bot

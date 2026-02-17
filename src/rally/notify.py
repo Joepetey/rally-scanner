@@ -231,6 +231,77 @@ def _order_failure_embed(results: list) -> dict:
     }
 
 
+def _regime_shift_embed(transitions: list[dict]) -> dict:
+    """Build a Discord embed for regime shift alerts.
+
+    Each transition dict: {ticker, prev_regime, new_regime,
+                           p_compressed, p_normal, p_expanding}
+    """
+    fields = []
+    for t in transitions:
+        fields.append({
+            "name": t["ticker"],
+            "value": (
+                f"**{t['prev_regime']}** \u2192 **{t['new_regime']}**\n"
+                f"P(exp): {t['p_expanding']:.0%}\n"
+                f"P(comp): {t['p_compressed']:.0%}"
+            ),
+            "inline": True,
+        })
+    any_expanding = any(t["new_regime"] == "expanding" for t in transitions)
+    return {
+        "title": f"Regime Shift ({len(transitions)})",
+        "color": 0xFF0000 if any_expanding else 0xFF8C00,
+        "fields": fields[:25],
+        "footer": {"text": "HMM volatility regime transition detected"},
+    }
+
+
+def _risk_action_embed(results: list[dict]) -> dict:
+    """Build a Discord embed for proactive risk actions.
+
+    Each result dict: {ticker, action, success, reason, ...}
+    """
+    fields = []
+    for r in results:
+        if r.get("skipped"):
+            continue
+        if r["action"] == "close":
+            pnl = r.get("pnl_pct", 0)
+            sign = "+" if pnl >= 0 else ""
+            fields.append({
+                "name": f"\u274c {r['ticker']}",
+                "value": (
+                    f"**CLOSED** (risk reduction)\n"
+                    f"PnL: {sign}{pnl:.2f}%\n"
+                    f"Reason: {r['reason']}"
+                ),
+                "inline": True,
+            })
+        elif r["action"] == "tighten":
+            old = r.get("old_stop", 0)
+            new = r.get("new_stop", 0)
+            fields.append({
+                "name": f"\u26a0\ufe0f {r['ticker']}",
+                "value": (
+                    f"**Stop tightened**\n"
+                    f"${old:.2f} \u2192 ${new:.2f}\n"
+                    f"Reason: {r['reason']}"
+                ),
+                "inline": True,
+            })
+    if not fields:
+        return {"title": "Risk Actions", "color": 0x95A5A6,
+                "description": "No actions needed"}
+    any_close = any(r["action"] == "close" for r in results if not r.get("skipped"))
+    return {
+        "title": f"Proactive Risk Actions ({len(fields)})",
+        "color": 0xFF0000 if any_close else 0xFF8C00,
+        "fields": fields[:25],
+        "footer": {"text": "Automated risk management"},
+    }
+
+
 def _error_embed(title: str, details: str) -> dict:
     """Build a Discord embed for error alerts."""
     return {

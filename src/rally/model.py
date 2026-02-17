@@ -131,7 +131,8 @@ def walk_forward_train(df: pd.DataFrame) -> list[FoldResult]:
             preds[col] = df_test[col].values
         # Attach price data for trading
         for col in ["Open", "High", "Low", "Close", "ATR", "ATR_pct", "RV",
-                     "p_RV", "RangeHigh", "RangeLow", "MA200", "RSI"]:
+                     "p_RV", "RangeHigh", "RangeLow", "MA200", "RSI",
+                     "VIX_Close"]:
             if col in df_test.columns:
                 preds[col] = df_test[col].values
 

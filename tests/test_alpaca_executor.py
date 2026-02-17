@@ -13,7 +13,11 @@ from rally.alpaca_executor import (
     execute_entries,
     execute_exit,
     execute_exits,
+    get_account_equity,
+    get_all_positions,
+    get_snapshots,
     is_enabled,
+    place_trailing_stop,
 )
 from rally.notify import _order_embed, _order_failure_embed
 from rally.positions import (
@@ -550,3 +554,250 @@ def test_get_trail_order_ids_empty(tmp_path, monkeypatch):
 
     result = get_trail_order_ids()
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# get_account_equity (mocked MCP)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_account_equity():
+    account_resp = MagicMock()
+    account_resp.content = [MagicMock(text=json.dumps({
+        "equity": "125000.50",
+        "buying_power": "250000.00",
+    }))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = account_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        equity = await get_account_equity()
+
+    assert equity == 125000.50
+    mock_session.call_tool.assert_called_once_with(
+        "get_account_info", arguments={},
+    )
+
+
+# ---------------------------------------------------------------------------
+# get_all_positions (mocked MCP)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_all_positions():
+    positions_resp = MagicMock()
+    positions_resp.content = [MagicMock(text=json.dumps([
+        {
+            "symbol": "AAPL", "qty": "10",
+            "avg_entry_price": "150.25",
+            "market_value": "1520.00",
+            "unrealized_pl": "17.50",
+        },
+        {
+            "symbol": "MSFT", "qty": "5",
+            "avg_entry_price": "400.00",
+            "market_value": "2050.00",
+            "unrealized_pl": "50.00",
+        },
+    ]))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = positions_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        positions = await get_all_positions()
+
+    assert len(positions) == 2
+    assert positions[0]["ticker"] == "AAPL"
+    assert positions[0]["qty"] == 10
+    assert positions[0]["avg_entry_price"] == 150.25
+    assert positions[0]["market_value"] == 1520.00
+    assert positions[0]["unrealized_pl"] == 17.50
+    assert positions[1]["ticker"] == "MSFT"
+
+
+@pytest.mark.asyncio
+async def test_get_all_positions_empty():
+    empty_resp = MagicMock()
+    empty_resp.content = [MagicMock(text=json.dumps([]))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = empty_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        positions = await get_all_positions()
+
+    assert positions == []
+
+
+@pytest.mark.asyncio
+async def test_get_all_positions_non_list():
+    """If broker returns non-list (error/dict), return empty list."""
+    error_resp = MagicMock()
+    error_resp.content = [MagicMock(text=json.dumps({"error": "unauthorized"}))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = error_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        positions = await get_all_positions()
+
+    assert positions == []
+
+
+# ---------------------------------------------------------------------------
+# get_snapshots (mocked MCP)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_snapshots():
+    snap_resp = MagicMock()
+    snap_resp.content = [MagicMock(text=json.dumps({
+        "AAPL": {
+            "latestTrade": {"p": 152.50},
+            "latestQuote": {"bp": 152.40, "ap": 152.60, "bs": 100, "as": 200},
+        },
+        "MSFT": {
+            "latest_trade": {"price": 410.00},
+            "latest_quote": {
+                "bid_price": 409.90, "ask_price": 410.10,
+                "bid_size": 50, "ask_size": 75,
+            },
+        },
+    }))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = snap_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await get_snapshots(["AAPL", "MSFT"])
+
+    assert result["AAPL"]["price"] == 152.50
+    assert result["AAPL"]["bid"] == 152.40
+    assert result["AAPL"]["ask"] == 152.60
+    # Test snake_case fallback keys
+    assert result["MSFT"]["price"] == 410.00
+    assert result["MSFT"]["bid"] == 409.90
+
+
+@pytest.mark.asyncio
+async def test_get_snapshots_filters_crypto():
+    """Crypto tickers should be filtered out — only equity tickers sent."""
+    mock_session = AsyncMock()
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = await get_snapshots(["BTC", "ETH"])
+
+    assert result == {}
+    mock_session.call_tool.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# place_trailing_stop (mocked MCP)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_place_trailing_stop():
+    trail_resp = MagicMock()
+    trail_resp.content = [MagicMock(text=json.dumps({
+        "id": "trail-order-789",
+        "status": "accepted",
+    }))]
+
+    mock_session = AsyncMock()
+    mock_session.call_tool.return_value = trail_resp
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
+
+    assert trail_id == "trail-order-789"
+    mock_session.call_tool.assert_called_once_with(
+        "place_stock_order",
+        arguments={
+            "symbol": "AAPL",
+            "side": "sell",
+            "quantity": 10,
+            "type": "trailing_stop",
+            "trail_percent": 3.0,
+            "time_in_force": "gtc",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_place_trailing_stop_failure():
+    """On failure, returns None instead of raising."""
+    mock_session = AsyncMock()
+    mock_session.call_tool.side_effect = Exception("order rejected")
+
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
+
+    assert trail_id is None
+
+
+# ---------------------------------------------------------------------------
+# _mcp_session BaseExceptionGroup handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_connection_failure():
+    """BaseExceptionGroup from MCP should be converted to ConnectionError."""
+    from rally.alpaca_executor import _mcp_session
+
+    # Mock the lazy imports inside _mcp_session
+    mock_stdio = MagicMock()
+    mock_stdio.side_effect = BaseExceptionGroup(
+        "unhandled errors", [Exception("Connection closed")],
+    )
+
+    with patch.dict("sys.modules", {
+        "mcp": MagicMock(),
+        "mcp.client.stdio": MagicMock(stdio_client=mock_stdio),
+    }), patch.dict("os.environ", {
+        "ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test",
+    }):
+        with pytest.raises(ConnectionError, match="Connection closed"):
+            async with _mcp_session() as _:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_connection_failure_via_get_positions():
+    """Verify ConnectionError propagates through callers like get_all_positions."""
+    with patch("rally.alpaca_executor._mcp_session") as mock_ctx:
+        mock_ctx.return_value.__aenter__ = AsyncMock(
+            side_effect=ConnectionError("MCP server connection failed"),
+        )
+        with pytest.raises(ConnectionError):
+            await get_all_positions()
