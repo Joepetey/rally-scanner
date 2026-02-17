@@ -278,9 +278,7 @@ def make_bot(token: str) -> RallyBot:
             if not results:
                 return
 
-            signals = [r for r in results if r.get("signal")]
-            if signals:
-                await _send_alert(discord.Embed.from_dict(_signal_embed(signals)))
+            all_signals = [r for r in results if r.get("signal")]
 
             positions = load_positions()
             closed = positions.get("closed_today", [])
@@ -289,6 +287,18 @@ def make_bot(token: str) -> RallyBot:
                 record_closed_trades(closed)
 
             update_daily_snapshot(positions, results)
+
+            # Filter out signals for tickers we already hold
+            open_tickers = {
+                p["ticker"] for p in positions.get("positions", [])
+            }
+            signals = [
+                s for s in all_signals if s["ticker"] not in open_tickers
+            ]
+
+            # Only alert on genuinely new signals
+            if signals:
+                await _send_alert(discord.Embed.from_dict(_signal_embed(signals)))
 
             # Auto-execute on Alpaca if enabled
             from .alpaca_executor import is_enabled as alpaca_enabled
@@ -300,19 +310,11 @@ def make_bot(token: str) -> RallyBot:
                 )
                 from .notify import _order_embed, _order_failure_embed
 
-                # Filter out signals for tickers we already hold
-                open_tickers = {
-                    p["ticker"] for p in positions.get("positions", [])
-                }
-                new_signals = [
-                    s for s in signals if s["ticker"] not in open_tickers
-                ]
-
                 # External system boundary — broker outage must not break scan
                 try:
                     equity = await get_account_equity()
-                    if new_signals:
-                        entry_results = await execute_entries(new_signals, equity=equity)
+                    if signals:
+                        entry_results = await execute_entries(signals, equity=equity)
                         await _store_order_ids(entry_results)
                         ok = [r for r in entry_results if r.success]
                         fail = [r for r in entry_results if not r.success]
