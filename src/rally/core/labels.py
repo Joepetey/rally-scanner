@@ -5,7 +5,7 @@ Target variable construction — RALLY_ST binary label.
 import numpy as np
 import pandas as pd
 
-from .config import PARAMS, AssetConfig
+from ..config import PARAMS, AssetConfig
 
 
 def compute_labels(df: pd.DataFrame, asset: AssetConfig) -> pd.Series:

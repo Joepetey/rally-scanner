@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from rally.config import PARAMS, AssetConfig
-from rally.labels import compute_labels
+from rally.core.labels import compute_labels
 
 
 def test_labels_shape(ohlcv_df):

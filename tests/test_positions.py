@@ -2,7 +2,7 @@
 
 
 from rally.config import PARAMS
-from rally.positions import (
+from rally.trading.positions import (
     load_positions,
     reconcile_with_broker,
     save_positions,

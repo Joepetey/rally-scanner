@@ -60,9 +60,9 @@ def tmp_models_dir(tmp_path, monkeypatch):
     models = tmp_path / "models"
     models.mkdir()
 
-    import rally.persistence as persist
-    import rally.portfolio as portfolio
-    import rally.positions as positions
+    import rally.core.persistence as persist
+    import rally.trading.portfolio as portfolio
+    import rally.trading.positions as positions
 
     monkeypatch.setattr(persist, "MODELS_DIR", models)
     monkeypatch.setattr(portfolio, "DATA_DIR", models)

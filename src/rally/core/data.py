@@ -2,6 +2,7 @@
 Data fetching — daily OHLCV via yfinance, with batch download and disk caching.
 """
 
+import logging
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,7 +10,9 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from .config import PIPELINE, AssetConfig
+from ..config import PIPELINE, AssetConfig
+
+logger = logging.getLogger(__name__)
 
 # Session-level cache for VIX data (fetched once, reused across tickers)
 _vix_cache: dict[str, pd.Series] = {}
@@ -54,6 +57,18 @@ def fetch_vix(start: str = "2000-01-01", end: str | None = None) -> pd.Series:
     vix = df["Close"].rename("VIX_Close")
     _vix_cache[cache_key] = vix
     return vix
+
+
+def fetch_vix_safe(
+    start: str = "2000-01-01", end: str | None = None, verbose: bool = True,
+) -> pd.Series | None:
+    """Fetch VIX with graceful fallback to None on any error."""
+    try:
+        return fetch_vix(start=start, end=end)
+    except Exception as e:
+        if verbose:
+            logging.getLogger(__name__).warning("VIX data unavailable: %s", e)
+        return None
 
 
 def merge_vix(df: pd.DataFrame, vix: pd.Series) -> pd.DataFrame:
@@ -155,8 +170,8 @@ def fetch_daily_batch(
         return result
 
     # Phase 2: Batch download
-    print(f"  Batch downloading {len(tickers_to_fetch)} tickers "
-          f"({len(result)} from cache)...", flush=True)
+    logger.info("Batch downloading %d tickers (%d from cache)...",
+                len(tickers_to_fetch), len(result))
     try:
         raw = yf.download(
             tickers_to_fetch,
@@ -202,7 +217,7 @@ def fetch_daily_batch(
                     continue
 
     except Exception as e:
-        print(f"  WARNING: Batch download failed ({e}), falling back to sequential")
+        logger.warning("Batch download failed (%s), falling back to sequential", e)
         for ticker in tickers_to_fetch:
             try:
                 tmp_asset = AssetConfig(ticker=ticker, asset_class="equity",

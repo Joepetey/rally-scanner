@@ -75,6 +75,9 @@ class Params:
     profit_atr_mult: float = 2.0       # take-profit in ATR multiples
     time_stop_bars: int = 8
     rv_exit_pct: float = 0.80          # RV percentile for exhaustion exit
+    trailing_stop_atr_mult: float = 1.5  # trailing stop distance in ATR multiples
+    fallback_stop_pct: float = 0.03      # fallback hard stop (3% below entry)
+    default_atr_pct: float = 0.02        # fallback ATR % when real ATR unavailable
 
     # --- Portfolio-level risk ---
     max_portfolio_exposure: float = 1.0  # max total exposure (1.0 = 100% of equity)

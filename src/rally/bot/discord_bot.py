@@ -16,15 +16,15 @@ from datetime import datetime, time
 import discord
 from discord.ext import commands, tasks
 
+from ..config import PARAMS
+from ..core.persistence import load_manifest
+from ..trading.positions import load_positions
 from .claude_agent import process_message
-from .config import PARAMS
 from .discord_db import (
     ensure_user,
     get_conversation_history,
     save_conversation_history,
 )
-from .persistence import load_manifest
-from .positions import load_positions
 
 logger = logging.getLogger(__name__)
 
@@ -45,28 +45,6 @@ def _ensure_caller_from_message(message: discord.Message) -> None:
     """Auto-register user from message (not interaction)."""
     ensure_user(message.author.id, str(message.author))
 
-
-def _get_system_recommendation(ticker: str) -> dict | None:
-    """Look up the system's current recommendation for a ticker.
-
-    Checks open positions first (already entered by the system), then
-    falls back to the latest scan results cached in positions.json.
-    Returns dict with size, stop_price, target_price, entry_price or None.
-    """
-
-    state = load_positions()
-
-    # Check open positions (system already entered this trade)
-    for p in state.get("positions", []):
-        if p.get("ticker", "").upper() == ticker.upper():
-            return {
-                "entry_price": p.get("entry_price"),
-                "size": p.get("size", 0),
-                "stop_price": p.get("stop_price"),
-                "target_price": p.get("target_price"),
-            }
-
-    return None
 
 
 class RallyBot(commands.Bot):
@@ -103,7 +81,7 @@ def make_bot(token: str) -> RallyBot:
         """Run model retraining with progress updates."""
         import time
 
-        from .retrain import retrain_all
+        from ..live.retrain import retrain_all
 
         try:
             # Send initial message
@@ -283,7 +261,7 @@ def make_bot(token: str) -> RallyBot:
                 if r["ticker"] in open_tickers:
                     continue
                 p_rally = r.get("p_rally", 0)
-                if p_rally < 0.35:
+                if p_rally < PARAMS.watchlist_p_rally_min:
                     continue
                 watchlist.append({
                     "ticker": r["ticker"],
@@ -293,7 +271,7 @@ def make_bot(token: str) -> RallyBot:
                     "signal": bool(r.get("signal")),
                 })
 
-            wl_path = _Path(__file__).resolve().parent.parent.parent
+            wl_path = _Path(__file__).resolve().parent.parent.parent.parent
             wl_path = wl_path / "models" / "watchlist.json"
             wl_path.parent.mkdir(exist_ok=True)
             with open(wl_path, "w") as f:
@@ -305,10 +283,10 @@ def make_bot(token: str) -> RallyBot:
 
         async def _run_scan() -> None:
             """Run the scan pipeline in a thread, then post results."""
-            from .notify import _exit_embed, _signal_embed
-            from .portfolio import record_closed_trades, update_daily_snapshot
-            from .positions import load_positions
-            from .scanner import scan_all
+            from ..live.scanner import scan_all
+            from ..trading.portfolio import record_closed_trades, update_daily_snapshot
+            from ..trading.positions import load_positions
+            from .notify import _exit_embed, _positions_embed, _signal_embed
 
             logger.info("Scheduler: starting daily scan")
             results = await asyncio.to_thread(
@@ -341,6 +319,10 @@ def make_bot(token: str) -> RallyBot:
             # Only alert on genuinely new signals
             if signals:
                 await _send_alert(discord.Embed.from_dict(_signal_embed(signals)))
+
+            # Always show open positions summary
+            open_pos = positions.get("positions", [])
+            await _send_alert(discord.Embed.from_dict(_positions_embed(open_pos)))
 
             # Auto-execute on Alpaca if enabled
             from .alpaca_executor import is_enabled as alpaca_enabled
@@ -391,7 +373,7 @@ def make_bot(token: str) -> RallyBot:
 
         async def _store_order_ids(results: list) -> None:
             """Save Alpaca order IDs + trailing stop IDs to positions.json."""
-            from .positions import async_save_positions, load_positions
+            from ..trading.positions import async_save_positions, load_positions
             state = load_positions()
             for result in results:
                 if result.success and result.order_id:
@@ -409,15 +391,15 @@ def make_bot(token: str) -> RallyBot:
             """Run retrain in a thread, then post results."""
             import time as _time
 
+            from ..live.retrain import retrain_all
             from .notify import _retrain_embed
-            from .retrain import retrain_all
 
             logger.info("Scheduler: starting weekly retrain")
             t0 = _time.time()
             await asyncio.to_thread(retrain_all)
             elapsed = _time.time() - t0
 
-            from .persistence import load_manifest
+            from ..core.persistence import load_manifest
 
             manifest = load_manifest()
             health = {
@@ -448,10 +430,10 @@ def make_bot(token: str) -> RallyBot:
 
         async def _check_price_alerts() -> None:
             """Fetch live prices for open positions and alert on breaches."""
+            from ..core.data import fetch_quotes
+            from ..trading.positions import load_positions
             from .alpaca_executor import is_enabled as alpaca_enabled
-            from .data import fetch_quotes
             from .notify import _approaching_alert_embed, _price_alert_embed
-            from .positions import load_positions
 
             if not _is_market_open():
                 return
@@ -470,17 +452,17 @@ def make_bot(token: str) -> RallyBot:
             tickers = [p["ticker"] for p in positions]
 
             if alpaca_enabled():
+                from ..trading.positions import (
+                    async_save_positions,
+                    update_fill_prices,
+                )
+                from ..trading.positions import (
+                    load_positions as reload_positions,
+                )
                 from .alpaca_executor import (
                     check_pending_fills,
                     get_snapshots,
                     place_trailing_stop,
-                )
-                from .positions import (
-                    async_save_positions,
-                    update_fill_prices,
-                )
-                from .positions import (
-                    load_positions as reload_positions,
                 )
 
                 quotes = await get_snapshots(tickers)
@@ -500,8 +482,11 @@ def make_bot(token: str) -> RallyBot:
                     if (not pos.get("order_id")        # fill confirmed (order_id removed)
                             and not pos.get("trail_order_id")  # no trailing stop yet
                             and pos.get("entry_price")):
-                        atr_pct = pos.get("atr", 0) / pos["entry_price"] if pos.get("atr") else 0.02
-                        trail_pct = round(max(1.5 * atr_pct * 100, 1.0), 2)
+                        atr_pct = (pos["atr"] / pos["entry_price"]
+                                   if pos.get("atr") else PARAMS.default_atr_pct)
+                        trail_pct = round(
+                            max(PARAMS.trailing_stop_atr_mult * atr_pct * 100, 1.0), 2,
+                        )
                         qty = pos.get("qty")
                         if not qty:
                             # Estimate qty from broker positions
@@ -574,8 +559,8 @@ def make_bot(token: str) -> RallyBot:
                         # Execute exit immediately on Alpaca
                         if alpaca_enabled():
                             try:
+                                from ..trading.positions import async_close_position
                                 from .alpaca_executor import execute_exit
-                                from .positions import async_close_position
                                 trail_oid = pos.get("trail_order_id")
                                 result = await execute_exit(
                                     ticker, trail_order_id=trail_oid,
@@ -604,8 +589,8 @@ def make_bot(token: str) -> RallyBot:
                         # Execute exit immediately on Alpaca
                         if alpaca_enabled():
                             try:
+                                from ..trading.positions import async_close_position
                                 from .alpaca_executor import execute_exit
-                                from .positions import async_close_position
                                 trail_oid = pos.get("trail_order_id")
                                 result = await execute_exit(
                                     ticker, trail_order_id=trail_oid,
@@ -670,6 +655,7 @@ def make_bot(token: str) -> RallyBot:
 
         async def _reconcile() -> None:
             """Reconcile local positions with broker state."""
+            from ..trading.positions import get_trail_order_ids, reconcile_with_broker
             from .alpaca_executor import (
                 check_trail_stop_fills,
                 get_all_positions,
@@ -678,7 +664,6 @@ def make_bot(token: str) -> RallyBot:
                 is_enabled as alpaca_enabled,
             )
             from .notify import _error_embed
-            from .positions import get_trail_order_ids, reconcile_with_broker
 
             if not alpaca_enabled() or not _is_market_open():
                 return
@@ -706,8 +691,8 @@ def make_bot(token: str) -> RallyBot:
 
         async def _check_regime_shifts() -> None:
             """Check HMM regime states and alert on transitions."""
+            from ..trading.regime_monitor import check_regime_shifts, is_cascade
             from .notify import _regime_shift_embed
-            from .regime_monitor import check_regime_shifts, is_cascade
 
             if not PARAMS.regime_check_enabled or not _is_market_open():
                 return
@@ -717,7 +702,7 @@ def make_bot(token: str) -> RallyBot:
                 return
 
             # Update cached regime states
-            from .regime_monitor import get_regime_states
+            from ..trading.regime_monitor import get_regime_states
             nonlocal _cached_regime_states
             _cached_regime_states = get_regime_states()
 
@@ -745,8 +730,8 @@ def make_bot(token: str) -> RallyBot:
 
         async def _run_risk_evaluation() -> None:
             """Run proactive risk evaluation on current positions."""
+            from ..trading.risk_manager import evaluate, execute_actions
             from .notify import _risk_action_embed
-            from .risk_manager import evaluate, execute_actions
 
             if not PARAMS.proactive_risk_enabled:
                 return
@@ -790,8 +775,8 @@ def make_bot(token: str) -> RallyBot:
 
         async def _run_midday_scan() -> None:
             """Run a lightweight scan on watchlist tickers only."""
+            from ..live.scanner import scan_watchlist
             from .notify import _signal_embed
-            from .scanner import scan_watchlist
 
             if not PARAMS.midday_scans_enabled or not _is_market_open():
                 return
@@ -811,7 +796,7 @@ def make_bot(token: str) -> RallyBot:
             all_signals = [r for r in results if r.get("signal")]
 
             # Filter out tickers we already hold
-            from .positions import load_positions as _load_pos
+            from ..trading.positions import load_positions as _load_pos
             open_tickers = {
                 p["ticker"]
                 for p in _load_pos().get("positions", [])
@@ -845,8 +830,8 @@ def make_bot(token: str) -> RallyBot:
 
             # Check 2: portfolio drawdown > Tier 1 threshold
             try:
+                from ..trading.portfolio import compute_drawdown
                 from .alpaca_executor import is_enabled as alpaca_enabled
-                from .portfolio import compute_drawdown
                 if alpaca_enabled():
                     # Use cached equity if available, skip if not
                     pass
@@ -905,7 +890,7 @@ def make_bot(token: str) -> RallyBot:
                 await _run_scan()
 
                 # Update watchlist for mid-day scans
-                from .persistence import load_manifest
+                from ..core.persistence import load_manifest
                 manifest = load_manifest()
                 if manifest:
                     _watchlist_tickers = sorted(manifest.keys())
@@ -991,7 +976,7 @@ def make_bot(token: str) -> RallyBot:
 
             # Populate watchlist from manifest so mid-day scans work immediately
             try:
-                from .persistence import load_manifest
+                from ..core.persistence import load_manifest
                 manifest = load_manifest()
                 if manifest:
                     nonlocal _watchlist_tickers

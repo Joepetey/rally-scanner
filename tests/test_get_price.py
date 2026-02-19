@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 # claude_agent imports anthropic at module level; stub it before importing.
 sys.modules.setdefault("anthropic", MagicMock())
 
-from rally.claude_agent import _get_price, execute_tool  # noqa: E402, I001
+from rally.bot.claude_agent import _get_price, execute_tool  # noqa: E402, I001
 
 
 # ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@ from rally.claude_agent import _get_price, execute_tool  # noqa: E402, I001
 # ---------------------------------------------------------------------------
 
 
-@patch("rally.data.fetch_quotes")
+@patch("rally.core.data.fetch_quotes")
 def test_get_price_single_ticker(mock_fetch):
     mock_fetch.return_value = {
         "HD": {
@@ -35,7 +35,7 @@ def test_get_price_single_ticker(mock_fetch):
     assert result["quotes"]["HD"]["price"] == 392.00
 
 
-@patch("rally.data.fetch_quotes")
+@patch("rally.core.data.fetch_quotes")
 def test_get_price_multiple_tickers(mock_fetch):
     mock_fetch.return_value = {
         "HD": {"price": 392.00},
@@ -47,7 +47,7 @@ def test_get_price_multiple_tickers(mock_fetch):
     assert "AAPL" in result["quotes"]
 
 
-@patch("rally.data.fetch_quotes")
+@patch("rally.core.data.fetch_quotes")
 def test_get_price_invalid_ticker(mock_fetch):
     mock_fetch.return_value = {
         "INVALIDXYZ": {"error": "Could not fetch INVALIDXYZ: KeyError"}
@@ -62,14 +62,14 @@ def test_get_price_empty_list():
     assert "error" in result
 
 
-@patch("rally.data.fetch_quotes")
+@patch("rally.core.data.fetch_quotes")
 def test_get_price_caps_at_10(mock_fetch):
     mock_fetch.return_value = {}
     _get_price([f"T{i}" for i in range(20)])
     assert len(mock_fetch.call_args[0][0]) == 10
 
 
-@patch("rally.data.fetch_quotes")
+@patch("rally.core.data.fetch_quotes")
 def test_get_price_network_error(mock_fetch):
     mock_fetch.side_effect = ConnectionError("network down")
     result = _get_price(["HD"])
@@ -81,7 +81,7 @@ def test_get_price_network_error(mock_fetch):
 # ---------------------------------------------------------------------------
 
 
-@patch("rally.claude_agent._get_price")
+@patch("rally.bot.claude_agent._get_price")
 def test_execute_tool_dispatches_get_price(mock_gp):
     mock_gp.return_value = {"count": 1, "quotes": {"HD": {"price": 392}}}
     result = execute_tool("get_price", {"tickers": ["HD"]}, 12345, 10000)
@@ -94,9 +94,9 @@ def test_execute_tool_dispatches_get_price(mock_gp):
 # ---------------------------------------------------------------------------
 
 
-@patch("rally.data.yf.Ticker")
+@patch("rally.core.data.yf.Ticker")
 def test_fetch_quotes_success(mock_ticker_cls):
-    from rally.data import fetch_quotes
+    from rally.core.data import fetch_quotes
 
     fi_data = {
         "lastPrice": 392.0,
@@ -120,9 +120,9 @@ def test_fetch_quotes_success(mock_ticker_cls):
     assert result["HD"]["volume"] == 1_483_228
 
 
-@patch("rally.data.yf.Ticker")
+@patch("rally.core.data.yf.Ticker")
 def test_fetch_quotes_invalid_ticker(mock_ticker_cls):
-    from rally.data import fetch_quotes
+    from rally.core.data import fetch_quotes
 
     mock_ticker_cls.return_value.fast_info.__getitem__ = MagicMock(
         side_effect=KeyError("currentTradingPeriod")
@@ -132,7 +132,7 @@ def test_fetch_quotes_invalid_ticker(mock_ticker_cls):
 
 
 def test_fetch_quotes_empty_list():
-    from rally.data import fetch_quotes
+    from rally.core.data import fetch_quotes
 
     result = fetch_quotes([])
     assert result == {}

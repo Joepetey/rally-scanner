@@ -69,10 +69,12 @@ def send_discord(embeds: list[dict]) -> bool:
 
 def _signal_embed(signals: list[dict]) -> dict:
     """Build a Discord embed for new signals."""
+    from ..config import PARAMS as _P
+
     fields = []
     for s in sorted(signals, key=lambda x: x.get("p_rally", 0), reverse=True):
         close = s.get("close", 0)
-        atr_pct = s.get("atr_pct", 0.02)
+        atr_pct = s.get("atr_pct", _P.default_atr_pct)
         target = close * (1 + 2.0 * atr_pct)
         fields.append({
             "name": s.get("ticker", "?"),
@@ -302,6 +304,42 @@ def _risk_action_embed(results: list[dict]) -> dict:
     }
 
 
+def _positions_embed(positions: list[dict]) -> dict:
+    """Build a Discord embed showing open positions."""
+    if not positions:
+        return {
+            "title": "Open Positions (0)",
+            "color": 0x95A5A6,
+            "description": "No open positions",
+        }
+
+    sorted_pos = sorted(
+        positions,
+        key=lambda x: x.get("unrealized_pnl_pct", 0),
+        reverse=True,
+    )
+    lines = []
+    for p in sorted_pos:
+        pnl = p.get("unrealized_pnl_pct", 0)
+        sign = "+" if pnl >= 0 else ""
+        size = p.get("size", 0)
+        lines.append(
+            f"`{p['ticker']:<6s}` "
+            f"${p['current_price']:>7.2f}  "
+            f"**{sign}{pnl:.2f}%**  "
+            f"Stop ${p['stop_price']:.2f}  "
+            f"Target ${p['target_price']:.2f}  "
+            f"{p.get('bars_held', 0)}d  "
+            f"{size:.0%}"
+        )
+    any_loss = any(p.get("unrealized_pnl_pct", 0) < 0 for p in positions)
+    return {
+        "title": f"Open Positions ({len(positions)})",
+        "color": 0xFF8C00 if any_loss else 0x00FF00,
+        "description": "\n".join(lines),
+    }
+
+
 def _error_embed(title: str, details: str) -> dict:
     """Build a Discord embed for error alerts."""
     return {
@@ -330,10 +368,12 @@ def notify(
 
 def notify_signals(signals: list[dict]) -> None:
     """Format and send new entry signal alerts."""
+    from ..config import PARAMS as _P
+
     lines = [f"*NEW SIGNALS* ({len(signals)})\n"]
     for s in sorted(signals, key=lambda x: x.get("p_rally", 0), reverse=True):
         close = s.get("close", 0)
-        atr_pct = s.get("atr_pct", 0.02)
+        atr_pct = s.get("atr_pct", _P.default_atr_pct)
         target = close * (1 + 2.0 * atr_pct)
         lines.append(
             f"  {s.get('ticker', '?'):6s}  P={s.get('p_rally', 0):.0%}  "

@@ -16,18 +16,19 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import pandas as pd
 
-from .backtest import (  # noqa: E402
+from ..backtest.engine import (  # noqa: E402
     compute_equity_curve, compute_metrics, performance_by_year, print_report,
 )
-from .config import ASSETS, PARAMS
-from .data import fetch_daily, fetch_vix, merge_vix
-from .features import build_features
-from .labels import compute_labels
-from .model import combine_predictions, walk_forward_train
-from .scanner import CONFIGS, apply_config
-from .trading import generate_signals, simulate_trades
+from ..config import ASSETS, PARAMS
+from ..core.data import fetch_daily, fetch_vix_safe, merge_vix
+from ..core.features import build_features
+from ..core.labels import compute_labels
+from ..core.model import combine_predictions, walk_forward_train
+from ..backtest.common import CONFIGS_BY_NAME
+from .scanner import apply_config
+from ..trading.signals import generate_signals, simulate_trades
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -55,8 +56,9 @@ def run(
 
     _p("[2/6] Building features ...")
     try:
-        vix_data = fetch_vix()
-        df = merge_vix(df, vix_data)
+        vix_data = fetch_vix_safe()
+        if vix_data is not None:
+            df = merge_vix(df, vix_data)
     except Exception as e:
         _p(f"       WARNING: VIX data unavailable: {e}")
     df = build_features(df)
@@ -382,7 +384,7 @@ def main() -> None:
     parser.add_argument("--run-all", action="store_true",
                         help="Run backtest across all assets")
     parser.add_argument("--config", default="conservative",
-                        choices=list(CONFIGS.keys()),
+                        choices=list(CONFIGS_BY_NAME.keys()),
                         help="Config preset (conservative, baseline, aggressive, "
                              "concentrated)")
     args = parser.parse_args()

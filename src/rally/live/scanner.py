@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import logging
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -17,52 +18,35 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from .config import PARAMS, AssetConfig
-from .data import fetch_daily, fetch_daily_batch, fetch_vix, merge_vix
-from .features import build_features
-from .hmm import predict_hmm_probs
-from .persistence import load_manifest, load_model
-from .positions import load_positions, print_positions, update_positions
-from .trading import compute_position_size, generate_signals
+from ..backtest.common import CONFIGS_BY_NAME
+from ..config import PARAMS, AssetConfig
+
+logger = logging.getLogger(__name__)
+from ..core.data import fetch_daily, fetch_daily_batch, fetch_vix_safe, merge_vix
+from ..core.features import build_features
+from ..core.hmm import predict_hmm_probs
+from ..core.persistence import load_manifest, load_model
+from ..trading.positions import load_positions, print_positions, update_positions
+from ..trading.signals import compute_position_size, generate_signals
 
 warnings.filterwarnings("ignore")
 
 LOOKBACK_DAYS = 500  # enough for 252-bar percentile window + buffer
 
-# Named configurations (match backtest_universe.py)
-CONFIGS = {
-    "baseline": {
-        "p_rally_threshold": 0.50, "comp_score_threshold": 0.55,
-        "vol_target_k": 0.10, "max_risk_frac": 0.25,
-        "profit_atr_mult": 2.0, "time_stop_bars": 10,
-    },
-    "conservative": {
-        "p_rally_threshold": 0.55, "comp_score_threshold": 0.60,
-        "vol_target_k": 0.08, "max_risk_frac": 0.15,
-        "profit_atr_mult": 2.0, "time_stop_bars": 8,
-    },
-    "aggressive": {
-        "p_rally_threshold": 0.40, "comp_score_threshold": 0.45,
-        "vol_target_k": 0.12, "max_risk_frac": 0.30,
-        "profit_atr_mult": 3.0, "time_stop_bars": 15,
-    },
-    "concentrated": {
-        "p_rally_threshold": 0.55, "comp_score_threshold": 0.60,
-        "vol_target_k": 0.15, "max_risk_frac": 0.40,
-        "profit_atr_mult": 2.5, "time_stop_bars": 12,
-    },
-}
-
 
 def apply_config(config_name: str) -> None:
     """Override PARAMS with a named configuration."""
-    if config_name not in CONFIGS:
-        print(f"  ERROR: Unknown config '{config_name}'. "
-              f"Available: {', '.join(CONFIGS.keys())}")
+    cfg = CONFIGS_BY_NAME.get(config_name)
+    if cfg is None:
+        logger.error("Unknown config '%s'. Available: %s",
+                      config_name, ", ".join(CONFIGS_BY_NAME.keys()))
         raise SystemExit(1)
-    cfg = CONFIGS[config_name]
-    for key, val in cfg.items():
-        setattr(PARAMS, key, val)
+    PARAMS.p_rally_threshold = cfg.p_rally
+    PARAMS.comp_score_threshold = cfg.comp_score
+    PARAMS.vol_target_k = cfg.vol_k
+    PARAMS.max_risk_frac = cfg.max_risk
+    PARAMS.profit_atr_mult = cfg.profit_atr
+    PARAMS.time_stop_bars = cfg.time_stop
 
 
 def scan_single(
@@ -92,17 +76,14 @@ def scan_single(
     # Build features (live mode — lagged FAIL_DN_SCORE)
     df = build_features(df, live=True)
 
-    # HMM predictions
-    hmm_model = artifacts.get("hmm_model")
-    hmm_scaler = artifacts.get("hmm_scaler")
-    state_order = artifacts.get("state_order")
-
-    if hmm_model is not None:
-        hmm_probs = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df)
-        df = df.join(hmm_probs)
-    else:
-        for col in ["P_compressed", "P_expanding", "HMM_transition_signal"]:
-            df[col] = 0.0
+    # HMM predictions (predict_hmm_probs handles model=None gracefully)
+    hmm_probs = predict_hmm_probs(
+        artifacts.get("hmm_model"),
+        artifacts.get("hmm_scaler"),
+        artifacts.get("state_order"),
+        df,
+    )
+    df = df.join(hmm_probs)
 
     # Get the latest bar
     feature_cols = artifacts["feature_cols"]
@@ -191,32 +172,28 @@ def scan_all(
 
     manifest = load_manifest()
     if not manifest:
-        print("  ERROR: No trained models found. Run retrain.py first.")
+        logger.error("No trained models found. Run retrain.py first.")
         return
 
     if tickers:
         scan_tickers = [t for t in tickers if t in manifest]
         missing = [t for t in tickers if t not in manifest]
         if missing:
-            print(f"  WARNING: No models for: {', '.join(missing)}")
+            logger.warning("No models for: %s", ", ".join(missing))
     else:
         scan_tickers = sorted(manifest.keys())
 
     # Fetch VIX data once for all tickers
-    print("  Fetching VIX data...", end="\r", flush=True)
+    logger.info("Fetching VIX data...")
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    try:
-        vix_data = fetch_vix(start=start)
-    except Exception as e:
-        print(f"  WARNING: VIX data unavailable: {e}")
-        vix_data = None
+    vix_data = fetch_vix_safe(start=start)
 
     # Batch-fetch OHLCV for all tickers at once (much faster than individual fetches)
-    print("  Batch-fetching OHLCV data...", end="\r", flush=True)
+    logger.info("Batch-fetching OHLCV data...")
     try:
         ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
     except Exception as e:
-        print(f"  WARNING: Batch fetch failed ({e}), falling back to individual fetches")
+        logger.warning("Batch fetch failed (%s), falling back to individual fetches", e)
         ohlcv_cache = {}
 
     print(f"\n{'='*90}")
@@ -242,18 +219,14 @@ def scan_all(
         }
         for i, future in enumerate(as_completed(futures), 1):
             ticker = futures[future]
-            print(f"  Scanned {ticker:<6} ({i}/{len(scan_tickers)})...",
-                  end="\r", flush=True)
+            logger.debug("Scanned %s (%d/%d)", ticker, i, len(scan_tickers))
             results.append(future.result())
-
-    # Clear progress line
-    print(" " * 60, end="\r")
 
     # Separate results
     signals = [r for r in results if r.get("signal")]
     watchlist = [r for r in results if r.get("status") == "ok"
                  and not r.get("signal")
-                 and r.get("p_rally", 0) > 0.35]
+                 and r.get("p_rally", 0) > PARAMS.watchlist_p_rally_min]
     errors = [r for r in results if r.get("status") != "ok"]
     ok_results = [r for r in results if r.get("status") == "ok"]
 
@@ -433,10 +406,7 @@ def scan_watchlist(
 
     # Fetch data
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    try:
-        vix_data = fetch_vix(start=start)
-    except Exception:
-        vix_data = None
+    vix_data = fetch_vix_safe(start=start, verbose=False)
 
     try:
         ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
@@ -468,7 +438,7 @@ def main() -> None:
     parser.add_argument("--positions", action="store_true",
                         help="Show and update open positions")
     parser.add_argument("--config", default="conservative",
-                        choices=list(CONFIGS.keys()),
+                        choices=["conservative", "baseline", "aggressive", "concentrated"],
                         help="Trading config: conservative, baseline, aggressive, concentrated")
     args = parser.parse_args()
     scan_all(tickers=args.tickers, show_positions=args.positions, config_name=args.config)

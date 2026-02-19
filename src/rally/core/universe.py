@@ -7,13 +7,16 @@ Caches locally. Falls back to hardcoded S&P 100 if all fetches fail.
 
 import io
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CACHE_FILE = PROJECT_ROOT / "models" / "universe_cache.json"
 CACHE_MAX_AGE_DAYS = 30
 
@@ -136,34 +139,34 @@ def fetch_universe(force_refresh: bool = False) -> list[str]:
         sp500 = _fetch_sp500()
         all_tickers.update(sp500)
         sources.append(f"S&P 500 ({len(sp500)})")
-        print(f"    Fetched S&P 500: {len(sp500)} tickers")
+        logger.info("Fetched S&P 500: %d tickers", len(sp500))
     except Exception as e:
-        print(f"    WARNING: Could not fetch S&P 500: {e}")
+        logger.warning("Could not fetch S&P 500: %s", e)
 
     try:
         ndx500 = _fetch_nasdaq_top500()
         all_tickers.update(ndx500)
         sources.append(f"Nasdaq Top 500 ({len(ndx500)})")
-        print(f"    Fetched Nasdaq Top 500: {len(ndx500)} tickers")
+        logger.info("Fetched Nasdaq Top 500: %d tickers", len(ndx500))
     except Exception as e:
-        print(f"    WARNING: Could not fetch Nasdaq Top 500: {e}")
+        logger.warning("Could not fetch Nasdaq Top 500: %s", e)
         # Fall back to Nasdaq 100 if screener API fails
         try:
             ndx100 = _fetch_nasdaq100()
             all_tickers.update(ndx100)
             sources.append(f"Nasdaq 100 ({len(ndx100)})")
-            print(f"    Fetched Nasdaq 100 (fallback): {len(ndx100)} tickers")
+            logger.info("Fetched Nasdaq 100 (fallback): %d tickers", len(ndx100))
         except Exception as e2:
-            print(f"    WARNING: Could not fetch Nasdaq 100: {e2}")
+            logger.warning("Could not fetch Nasdaq 100: %s", e2)
 
     if all_tickers:
         tickers = sorted(all_tickers)
         _save_cache(tickers, " + ".join(sources))
-        print(f"    Universe: {len(tickers)} unique tickers (cached)")
+        logger.info("Universe: %d unique tickers (cached)", len(tickers))
         return tickers
 
     # Fallback
-    print("    WARNING: Fetch failed, using S&P 100 fallback")
+    logger.warning("Fetch failed, using S&P 100 fallback")
     return SP100_TICKERS
 
 

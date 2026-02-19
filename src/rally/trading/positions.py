@@ -7,15 +7,15 @@ Storage: models/positions.json
 import asyncio
 import json
 import logging
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from .config import PARAMS, TICKER_TO_GROUP
+from ..config import PARAMS, TICKER_TO_GROUP
+from ..utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 POSITIONS_FILE = PROJECT_ROOT / "models" / "positions.json"
 
 # Async lock for concurrent position writes (scan + price alerts + reconciliation)
@@ -33,18 +33,7 @@ def load_positions() -> dict:
 def save_positions(state: dict) -> None:
     """Save positions to disk atomically (write to temp, then rename)."""
     state["last_updated"] = datetime.now().isoformat()
-    POSITIONS_FILE.parent.mkdir(exist_ok=True)
-    # Atomic write: write to temp file in same directory, then os.replace
-    fd, tmp_path = tempfile.mkstemp(
-        dir=POSITIONS_FILE.parent, suffix=".tmp", prefix="positions_",
-    )
-    try:
-        with open(fd, "w") as f:
-            json.dump(state, f, indent=2, default=str)
-        Path(tmp_path).replace(POSITIONS_FILE)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
+    atomic_json_write(POSITIONS_FILE, state, default=str)
 
 
 def update_positions(state: dict, new_signals: list[dict], all_results: list[dict]) -> dict:
@@ -81,7 +70,9 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
         # Update trailing stop
         if current["close"] > pos.get("highest_close", pos["entry_price"]):
             pos["highest_close"] = current["close"]
-            new_trail = current["close"] - 1.5 * current.get("atr", current["close"] * 0.02)
+            atr_fallback = current["close"] * p.default_atr_pct
+            atr_val = current.get("atr", atr_fallback)
+            new_trail = current["close"] - p.trailing_stop_atr_mult * atr_val
             pos["trailing_stop"] = max(pos.get("trailing_stop", 0), new_trail)
 
         # Check exit conditions
@@ -134,7 +125,7 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
                 continue
             if group_exposures.get(g, 0) + sig_size > p.max_group_exposure:
                 continue
-        atr_pct = sig.get("atr_pct", 0.02)
+        atr_pct = sig.get("atr_pct", p.default_atr_pct)
         atr_val = sig["close"] * atr_pct
         still_open.append({
             "ticker": sig["ticker"],
@@ -143,7 +134,7 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
             "size": sig["size"],
             "stop_price": sig["range_low"],
             "target_price": round(sig["close"] + p.profit_atr_mult * atr_val, 2),
-            "trailing_stop": round(sig["close"] - 1.5 * atr_val, 2),
+            "trailing_stop": round(sig["close"] - p.trailing_stop_atr_mult * atr_val, 2),
             "highest_close": sig["close"],
             "atr": round(atr_val, 4),
             "bars_held": 0,

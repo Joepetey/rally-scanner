@@ -24,9 +24,9 @@ from .discord_db import (
     open_trade,
     set_capital,
 )
-from .persistence import load_manifest
-from .portfolio import load_equity_history, load_trade_journal
-from .positions import load_positions
+from ..core.persistence import load_manifest
+from ..trading.portfolio import load_equity_history, load_trade_journal
+from ..trading.positions import load_positions
 
 logger = logging.getLogger(__name__)
 
@@ -593,8 +593,8 @@ def _get_health() -> dict[str, Any]:
 def _run_scan(config: str = "conservative") -> dict[str, Any]:
     """Run the market scanner and return results."""
     from datetime import datetime
-    from .scanner import scan_all
-    from .positions import load_positions
+    from ..live.scanner import scan_all
+    from ..trading.positions import load_positions
 
     try:
         # Run the scan
@@ -652,7 +652,7 @@ def _get_watchlist() -> dict[str, Any]:
     from pathlib import Path
 
     wl_path = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent.parent.parent
         / "models" / "watchlist.json"
     )
     if not wl_path.exists():
@@ -664,7 +664,7 @@ def _get_watchlist() -> dict[str, Any]:
 
 def _get_price(tickers: list[str]) -> dict[str, Any]:
     """Fetch current quotes for one or more tickers."""
-    from .data import fetch_quotes
+    from ..core.data import fetch_quotes
 
     if not tickers:
         return {"error": "No tickers provided"}

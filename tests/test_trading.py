@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from rally.trading import compute_position_size, generate_signals
+from rally.trading.signals import compute_position_size, generate_signals
 
 
 def _make_preds(**overrides):

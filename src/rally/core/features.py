@@ -5,7 +5,7 @@ Feature engineering — compression, range structure, failed breakdowns, trend.
 import numpy as np
 import pandas as pd
 
-from .config import PARAMS
+from ..config import PARAMS
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,8 +114,8 @@ def compute_failed_breakdown(df: pd.DataFrame, live: bool = False) -> pd.DataFra
     k = p.trap_lookforward
     df = df.copy()
 
-    rsi = _rsi(df["Close"], p.rsi_period)
-    df["RSI"] = rsi
+    rsi_series = _rsi(df["Close"], p.rsi_period)
+    df["RSI"] = rsi_series
 
     # Use shorter range for breakdown detection (more frequent signals)
     trap_range_low = df["Low"].rolling(p.trap_range_period, min_periods=p.trap_range_period).min()
@@ -147,7 +147,7 @@ def compute_failed_breakdown(df: pd.DataFrame, live: bool = False) -> pd.DataFra
             continue
 
         best = 0.0
-        rsi_i = rsi.iloc[i]
+        rsi_i = rsi_series.iloc[i]
 
         for j in range(1, k + 1):
             idx = i + j
@@ -161,7 +161,7 @@ def compute_failed_breakdown(df: pd.DataFrame, live: bool = False) -> pd.DataFra
             if close_j > rl:
                 score = (close_j - rl) / atr_val
                 # Bonus if RSI also recovering
-                rsi_j = rsi.iloc[idx]
+                rsi_j = rsi_series.iloc[idx]
                 if not np.isnan(rsi_j) and not np.isnan(rsi_i) and rsi_j > rsi_i:
                     score *= 1.5
                 best = max(best, score)

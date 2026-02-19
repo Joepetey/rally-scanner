@@ -16,7 +16,7 @@ import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 from sklearn.preprocessing import StandardScaler
 
-from .config import PIPELINE
+from ..config import PIPELINE
 
 HMM_FEATURES = ["RV", "ATR_pct", "BB_width"]
 N_STATES = 3
@@ -54,13 +54,20 @@ def fit_hmm(df_train: pd.DataFrame) -> tuple[GaussianHMM, StandardScaler, np.nda
 
 
 def predict_hmm_probs(
-    model: GaussianHMM, scaler: StandardScaler,
-    state_order: np.ndarray, df: pd.DataFrame,
+    model: GaussianHMM | None, scaler: StandardScaler | None,
+    state_order: np.ndarray | None, df: pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Compute filtered state probabilities for each bar.
     Returns DataFrame with columns: P_compressed, P_normal, P_expanding.
+    If model is None, returns zeros (graceful degradation).
     """
+    if model is None:
+        return pd.DataFrame(
+            0.0, index=df.index,
+            columns=["P_compressed", "P_normal", "P_expanding", "HMM_transition_signal"],
+        )
+
     cols = [c for c in HMM_FEATURES if c in df.columns]
     mask = df[cols].notna().all(axis=1)
     X = df.loc[mask, cols].values

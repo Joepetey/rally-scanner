@@ -1,6 +1,6 @@
 """Tests for regime shift monitoring."""
 
-from rally.regime_monitor import (
+from rally.trading.regime_monitor import (
     _classify_regime,
     _is_significant_transition,
     _load_regime_states,
@@ -50,7 +50,7 @@ def test_not_significant_normal_to_compressed():
 def test_state_persistence(tmp_path, monkeypatch):
     """States are saved and loaded correctly."""
     state_file = tmp_path / "regime_states.json"
-    import rally.regime_monitor as rm
+    import rally.trading.regime_monitor as rm
     monkeypatch.setattr(rm, "REGIME_STATE_FILE", state_file)
 
     states = {
@@ -71,7 +71,7 @@ def test_state_persistence(tmp_path, monkeypatch):
 def test_state_persistence_empty(tmp_path, monkeypatch):
     """Empty file returns empty dict."""
     state_file = tmp_path / "regime_states.json"
-    import rally.regime_monitor as rm
+    import rally.trading.regime_monitor as rm
     monkeypatch.setattr(rm, "REGIME_STATE_FILE", state_file)
 
     loaded = _load_regime_states()

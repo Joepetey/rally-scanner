@@ -27,7 +27,7 @@ except ImportError:
     _ALPACA_AVAILABLE = False
 
 # local
-from . import config
+from .. import config
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +107,8 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
 
 
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
-    from .portfolio import is_circuit_breaker_active
-    from .positions import get_group_exposure, get_total_exposure, load_positions
+    from ..trading.portfolio import is_circuit_breaker_active
+    from ..trading.positions import get_group_exposure, get_total_exposure, load_positions
 
     results: list[OrderResult] = []
 

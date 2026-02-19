@@ -27,14 +27,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from rally.log import setup_logging
-from rally.scanner import scan_all
-from rally.retrain import retrain_all
-from rally.positions import load_positions
-from rally.persistence import load_manifest
-from rally.notify import (
+from rally.live.scanner import scan_all
+from rally.live.retrain import retrain_all
+from rally.trading.positions import load_positions
+from rally.core.persistence import load_manifest
+from rally.bot.notify import (
     notify_signals, notify_exits, notify_retrain_complete, notify_error,
 )
-from rally.portfolio import update_daily_snapshot, record_closed_trades
+from rally.trading.portfolio import update_daily_snapshot, record_closed_trades
 
 logger = logging.getLogger(__name__)
 

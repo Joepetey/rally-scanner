@@ -16,9 +16,9 @@ from pathlib import Path
 
 import joblib
 
-from .config import AssetConfig
+from ..config import AssetConfig
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 
 

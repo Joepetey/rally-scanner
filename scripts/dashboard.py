@@ -13,9 +13,9 @@ import argparse
 import sys
 from datetime import datetime
 
-from rally.positions import load_positions
-from rally.portfolio import load_equity_history, load_trade_journal
-from rally.persistence import load_manifest
+from rally.trading.positions import load_positions
+from rally.trading.portfolio import load_equity_history, load_trade_journal
+from rally.core.persistence import load_manifest
 
 
 W = 80

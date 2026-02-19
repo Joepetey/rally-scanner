@@ -1,6 +1,6 @@
 """Tests for price alert embeds and alert-checking logic."""
 
-from rally.notify import _approaching_alert_embed, _price_alert_embed
+from rally.bot.notify import _approaching_alert_embed, _price_alert_embed
 
 
 # ---------------------------------------------------------------------------

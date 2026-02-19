@@ -5,7 +5,7 @@ Trading rules — entry signals, position sizing, stops, and exits.
 import numpy as np
 import pandas as pd
 
-from .config import PARAMS
+from ..config import PARAMS
 
 
 def generate_signals(preds: pd.DataFrame, require_trend: bool = False) -> pd.Series:
@@ -78,7 +78,7 @@ def simulate_trades(
             # Track highest close for trailing stop
             if close[i] > highest_close:
                 highest_close = close[i]
-                new_trail = highest_close - 1.5 * atr[entry_idx]
+                new_trail = highest_close - p.trailing_stop_atr_mult * atr[entry_idx]
                 trailing_stop = max(trailing_stop, new_trail)
 
             # Check exit conditions (order matters)
@@ -142,13 +142,13 @@ def simulate_trades(
             entry_price = close[i]
             stop_price = preds["RangeLow"].iloc[i]
             if np.isnan(stop_price) or stop_price >= entry_price:
-                stop_price = entry_price * 0.97  # fallback: 3% stop
+                stop_price = entry_price * (1 - p.fallback_stop_pct)
             size = compute_position_size(preds.iloc[[i]]).iloc[0]
             if size > 0 and current_exposure + size <= max_exposure:
                 in_trade = True
                 bars_held = 0
                 highest_close = entry_price
-                trailing_stop = entry_price - 1.5 * atr[i]
+                trailing_stop = entry_price - p.trailing_stop_atr_mult * atr[i]
                 current_exposure += size
 
     return pd.DataFrame(trades) if trades else pd.DataFrame()

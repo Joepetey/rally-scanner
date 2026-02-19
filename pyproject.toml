@@ -49,6 +49,6 @@ select = ["E", "F", "I", "UP"]
 ignore = ["E402"]  # matplotlib.use("Agg") requires imports after call
 
 [tool.ruff.lint.per-file-ignores]
-"src/rally/main.py" = ["I001"]
-"src/rally/optimize.py" = ["I001"]
-"src/rally/backtest_universe.py" = ["I001"]
+"src/rally/live/main.py" = ["I001"]
+"src/rally/backtest/optimize.py" = ["I001"]
+"src/rally/backtest/universe_bt.py" = ["I001"]

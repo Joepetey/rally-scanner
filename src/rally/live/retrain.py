@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 import time
 import warnings
@@ -29,15 +30,17 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from .calibrate import calibrate_thresholds
-from .config import ASSETS, PARAMS, PIPELINE, AssetConfig
-from .data import fetch_daily_batch, fetch_vix, merge_vix
-from .features import build_features
-from .hmm import fit_hmm, predict_hmm_probs
-from .labels import compute_labels
-from .model import ALL_FEATURE_COLS
-from .persistence import load_manifest, save_model
-from .universe import get_universe
+from ..config import ASSETS, PARAMS, PIPELINE, AssetConfig
+from ..core.calibrate import calibrate_thresholds
+from ..core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
+from ..core.features import build_features
+from ..core.hmm import fit_hmm, predict_hmm_probs
+from ..core.labels import compute_labels
+from ..core.model import ALL_FEATURE_COLS
+from ..core.persistence import load_manifest, save_model
+from ..core.universe import get_universe
+
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 
@@ -72,14 +75,11 @@ def train_last_fold(
     # Fit HMM on training data
     try:
         hmm_model, hmm_scaler, state_order = fit_hmm(df_train_raw)
-        hmm_probs = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train_raw)
-        df_train_full = df_train_raw.join(hmm_probs)
     except (ValueError, np.linalg.LinAlgError):
         # HMM failed (convergence or singular covariance) — train without HMM features
-        df_train_full = df_train_raw.copy()
-        for col in ["P_compressed", "P_expanding", "HMM_transition_signal"]:
-            df_train_full[col] = 0.0
         hmm_model, hmm_scaler, state_order = None, None, None
+    hmm_probs = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train_raw)
+    df_train_full = df_train_raw.join(hmm_probs)
 
     # Filter valid rows
     valid = df_train_full[feature_cols + [target_col]].notna().all(axis=1)
@@ -182,28 +182,25 @@ def _is_fresh(manifest_entry: dict, max_age_days: int) -> bool:
 
 def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> None:
     if tickers is None:
-        print("  Fetching universe...")
+        logger.info("Fetching universe...")
         tickers = get_universe()
 
     n_workers = min(PIPELINE.n_workers, os.cpu_count() or 4)
     t0_total = time.time()
 
     # --- Phase 0: Fetch VIX ---
-    print("  Fetching VIX data...")
-    vix_data = None
-    try:
-        vix_data = fetch_vix()
-        print(f"  VIX: {len(vix_data)} bars loaded")
-    except Exception as e:
-        print(f"  WARNING: Could not fetch VIX: {e}")
+    logger.info("Fetching VIX data...")
+    vix_data = fetch_vix_safe()
+    if vix_data is not None:
+        logger.info("VIX: %d bars loaded", len(vix_data))
 
     # --- Phase 1: Batch fetch all OHLCV data ---
     t0_fetch = time.time()
-    print(f"\n  Phase 1: Batch fetching {len(tickers)} tickers...")
+    logger.info("Phase 1: Batch fetching %d tickers...", len(tickers))
     ohlcv_data = fetch_daily_batch(tickers)
     fetched = [t for t in tickers if t in ohlcv_data]
     fetch_time = time.time() - t0_fetch
-    print(f"  Fetched {len(fetched)}/{len(tickers)} tickers ({fetch_time:.1f}s)")
+    logger.info("Fetched %d/%d tickers (%.1fs)", len(fetched), len(tickers), fetch_time)
 
     # --- Phase 1.5: Skip fresh models ---
     if PIPELINE.skip_fresh_enabled:
@@ -217,15 +214,16 @@ def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> Non
             else:
                 to_train.append(ticker)
         if skipped:
-            print(f"  Skipping {skipped} fresh models (< {PIPELINE.skip_fresh_days} days old)")
+            logger.info("Skipping %d fresh models (< %d days old)",
+                        skipped, PIPELINE.skip_fresh_days)
         fetched = to_train
 
     # --- Phase 2: Parallel model training ---
-    print(f"\n{'='*70}")
-    print("  RALLY DETECTOR — WEEKLY RETRAIN")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  "
-          f"{len(fetched)} assets  |  {n_workers} workers")
-    print(f"{'='*70}")
+    logger.info("=" * 70)
+    logger.info("RALLY DETECTOR — WEEKLY RETRAIN")
+    logger.info("%s  |  %d assets  |  %d workers",
+                datetime.now().strftime("%Y-%m-%d %H:%M"), len(fetched), n_workers)
+    logger.info("=" * 70)
 
     success, failed = [], []
     t0_train = time.time()
@@ -243,7 +241,7 @@ def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> Non
             ticker = futures[future]
             try:
                 t_name, artifacts, asset, msg = future.result(timeout=120)
-                print(f"  [{i}/{len(fetched)}] {t_name}: {msg}")
+                logger.info("[%d/%d] %s: %s", i, len(fetched), t_name, msg)
 
                 if artifacts is not None and asset is not None:
                     save_model(t_name, artifacts, asset)
@@ -251,29 +249,31 @@ def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> Non
 
                     if validate and t_name in ASSETS:
                         hand = ASSETS[t_name]
-                        print(f"         [hand: r_up={hand.r_up:.3f} d_dn={hand.d_dn:.3f}]")
+                        logger.info("  [hand: r_up=%.3f d_dn=%.3f]",
+                                    hand.r_up, hand.d_dn)
                 else:
                     failed.append((t_name, msg))
 
             except Exception as e:
-                print(f"  [{i}/{len(fetched)}] {ticker}: TIMEOUT/ERROR: {e}")
+                logger.error("[%d/%d] %s: TIMEOUT/ERROR: %s",
+                             i, len(fetched), ticker, e)
                 failed.append((ticker, str(e)))
 
     train_time = time.time() - t0_train
     total_time = time.time() - t0_total
 
     # Summary
-    print(f"\n{'='*70}")
-    print(f"  RETRAIN COMPLETE: {len(success)} success, {len(failed)} failed")
-    print(f"  Fetch: {fetch_time:.1f}s  |  Train: {train_time:.1f}s  |  "
-          f"Total: {total_time:.1f}s")
+    logger.info("=" * 70)
+    logger.info("RETRAIN COMPLETE: %d success, %d failed", len(success), len(failed))
+    logger.info("Fetch: %.1fs  |  Train: %.1fs  |  Total: %.1fs",
+                fetch_time, train_time, total_time)
     if failed:
-        print("  Failed:")
+        logger.warning("Failed:")
         for t, reason in failed[:20]:
-            print(f"    {t}: {reason}")
+            logger.warning("  %s: %s", t, reason)
         if len(failed) > 20:
-            print(f"    ... and {len(failed) - 20} more")
-    print(f"{'='*70}")
+            logger.warning("  ... and %d more", len(failed) - 20)
+    logger.info("=" * 70)
 
 
 def main() -> None:

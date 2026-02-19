@@ -13,7 +13,7 @@ Logic:
 import numpy as np
 import pandas as pd
 
-from .config import PARAMS, AssetConfig
+from ..config import PARAMS, AssetConfig
 
 R_UP_MULT = 0.80
 R_UP_MIN, R_UP_MAX = 0.015, 0.10

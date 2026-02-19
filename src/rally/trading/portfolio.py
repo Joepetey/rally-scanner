@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "models"
 EQUITY_LOG = DATA_DIR / "equity_history.csv"
 TRADE_JOURNAL = DATA_DIR / "trade_journal.csv"
@@ -123,7 +123,7 @@ def compute_drawdown(equity: float) -> float:
 
 def is_circuit_breaker_active(equity: float) -> bool:
     """Check if the drawdown circuit breaker should block new entries."""
-    from .config import PARAMS
+    from ..config import PARAMS
     if not PARAMS.circuit_breaker_enabled:
         return False
     dd = compute_drawdown(equity)

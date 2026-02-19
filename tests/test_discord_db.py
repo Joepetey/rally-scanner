@@ -2,7 +2,7 @@
 
 import pytest
 
-from rally.discord_db import (
+from rally.bot.discord_db import (
     clear_conversation_history,
     close_trade,
     ensure_user,

@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from rally.discord_bot import make_bot
-from rally.discord_db import init_db
+from rally.bot.discord_bot import make_bot
+from rally.bot.discord_db import init_db
 from rally.log import setup_logging
 
 

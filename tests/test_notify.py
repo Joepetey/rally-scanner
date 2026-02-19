@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from rally.notify import (
+from rally.bot.notify import (
     notify_error,
     notify_exits,
     notify_retrain_complete,
@@ -28,8 +28,8 @@ def test_send_webhook_noop_without_env():
     assert send_webhook({"test": True}) is False
 
 
-@patch("rally.notify.send_telegram")
-@patch("rally.notify.send_email")
+@patch("rally.bot.notify.send_telegram")
+@patch("rally.bot.notify.send_email")
 def test_notify_signals_calls_backends(mock_email, mock_tg):
     signals = [
         {"ticker": "AAPL", "p_rally": 0.72, "close": 180.0,
@@ -42,8 +42,8 @@ def test_notify_signals_calls_backends(mock_email, mock_tg):
     assert mock_tg.called or mock_email.called
 
 
-@patch("rally.notify.send_telegram")
-@patch("rally.notify.send_email")
+@patch("rally.bot.notify.send_telegram")
+@patch("rally.bot.notify.send_email")
 def test_notify_exits_calls_backends(mock_email, mock_tg):
     closed = [
         {"ticker": "AAPL", "exit_reason": "profit_target",
@@ -53,22 +53,22 @@ def test_notify_exits_calls_backends(mock_email, mock_tg):
     assert mock_tg.called or mock_email.called
 
 
-@patch("rally.notify.send_telegram")
-@patch("rally.notify.send_email")
+@patch("rally.bot.notify.send_telegram")
+@patch("rally.bot.notify.send_email")
 def test_notify_retrain_complete_calls_backends(mock_email, mock_tg):
     health = {"fresh_count": 14, "total_count": 14, "stale_count": 0}
     notify_retrain_complete(health, elapsed=120.0)
     assert mock_tg.called or mock_email.called
 
 
-@patch("rally.notify.send_telegram")
-@patch("rally.notify.send_email")
+@patch("rally.bot.notify.send_telegram")
+@patch("rally.bot.notify.send_email")
 def test_notify_error_calls_backends(mock_email, mock_tg):
     notify_error("Test error", "Something went wrong")
     assert mock_tg.called or mock_email.called
 
 
-@patch("rally.notify.notify")
+@patch("rally.bot.notify.notify")
 def test_signal_formatter_content(mock_notify):
     signals = [
         {"ticker": "AAPL", "p_rally": 0.72, "close": 180.0,
@@ -81,7 +81,7 @@ def test_signal_formatter_content(mock_notify):
     assert "SIGNALS" in body
 
 
-@patch("rally.notify.notify")
+@patch("rally.bot.notify.notify")
 def test_exit_formatter_content(mock_notify):
     closed = [
         {"ticker": "MSFT", "exit_reason": "stop",

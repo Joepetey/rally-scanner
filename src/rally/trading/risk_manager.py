@@ -10,7 +10,7 @@ Three tiers of escalating intervention based on drawdown, regime state, and VIX:
 import logging
 from dataclasses import dataclass
 
-from .config import PARAMS
+from ..config import PARAMS
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def check_vix_spike() -> dict:
     try:
         from datetime import datetime, timedelta
 
-        from .data import fetch_vix
+        from ..core.data import fetch_vix
 
         start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
         vix = fetch_vix(start=start)
@@ -91,7 +91,7 @@ def evaluate(
                 ticker=pos["ticker"],
                 reason=f"Tier 1: drawdown {drawdown:.1%}",
                 new_trail_atr_mult=1.0,
-                old_trail_atr_mult=1.5,
+                old_trail_atr_mult=PARAMS.trailing_stop_atr_mult,
             ))
 
     # --- Tier 2: Close weakest position at 10-15% drawdown ---
@@ -146,13 +146,13 @@ def evaluate(
                 )
                 existing.reason += f" + VIX spike {vix_info['change_pct']:.0%}"
             else:
-                current_mult = 1.5
+                base_mult = PARAMS.trailing_stop_atr_mult
                 actions.append(RiskAction(
                     action_type="tighten_stop",
                     ticker=ticker,
                     reason=f"VIX spike: {vix_info['change_pct']:.0%} change",
-                    new_trail_atr_mult=round(current_mult * 0.7, 2),
-                    old_trail_atr_mult=current_mult,
+                    new_trail_atr_mult=round(base_mult * 0.7, 2),
+                    old_trail_atr_mult=base_mult,
                 ))
 
     # Deduplicate: keep only one close per ticker, skip tightens for closed tickers
@@ -204,10 +204,10 @@ async def _execute_close(action: RiskAction, positions: list[dict]) -> dict:
     price = pos.get("current_price", pos.get("entry_price", 0))
 
     try:
-        from .alpaca_executor import is_enabled as alpaca_enabled
+        from ..bot.alpaca_executor import is_enabled as alpaca_enabled
 
         if alpaca_enabled():
-            from .alpaca_executor import execute_exit
+            from ..bot.alpaca_executor import execute_exit
             trail_oid = pos.get("trail_order_id")
             order_result = await execute_exit(ticker, trail_order_id=trail_oid)
             if order_result.fill_price:
@@ -257,19 +257,19 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
                     "error": "Position not found in state", "reason": action.reason}
 
         # Update broker trailing stop if Alpaca is enabled
-        from .alpaca_executor import is_enabled as alpaca_enabled
+        from ..bot.alpaca_executor import is_enabled as alpaca_enabled
         if alpaca_enabled():
             trail_oid = pos.get("trail_order_id")
             if trail_oid:
-                from .alpaca_executor import cancel_order
+                from ..bot.alpaca_executor import cancel_order
                 await cancel_order(trail_oid)
 
             qty = pos.get("qty")
             if qty:
                 entry = pos.get("entry_price", 1)
-                atr_pct = atr / entry if entry else 0.02
+                atr_pct = atr / entry if entry else PARAMS.default_atr_pct
                 trail_pct = round(max(action.new_trail_atr_mult * atr_pct * 100, 0.5), 2)
-                from .alpaca_executor import place_trailing_stop
+                from ..bot.alpaca_executor import place_trailing_stop
                 new_oid = await place_trailing_stop(ticker, qty, trail_pct)
                 if new_oid:
                     from .positions import async_save_positions, load_positions

@@ -9,11 +9,12 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from .config import PARAMS
+from ..config import PARAMS
+from ..utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 REGIME_STATE_FILE = PROJECT_ROOT / "models" / "regime_states.json"
 
 
@@ -36,15 +37,7 @@ def _load_regime_states() -> dict:
 
 def _save_regime_states(states: dict) -> None:
     """Save regime states to disk atomically."""
-    REGIME_STATE_FILE.parent.mkdir(exist_ok=True)
-    tmp = REGIME_STATE_FILE.with_suffix(".tmp")
-    try:
-        with open(tmp, "w") as f:
-            json.dump(states, f, indent=2)
-        tmp.replace(REGIME_STATE_FILE)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_json_write(REGIME_STATE_FILE, states)
 
 
 def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
@@ -55,10 +48,10 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
     """
     from datetime import timedelta
 
-    from .data import fetch_daily_batch, fetch_vix
-    from .features import build_features
-    from .hmm import predict_hmm_probs
-    from .persistence import load_manifest, load_model
+    from ..core.data import fetch_daily_batch, fetch_vix_safe
+    from ..core.features import build_features
+    from ..core.hmm import predict_hmm_probs
+    from ..core.persistence import load_manifest, load_model
 
     manifest = load_manifest()
     if not manifest:
@@ -76,10 +69,7 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
     lookback_days = 500
     start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
-    try:
-        vix_data = fetch_vix(start=start)
-    except Exception:
-        vix_data = None
+    vix_data = fetch_vix_safe(start=start, verbose=False)
 
     try:
         ohlcv_cache = fetch_daily_batch(check_tickers, start=start)
@@ -104,7 +94,7 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
             if df is None or len(df) < 300:
                 continue
 
-            from .data import merge_vix
+            from ..core.data import merge_vix
             if vix_data is not None:
                 df = merge_vix(df, vix_data)
 
