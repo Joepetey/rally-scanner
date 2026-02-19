@@ -36,12 +36,11 @@ def save_positions(state: dict) -> None:
     atomic_json_write(POSITIONS_FILE, state, default=str)
 
 
-def update_positions(state: dict, new_signals: list[dict], all_results: list[dict]) -> dict:
-    """
-    Update position state:
-      1. Update open positions with current prices, check exit conditions
-      2. Add new signals not already in open positions
-      3. Save to disk
+def update_existing_positions(state: dict, all_results: list[dict]) -> dict:
+    """Update open positions with current prices and check exit conditions.
+
+    Only touches already-open positions — never adds new ones.
+    Saves to disk and returns updated state.
     """
     p = PARAMS
 
@@ -98,7 +97,21 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
         else:
             still_open.append(pos)
 
-    # Add new positions from signals (respecting portfolio + group exposure caps)
+    state["positions"] = still_open
+    state["closed_today"] = closed_today
+    save_positions(state)
+    return state
+
+
+def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
+    """Add new positions from signals, respecting portfolio + group exposure caps.
+
+    Call this only after broker fill confirmation (Alpaca).
+    Saves to disk and returns updated state.
+    """
+    p = PARAMS
+    still_open = state.get("positions", [])
+
     open_tickers = {pos["ticker"] for pos in still_open}
     current_exposure = sum(pos.get("size", 0) for pos in still_open)
     max_exposure = p.max_portfolio_exposure
@@ -143,6 +156,7 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
             "status": "open",
         })
         current_exposure += sig["size"]
+        open_tickers.add(sig["ticker"])
         # Update group tracking
         g = TICKER_TO_GROUP.get(sig["ticker"])
         if g:
@@ -150,8 +164,18 @@ def update_positions(state: dict, new_signals: list[dict], all_results: list[dic
             group_exposures[g] = group_exposures.get(g, 0) + sig["size"]
 
     state["positions"] = still_open
-    state["closed_today"] = closed_today
     save_positions(state)
+    return state
+
+
+def update_positions(state: dict, new_signals: list[dict], all_results: list[dict]) -> dict:
+    """Update existing positions and add new signals (backward-compat wrapper).
+
+    Combines update_existing_positions() + add_signal_positions().
+    Used by backtests and tests that expect the old all-in-one behavior.
+    """
+    state = update_existing_positions(state, all_results)
+    state = add_signal_positions(state, new_signals)
     return state
 
 

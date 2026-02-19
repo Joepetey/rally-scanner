@@ -7,30 +7,17 @@ from rally.bot.notify import (
     notify_exits,
     notify_retrain_complete,
     notify_signals,
-    send_email,
-    send_telegram,
-    send_webhook,
+    send_discord,
 )
 
 
-def test_send_telegram_noop_without_env():
-    """Telegram should no-op and return False when env vars are missing."""
-    assert send_telegram("test") is False
+def test_send_discord_noop_without_env():
+    """Discord should no-op and return False when env vars are missing."""
+    assert send_discord([{"test": True}]) is False
 
 
-def test_send_email_noop_without_env():
-    """Email should no-op and return False when env vars are missing."""
-    assert send_email("subj", "body") is False
-
-
-def test_send_webhook_noop_without_env():
-    """Webhook should no-op and return False when env vars are missing."""
-    assert send_webhook({"test": True}) is False
-
-
-@patch("rally.bot.notify.send_telegram")
-@patch("rally.bot.notify.send_email")
-def test_notify_signals_calls_backends(mock_email, mock_tg):
+@patch("rally.bot.notify.send_discord")
+def test_notify_signals_calls_discord(mock_discord):
     signals = [
         {"ticker": "AAPL", "p_rally": 0.72, "close": 180.0,
          "size": 0.10, "range_low": 175.0, "atr_pct": 0.02},
@@ -38,34 +25,30 @@ def test_notify_signals_calls_backends(mock_email, mock_tg):
          "size": 0.08, "range_low": 390.0, "atr_pct": 0.015},
     ]
     notify_signals(signals)
-    # Verify notify was called (which calls backends)
-    assert mock_tg.called or mock_email.called
+    assert mock_discord.called
 
 
-@patch("rally.bot.notify.send_telegram")
-@patch("rally.bot.notify.send_email")
-def test_notify_exits_calls_backends(mock_email, mock_tg):
+@patch("rally.bot.notify.send_discord")
+def test_notify_exits_calls_discord(mock_discord):
     closed = [
         {"ticker": "AAPL", "exit_reason": "profit_target",
          "realized_pnl_pct": 4.5, "bars_held": 5},
     ]
     notify_exits(closed)
-    assert mock_tg.called or mock_email.called
+    assert mock_discord.called
 
 
-@patch("rally.bot.notify.send_telegram")
-@patch("rally.bot.notify.send_email")
-def test_notify_retrain_complete_calls_backends(mock_email, mock_tg):
+@patch("rally.bot.notify.send_discord")
+def test_notify_retrain_complete_calls_discord(mock_discord):
     health = {"fresh_count": 14, "total_count": 14, "stale_count": 0}
     notify_retrain_complete(health, elapsed=120.0)
-    assert mock_tg.called or mock_email.called
+    assert mock_discord.called
 
 
-@patch("rally.bot.notify.send_telegram")
-@patch("rally.bot.notify.send_email")
-def test_notify_error_calls_backends(mock_email, mock_tg):
+@patch("rally.bot.notify.send_discord")
+def test_notify_error_calls_discord(mock_discord):
     notify_error("Test error", "Something went wrong")
-    assert mock_tg.called or mock_email.called
+    assert mock_discord.called
 
 
 @patch("rally.bot.notify.notify")

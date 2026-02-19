@@ -1,4 +1,4 @@
-.PHONY: setup scan retrain dashboard health discord test lint clean
+.PHONY: setup scan retrain dashboard health discord test lint clean sync-models-down sync-models-up
 
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/pytest
@@ -28,6 +28,14 @@ test:
 
 lint:
 	.venv/bin/ruff check src/ tests/
+
+sync-models-down:
+	@echo "Pulling models from Railway → local models/"
+	railway run --service rally-bot -- tar cf - -C /app/models . | tar xf - -C models/
+
+sync-models-up:
+	@echo "Pushing local models/ → Railway"
+	tar cf - -C models . | railway run --service rally-bot -- tar xf - -C /app/models/
 
 clean:
 	rm -rf __pycache__ src/rally/__pycache__ tests/__pycache__

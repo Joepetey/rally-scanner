@@ -87,7 +87,12 @@ class DataCache:
     """Transparent parquet disk cache for OHLCV data."""
 
     def __init__(self, cache_dir: str | None = None) -> None:
-        self.cache_dir = Path(cache_dir or PIPELINE.cache_dir)
+        raw = Path(cache_dir or PIPELINE.cache_dir)
+        # Resolve relative paths against project root (not CWD)
+        if not raw.is_absolute():
+            from .persistence import PROJECT_ROOT
+            raw = PROJECT_ROOT / raw
+        self.cache_dir = raw
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _path(self, ticker: str) -> Path:

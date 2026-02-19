@@ -26,7 +26,7 @@ from ..core.data import fetch_daily, fetch_daily_batch, fetch_vix_safe, merge_vi
 from ..core.features import build_features
 from ..core.hmm import predict_hmm_probs
 from ..core.persistence import load_manifest, load_model
-from ..trading.positions import load_positions, print_positions, update_positions
+from ..trading.positions import load_positions, print_positions, update_existing_positions
 from ..trading.signals import compute_position_size, generate_signals
 
 warnings.filterwarnings("ignore")
@@ -300,7 +300,7 @@ def scan_all(
     # --- POSITIONS ---
     if show_positions or signals:
         positions = load_positions()
-        positions = update_positions(positions, signals, results)
+        positions = update_existing_positions(positions, results)
         print_positions(positions)
 
     # Summary

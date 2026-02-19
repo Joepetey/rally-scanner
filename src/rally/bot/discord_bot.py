@@ -324,9 +324,10 @@ def make_bot(token: str) -> RallyBot:
             open_pos = positions.get("positions", [])
             await _send_alert(discord.Embed.from_dict(_positions_embed(open_pos)))
 
-            # Auto-execute on Alpaca if enabled
+            # Auto-execute on Alpaca if enabled — only add positions after fill
             from .alpaca_executor import is_enabled as alpaca_enabled
             if alpaca_enabled():
+                from ..trading.positions import add_signal_positions
                 from .alpaca_executor import (
                     execute_entries,
                     execute_exits,
@@ -339,10 +340,18 @@ def make_bot(token: str) -> RallyBot:
                     equity = await get_account_equity()
                     if signals:
                         entry_results = await execute_entries(signals, equity=equity)
-                        await _store_order_ids(entry_results)
                         ok = [r for r in entry_results if r.success]
                         fail = [r for r in entry_results if not r.success]
+
+                        # Add only filled signals to positions.json
                         if ok:
+                            filled_tickers = {r.ticker for r in ok}
+                            filled_signals = [
+                                s for s in signals if s["ticker"] in filled_tickers
+                            ]
+                            positions = load_positions()
+                            add_signal_positions(positions, filled_signals)
+                            await _store_order_ids(entry_results)
                             await _send_alert(
                                 discord.Embed.from_dict(_order_embed(ok, equity))
                             )

@@ -3,10 +3,12 @@
 
 from rally.config import PARAMS
 from rally.trading.positions import (
+    add_signal_positions,
     load_positions,
     reconcile_with_broker,
     save_positions,
     tighten_trailing_stop,
+    update_existing_positions,
     update_positions,
 )
 
@@ -284,3 +286,162 @@ def test_reconcile_detects_orphaned_positions(tmp_models_dir):
     assert len(warnings) == 1
     assert "Orphaned" in warnings[0]
     assert "MSFT" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# update_existing_positions / add_signal_positions (split functions)
+# ---------------------------------------------------------------------------
+
+
+def test_update_existing_no_new_positions(tmp_models_dir):
+    """update_existing_positions never adds new positions from signals."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "stop_price": 145.0,
+            "target_price": 160.0,
+            "trailing_stop": 148.0,
+            "highest_close": 155.0,
+            "bars_held": 1,
+            "size": 0.10,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    results = [
+        {"ticker": "AAPL", "status": "ok", "close": 152.0, "date": "2024-01-16", "atr": 3.0},
+        {"ticker": "MSFT", "status": "ok", "close": 400.0, "date": "2024-01-16"},
+    ]
+    updated = update_existing_positions(state, results)
+    # Only AAPL remains — MSFT never added even though it's in results
+    assert len(updated["positions"]) == 1
+    assert updated["positions"][0]["ticker"] == "AAPL"
+    assert updated["positions"][0]["current_price"] == 152.0
+
+
+def test_update_existing_triggers_exit(tmp_models_dir):
+    """update_existing_positions closes a position on stop hit."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "stop_price": 145.0,
+            "target_price": 160.0,
+            "trailing_stop": 148.0,
+            "highest_close": 155.0,
+            "bars_held": 2,
+            "size": 0.10,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    results = [{"ticker": "AAPL", "status": "ok", "close": 144.0, "date": "2024-01-16", "atr": 3.0}]
+    updated = update_existing_positions(state, results)
+    assert len(updated["positions"]) == 0
+    assert len(updated["closed_today"]) == 1
+    assert updated["closed_today"][0]["exit_reason"] == "stop"
+
+
+def test_add_signal_positions_basic(tmp_models_dir):
+    """add_signal_positions adds new positions from signals."""
+    state = {"positions": [], "closed_today": []}
+    signals = [{
+        "ticker": "MSFT",
+        "date": "2024-01-15",
+        "close": 400.0,
+        "size": 0.08,
+        "range_low": 390.0,
+        "atr_pct": 0.02,
+    }]
+    updated = add_signal_positions(state, signals)
+    assert len(updated["positions"]) == 1
+    assert updated["positions"][0]["ticker"] == "MSFT"
+    assert updated["positions"][0]["entry_price"] == 400.0
+
+
+def test_add_signal_positions_respects_exposure_cap(tmp_models_dir):
+    """add_signal_positions skips signals that would exceed exposure cap."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "size": PARAMS.max_portfolio_exposure - 0.01,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    signals = [{
+        "ticker": "MSFT",
+        "date": "2024-01-15",
+        "close": 400.0,
+        "size": 0.10,
+        "range_low": 390.0,
+        "atr_pct": 0.02,
+    }]
+    updated = add_signal_positions(state, signals)
+    # MSFT should not be added — would exceed max exposure
+    assert len(updated["positions"]) == 1
+    assert updated["positions"][0]["ticker"] == "AAPL"
+
+
+def test_add_signal_positions_no_duplicates(tmp_models_dir):
+    """add_signal_positions skips tickers already in open positions."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "size": 0.10,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    signals = [{
+        "ticker": "AAPL",
+        "date": "2024-01-15",
+        "close": 155.0,
+        "size": 0.12,
+        "range_low": 148.0,
+        "atr_pct": 0.02,
+    }]
+    updated = add_signal_positions(state, signals)
+    assert len(updated["positions"]) == 1
+
+
+def test_update_positions_wrapper(tmp_models_dir):
+    """update_positions wrapper calls both split functions."""
+    state = {
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "stop_price": 145.0,
+            "target_price": 160.0,
+            "trailing_stop": 148.0,
+            "highest_close": 155.0,
+            "bars_held": 1,
+            "size": 0.10,
+            "status": "open",
+            "entry_date": "2024-01-10",
+        }],
+        "closed_today": [],
+    }
+    signals = [{
+        "ticker": "MSFT",
+        "date": "2024-01-15",
+        "close": 400.0,
+        "size": 0.08,
+        "range_low": 390.0,
+        "atr_pct": 0.02,
+    }]
+    results = [
+        {"ticker": "AAPL", "status": "ok", "close": 152.0, "date": "2024-01-15", "atr": 3.0},
+        {"ticker": "MSFT", "status": "ok", "close": 400.0, "date": "2024-01-15"},
+    ]
+    updated = update_positions(state, signals, results)
+    # Both AAPL (updated) and MSFT (new) should be present
+    tickers = {p["ticker"] for p in updated["positions"]}
+    assert tickers == {"AAPL", "MSFT"}
