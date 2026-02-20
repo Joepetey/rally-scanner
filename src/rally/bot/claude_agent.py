@@ -13,6 +13,10 @@ from typing import Any
 # Third-party
 import anthropic
 
+from ..core.persistence import load_manifest
+from ..trading.portfolio import load_equity_history, load_trade_journal
+from ..trading.positions import get_merged_positions_sync
+
 # Local
 from .discord_db import (
     close_trade,
@@ -24,9 +28,6 @@ from .discord_db import (
     open_trade,
     set_capital,
 )
-from ..core.persistence import load_manifest
-from ..trading.portfolio import load_equity_history, load_trade_journal
-from ..trading.positions import load_positions
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,7 @@ TOOLS = [
 
 def _get_signals(discord_id: int, capital: float) -> dict[str, Any]:
     """Get recent entry signals (positions held ≤ 1 bar)."""
-    state = load_positions()
+    state = get_merged_positions_sync()
     positions = state.get("positions", [])
 
     recent_entries = [
@@ -267,7 +268,7 @@ def _get_signals(discord_id: int, capital: float) -> dict[str, Any]:
 
 def _get_system_positions(discord_id: int, capital: float) -> dict[str, Any]:
     """Get system's open positions."""
-    state = load_positions()
+    state = get_merged_positions_sync()
     positions = state.get("positions", [])
 
     if not positions:
@@ -350,7 +351,7 @@ def _enter_trade(discord_id: int, tool_input: dict[str, Any], capital: float) ->
     notes = tool_input.get("notes")
 
     # Auto-fill from system recommendation if not provided
-    state = load_positions()
+    state = get_merged_positions_sync()
     for p in state.get("positions", []):
         if p.get("ticker", "").upper() == ticker:
             if size is None:
@@ -571,7 +572,7 @@ def _get_health() -> dict[str, Any]:
         except (KeyError, ValueError):
             stale.append({"ticker": ticker, "age_days": 999})
 
-    state = load_positions()
+    state = get_merged_positions_sync()
     positions = state.get("positions", [])
     total_exposure = sum(p.get("size", 0) for p in positions) if positions else 0
 
@@ -593,8 +594,9 @@ def _get_health() -> dict[str, Any]:
 def _run_scan(config: str = "conservative") -> dict[str, Any]:
     """Run the market scanner and return results."""
     from datetime import datetime
+
     from ..live.scanner import scan_all
-    from ..trading.positions import load_positions
+    from ..trading.positions import get_merged_positions_sync
 
     try:
         # Run the scan
@@ -608,7 +610,7 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
             }
 
         # Get updated positions
-        state = load_positions()
+        state = get_merged_positions_sync()
         positions = state.get("positions", [])
 
         # Find new signals (bars_held <= 1)

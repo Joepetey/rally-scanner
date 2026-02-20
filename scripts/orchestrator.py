@@ -29,7 +29,7 @@ load_dotenv()
 from rally.log import setup_logging
 from rally.live.scanner import scan_all
 from rally.live.retrain import retrain_all
-from rally.trading.positions import load_positions
+from rally.trading.positions import get_merged_positions_sync
 from rally.core.persistence import load_manifest
 from rally.bot.notify import (
     notify_signals, notify_exits, notify_retrain_complete, notify_error,
@@ -101,7 +101,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         logger.info("No new signals")
 
     # Check for position exits
-    positions = load_positions()
+    positions = get_merged_positions_sync()
     closed = positions.get("closed_today", [])
     if closed:
         logger.info(f"{len(closed)} positions closed")
@@ -169,7 +169,7 @@ def cmd_health(args: argparse.Namespace) -> int:
             print(f"    {ticker:<8s} {age:>4d} days old")
 
     # Position summary
-    positions = load_positions()
+    positions = get_merged_positions_sync()
     open_pos = positions.get("positions", [])
     print(f"\n  Open positions: {len(open_pos)}")
     for p in open_pos:

@@ -75,6 +75,37 @@ def init_db(db_path: str | Path | None = None) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_conversation_user
             ON conversation_history(discord_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS system_positions (
+            ticker         TEXT PRIMARY KEY,
+            entry_price    REAL NOT NULL,
+            entry_date     TEXT NOT NULL,
+            stop_price     REAL DEFAULT 0,
+            target_price   REAL DEFAULT 0,
+            trailing_stop  REAL DEFAULT 0,
+            highest_close  REAL DEFAULT 0,
+            atr            REAL DEFAULT 0,
+            bars_held      INTEGER DEFAULT 0,
+            size           REAL DEFAULT 0,
+            qty            INTEGER DEFAULT 0,
+            order_id       TEXT,
+            trail_order_id TEXT,
+            updated_at     TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS closed_positions (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker           TEXT NOT NULL,
+            entry_price      REAL NOT NULL,
+            entry_date       TEXT NOT NULL,
+            exit_price       REAL NOT NULL,
+            exit_date        TEXT NOT NULL,
+            exit_reason      TEXT NOT NULL,
+            realized_pnl_pct REAL,
+            bars_held        INTEGER DEFAULT 0,
+            size             REAL DEFAULT 0,
+            created_at       TEXT DEFAULT (datetime('now'))
+        );
     """)
     # Migrate existing databases: add new columns if missing
     _migrate(conn)

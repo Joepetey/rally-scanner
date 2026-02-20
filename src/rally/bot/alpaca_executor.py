@@ -47,6 +47,11 @@ def is_enabled() -> bool:
     return os.environ.get("ALPACA_AUTO_EXECUTE") == "1"
 
 
+def has_alpaca_keys() -> bool:
+    """True if Alpaca API keys are configured (regardless of auto-execute)."""
+    return bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
+
+
 def _trading_client():
     """Create an Alpaca TradingClient."""
     return TradingClient(

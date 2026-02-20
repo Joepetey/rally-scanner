@@ -60,6 +60,7 @@ def tmp_models_dir(tmp_path, monkeypatch):
     models = tmp_path / "models"
     models.mkdir()
 
+    import rally.bot.discord_db as discord_db
     import rally.core.persistence as persist
     import rally.trading.portfolio as portfolio
     import rally.trading.positions as positions
@@ -68,6 +69,15 @@ def tmp_models_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(portfolio, "DATA_DIR", models)
     monkeypatch.setattr(portfolio, "EQUITY_LOG", models / "equity_history.csv")
     monkeypatch.setattr(portfolio, "TRADE_JOURNAL", models / "trade_journal.csv")
-    monkeypatch.setattr(positions, "POSITIONS_FILE", models / "positions.json")
+
+    # Point positions DB to temp directory
+    db_path = models / "rally_test.db"
+    monkeypatch.setattr(discord_db, "DB_PATH", db_path)
+
+    # Reset DB initialization flag so tables get created fresh
+    monkeypatch.setattr(positions, "_db_initialized", False)
+
+    # Initialize DB tables
+    discord_db.init_db(db_path)
 
     return models

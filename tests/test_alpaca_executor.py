@@ -1,6 +1,5 @@
 """Tests for Alpaca executor (alpaca-py SDK) and order embeds."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +22,8 @@ from rally.bot.notify import _order_embed, _order_failure_embed
 from rally.trading.positions import (
     close_position_intraday,
     get_trail_order_ids,
+    load_positions,
+    save_positions,
     update_fill_prices,
 )
 
@@ -112,26 +113,20 @@ def test_order_failure_embed():
 
 
 # ---------------------------------------------------------------------------
-# close_position_intraday
+# close_position_intraday (DB-backed)
 # ---------------------------------------------------------------------------
 
 
-def test_close_position_intraday(tmp_path, monkeypatch):
-    positions_file = tmp_path / "models" / "positions.json"
-    positions_file.parent.mkdir(parents=True)
-    state = {
+def test_close_position_intraday(tmp_models_dir):
+    save_positions({
         "positions": [
-            {"ticker": "AAPL", "entry_price": 150.0, "current_price": 145.0,
+            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
              "stop_price": 145.0, "target_price": 165.0, "status": "open"},
-            {"ticker": "MSFT", "entry_price": 400.0, "current_price": 410.0,
+            {"ticker": "MSFT", "entry_price": 400.0, "entry_date": "2024-01-10",
              "stop_price": 390.0, "target_price": 420.0, "status": "open"},
         ],
         "closed_today": [],
-        "last_updated": None,
-    }
-    positions_file.write_text(json.dumps(state))
-
-    monkeypatch.setattr("rally.trading.positions.POSITIONS_FILE", positions_file)
+    })
 
     closed = close_position_intraday("AAPL", 144.50, "stop")
     assert closed is not None
@@ -141,70 +136,51 @@ def test_close_position_intraday(tmp_path, monkeypatch):
     assert closed["realized_pnl_pct"] == pytest.approx(-3.67, abs=0.01)
     assert closed["status"] == "closed"
 
-    # Verify positions.json updated
-    reloaded = json.loads(positions_file.read_text())
+    # Verify DB updated
+    reloaded = load_positions()
     assert len(reloaded["positions"]) == 1
     assert reloaded["positions"][0]["ticker"] == "MSFT"
-    assert len(reloaded["closed_today"]) == 1
 
 
-def test_close_position_intraday_not_found(tmp_path, monkeypatch):
-    positions_file = tmp_path / "models" / "positions.json"
-    positions_file.parent.mkdir(parents=True)
-    state = {"positions": [], "closed_today": [], "last_updated": None}
-    positions_file.write_text(json.dumps(state))
-
-    monkeypatch.setattr("rally.trading.positions.POSITIONS_FILE", positions_file)
-
+def test_close_position_intraday_not_found(tmp_models_dir):
     result = close_position_intraday("AAPL", 144.50, "stop")
     assert result is None
 
 
 # ---------------------------------------------------------------------------
-# update_fill_prices
+# update_fill_prices (DB-backed)
 # ---------------------------------------------------------------------------
 
 
-def test_update_fill_prices(tmp_path, monkeypatch):
-    positions_file = tmp_path / "models" / "positions.json"
-    positions_file.parent.mkdir(parents=True)
-    state = {
+def test_update_fill_prices(tmp_models_dir):
+    save_positions({
         "positions": [
-            {"ticker": "AAPL", "entry_price": 150.0, "current_price": 152.0,
-             "order_id": "order-123", "unrealized_pnl_pct": 1.33, "status": "open"},
-            {"ticker": "MSFT", "entry_price": 400.0, "current_price": 405.0,
-             "status": "open"},
+            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
+             "current_price": 152.0, "order_id": "order-123",
+             "unrealized_pnl_pct": 1.33, "status": "open"},
+            {"ticker": "MSFT", "entry_price": 400.0, "entry_date": "2024-01-10",
+             "current_price": 405.0, "status": "open"},
         ],
         "closed_today": [],
-        "last_updated": None,
-    }
-    positions_file.write_text(json.dumps(state))
-    monkeypatch.setattr("rally.trading.positions.POSITIONS_FILE", positions_file)
+    })
 
     count = update_fill_prices({"order-123": 149.50})
     assert count == 1
 
-    reloaded = json.loads(positions_file.read_text())
-    aapl = reloaded["positions"][0]
+    reloaded = load_positions()
+    aapl = [p for p in reloaded["positions"] if p["ticker"] == "AAPL"][0]
     assert aapl["entry_price"] == 149.50
-    assert "order_id" not in aapl
-    # PnL recalculated: (152 / 149.50 - 1) * 100
-    assert aapl["unrealized_pnl_pct"] == pytest.approx(1.67, abs=0.01)
+    assert aapl["order_id"] is None
 
 
-def test_update_fill_prices_no_matches(tmp_path, monkeypatch):
-    positions_file = tmp_path / "models" / "positions.json"
-    positions_file.parent.mkdir(parents=True)
-    state = {
+def test_update_fill_prices_no_matches(tmp_models_dir):
+    save_positions({
         "positions": [
-            {"ticker": "AAPL", "entry_price": 150.0, "current_price": 152.0,
-             "status": "open"},
+            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
+             "current_price": 152.0, "status": "open"},
         ],
         "closed_today": [],
-        "last_updated": None,
-    }
-    positions_file.write_text(json.dumps(state))
-    monkeypatch.setattr("rally.trading.positions.POSITIONS_FILE", positions_file)
+    })
 
     count = update_fill_prices({"order-999": 149.50})
     assert count == 0
@@ -507,36 +483,28 @@ async def test_check_trail_stop_fills_empty():
 
 
 # ---------------------------------------------------------------------------
-# get_trail_order_ids (positions helper)
+# get_trail_order_ids (DB-backed positions helper)
 # ---------------------------------------------------------------------------
 
 
-def test_get_trail_order_ids(tmp_path, monkeypatch):
-    positions_file = tmp_path / "models" / "positions.json"
-    positions_file.parent.mkdir(parents=True)
-    state = {
+def test_get_trail_order_ids(tmp_models_dir):
+    save_positions({
         "positions": [
-            {"ticker": "AAPL", "trail_order_id": "trail-1", "status": "open"},
-            {"ticker": "MSFT", "status": "open"},  # no trail order
-            {"ticker": "NVDA", "trail_order_id": "trail-3", "status": "open"},
+            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
+             "trail_order_id": "trail-1", "status": "open"},
+            {"ticker": "MSFT", "entry_price": 400.0, "entry_date": "2024-01-10",
+             "status": "open"},  # no trail order
+            {"ticker": "NVDA", "entry_price": 500.0, "entry_date": "2024-01-10",
+             "trail_order_id": "trail-3", "status": "open"},
         ],
         "closed_today": [],
-        "last_updated": None,
-    }
-    positions_file.write_text(json.dumps(state))
-    monkeypatch.setattr("rally.trading.positions.POSITIONS_FILE", positions_file)
+    })
 
     result = get_trail_order_ids()
     assert result == {"AAPL": "trail-1", "NVDA": "trail-3"}
 
 
-def test_get_trail_order_ids_empty(tmp_path, monkeypatch):
-    positions_file = tmp_path / "models" / "positions.json"
-    positions_file.parent.mkdir(parents=True)
-    state = {"positions": [], "closed_today": [], "last_updated": None}
-    positions_file.write_text(json.dumps(state))
-    monkeypatch.setattr("rally.trading.positions.POSITIONS_FILE", positions_file)
-
+def test_get_trail_order_ids_empty(tmp_models_dir):
     result = get_trail_order_ids()
     assert result == {}
 

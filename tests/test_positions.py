@@ -1,11 +1,14 @@
-"""Tests for position tracking — load, save, update, exit logic."""
+"""Tests for position tracking — DB-backed CRUD, update, exit logic."""
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from rally.config import PARAMS
 from rally.trading.positions import (
     add_signal_positions,
+    get_merged_positions,
     load_positions,
-    reconcile_with_broker,
     save_positions,
     tighten_trailing_stop,
     update_existing_positions,
@@ -239,53 +242,8 @@ def test_tighten_trailing_stop_no_loosen(tmp_models_dir):
 
 def test_tighten_trailing_stop_not_found(tmp_models_dir):
     """tighten_trailing_stop returns None for unknown ticker."""
-    state = {"positions": [], "closed_today": []}
-    save_positions(state)
     result = tighten_trailing_stop("UNKNOWN", 150.0)
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# reconcile_with_broker
-# ---------------------------------------------------------------------------
-
-
-def test_reconcile_removes_ghost_positions(tmp_models_dir):
-    """Ghost positions (local but not at broker) should be auto-removed."""
-    state = {
-        "positions": [
-            {"ticker": "AAPL", "entry_price": 150.0, "status": "open"},
-            {"ticker": "GHOST1", "entry_price": 50.0, "status": "open"},
-            {"ticker": "GHOST2", "entry_price": 25.0, "status": "open"},
-        ],
-        "closed_today": [],
-    }
-    save_positions(state)
-
-    broker = [{"ticker": "AAPL", "qty": 10}]
-    warnings = reconcile_with_broker(broker, trail_fills={})
-
-    assert len(warnings) == 2
-    assert any("GHOST1" in w for w in warnings)
-    assert any("GHOST2" in w for w in warnings)
-
-    # Verify ghosts removed from disk
-    reloaded = load_positions()
-    tickers = [p["ticker"] for p in reloaded["positions"]]
-    assert tickers == ["AAPL"]
-
-
-def test_reconcile_detects_orphaned_positions(tmp_models_dir):
-    """Orphaned positions (at broker but not local) should be warned about."""
-    state = {"positions": [], "closed_today": []}
-    save_positions(state)
-
-    broker = [{"ticker": "MSFT", "qty": 5}]
-    warnings = reconcile_with_broker(broker, trail_fills={})
-
-    assert len(warnings) == 1
-    assert "Orphaned" in warnings[0]
-    assert "MSFT" in warnings[0]
 
 
 # ---------------------------------------------------------------------------
@@ -445,3 +403,103 @@ def test_update_positions_wrapper(tmp_models_dir):
     # Both AAPL (updated) and MSFT (new) should be present
     tickers = {p["ticker"] for p in updated["positions"]}
     assert tickers == {"AAPL", "MSFT"}
+
+
+# ---------------------------------------------------------------------------
+# get_merged_positions (Alpaca + DB metadata)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_merged_positions_alpaca_source(tmp_models_dir):
+    """get_merged_positions merges Alpaca holdings with DB metadata."""
+    # Seed DB with metadata
+    save_positions({
+        "positions": [{
+            "ticker": "AAPL",
+            "entry_price": 150.0,
+            "entry_date": "2024-01-10",
+            "stop_price": 145.0,
+            "target_price": 160.0,
+            "trailing_stop": 148.0,
+            "highest_close": 155.0,
+            "atr": 3.0,
+            "bars_held": 5,
+            "size": 0.10,
+        }],
+        "closed_today": [],
+    })
+
+    # Mock Alpaca returning AAPL
+    mock_broker = AsyncMock(return_value=[{
+        "ticker": "AAPL",
+        "qty": 10,
+        "avg_entry_price": 150.0,
+        "market_value": 1550.0,
+        "unrealized_pl": 50.0,
+    }])
+
+    with patch("rally.bot.alpaca_executor.get_all_positions", mock_broker):
+        state = await get_merged_positions()
+
+    assert len(state["positions"]) == 1
+    pos = state["positions"][0]
+    assert pos["ticker"] == "AAPL"
+    assert pos["qty"] == 10
+    # Metadata from DB
+    assert pos["stop_price"] == 145.0
+    assert pos["target_price"] == 160.0
+    assert pos["trailing_stop"] == 148.0
+    assert pos["bars_held"] == 5
+
+
+@pytest.mark.asyncio
+async def test_merged_positions_no_metadata(tmp_models_dir):
+    """Positions at Alpaca without DB metadata get default values."""
+    mock_broker = AsyncMock(return_value=[{
+        "ticker": "TSLA",
+        "qty": 5,
+        "avg_entry_price": 200.0,
+        "market_value": 1050.0,
+        "unrealized_pl": 50.0,
+    }])
+
+    with patch("rally.bot.alpaca_executor.get_all_positions", mock_broker):
+        state = await get_merged_positions()
+
+    assert len(state["positions"]) == 1
+    pos = state["positions"][0]
+    assert pos["ticker"] == "TSLA"
+    assert pos["stop_price"] == 0  # default — no metadata
+    assert pos["target_price"] == 0
+    assert pos["entry_price"] == 200.0  # from Alpaca
+
+
+def test_db_persistence_roundtrip(tmp_models_dir):
+    """Positions written to DB can be read back with correct values."""
+    from rally.trading.positions import load_position_meta, save_position_meta
+
+    save_position_meta({
+        "ticker": "GOOG",
+        "entry_price": 180.0,
+        "entry_date": "2024-02-01",
+        "stop_price": 175.0,
+        "target_price": 195.0,
+        "trailing_stop": 177.0,
+        "highest_close": 182.0,
+        "atr": 2.5,
+        "bars_held": 2,
+        "size": 0.07,
+        "qty": 15,
+        "order_id": "ord_123",
+        "trail_order_id": "trail_456",
+    })
+
+    loaded = load_position_meta("GOOG")
+    assert loaded is not None
+    assert loaded["ticker"] == "GOOG"
+    assert loaded["entry_price"] == 180.0
+    assert loaded["stop_price"] == 175.0
+    assert loaded["order_id"] == "ord_123"
+    assert loaded["trail_order_id"] == "trail_456"
+    assert loaded["status"] == "open"

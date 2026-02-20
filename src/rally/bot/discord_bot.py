@@ -18,7 +18,7 @@ from discord.ext import commands, tasks
 
 from ..config import PARAMS
 from ..core.persistence import load_manifest
-from ..trading.positions import load_positions
+from ..trading.positions import get_merged_positions, load_positions
 from .claude_agent import process_message
 from .discord_db import (
     ensure_user,
@@ -285,7 +285,6 @@ def make_bot(token: str) -> RallyBot:
             """Run the scan pipeline in a thread, then post results."""
             from ..live.scanner import scan_all
             from ..trading.portfolio import record_closed_trades, update_daily_snapshot
-            from ..trading.positions import load_positions
             from .notify import _exit_embed, _positions_embed, _signal_embed
 
             logger.info("Scheduler: starting daily scan")
@@ -297,7 +296,7 @@ def make_bot(token: str) -> RallyBot:
 
             all_signals = [r for r in results if r.get("signal")]
 
-            positions = load_positions()
+            positions = await get_merged_positions()
             closed = positions.get("closed_today", [])
             if closed:
                 await _send_alert(discord.Embed.from_dict(_exit_embed(closed)))
@@ -343,14 +342,14 @@ def make_bot(token: str) -> RallyBot:
                         ok = [r for r in entry_results if r.success]
                         fail = [r for r in entry_results if not r.success]
 
-                        # Add only filled signals to positions.json
+                        # Add only filled signals to DB
                         if ok:
                             filled_tickers = {r.ticker for r in ok}
                             filled_signals = [
                                 s for s in signals if s["ticker"] in filled_tickers
                             ]
-                            positions = load_positions()
-                            add_signal_positions(positions, filled_signals)
+                            fresh_positions = load_positions()
+                            add_signal_positions(fresh_positions, filled_signals)
                             await _store_order_ids(entry_results)
                             await _send_alert(
                                 discord.Embed.from_dict(_order_embed(ok, equity))
@@ -440,14 +439,13 @@ def make_bot(token: str) -> RallyBot:
         async def _check_price_alerts() -> None:
             """Fetch live prices for open positions and alert on breaches."""
             from ..core.data import fetch_quotes
-            from ..trading.positions import load_positions
             from .alpaca_executor import is_enabled as alpaca_enabled
             from .notify import _approaching_alert_embed, _price_alert_embed
 
             if not _is_market_open():
                 return
 
-            state = load_positions()
+            state = await get_merged_positions()
             positions = state.get("positions", [])
             if not positions:
                 return
@@ -663,34 +661,24 @@ def make_bot(token: str) -> RallyBot:
                             f"{len(approach_alerts)} warnings")
 
         async def _reconcile() -> None:
-            """Reconcile local positions with broker state."""
-            from ..trading.positions import get_trail_order_ids, reconcile_with_broker
-            from .alpaca_executor import (
-                check_trail_stop_fills,
-                get_all_positions,
+            """Check for trailing stop fills at broker."""
+            from ..trading.positions import (
+                close_position_by_trail_fill,
+                get_trail_order_ids,
             )
-            from .alpaca_executor import (
-                is_enabled as alpaca_enabled,
-            )
-            from .notify import _error_embed
+            from .alpaca_executor import check_trail_stop_fills
+            from .alpaca_executor import is_enabled as alpaca_enabled
 
             if not alpaca_enabled() or not _is_market_open():
                 return
 
-            broker_positions = await get_all_positions()
             trail_ids = get_trail_order_ids()
-            trail_fills = await check_trail_stop_fills(trail_ids) if trail_ids else {}
-
-            warnings = reconcile_with_broker(broker_positions, trail_fills)
-            if warnings:
-                details = "\n".join(f"- {w}" for w in warnings)
-                embed = discord.Embed.from_dict(
-                    _error_embed("Position Reconciliation", details)
-                )
-                # Use orange for warnings, not red
-                embed.color = 0xFF8C00
-                await _send_alert(embed)
-                logger.info(f"Reconciliation: {len(warnings)} issues found")
+            if not trail_ids:
+                return
+            trail_fills = await check_trail_stop_fills(trail_ids)
+            for ticker, fill_price in trail_fills.items():
+                close_position_by_trail_fill(ticker, fill_price)
+                logger.info("Trail stop filled: %s at %.2f", ticker, fill_price)
 
         # -- Proactive state --
         _cached_regime_states: dict = {}
@@ -745,7 +733,7 @@ def make_bot(token: str) -> RallyBot:
             if not PARAMS.proactive_risk_enabled:
                 return
 
-            state = load_positions()
+            state = await get_merged_positions()
             positions = state.get("positions", [])
             if not positions:
                 return
@@ -804,11 +792,11 @@ def make_bot(token: str) -> RallyBot:
 
             all_signals = [r for r in results if r.get("signal")]
 
-            # Filter out tickers we already hold
-            from ..trading.positions import load_positions as _load_pos
+            # Filter out tickers we already hold (Alpaca = source of truth)
+            merged = await get_merged_positions()
             open_tickers = {
                 p["ticker"]
-                for p in _load_pos().get("positions", [])
+                for p in merged.get("positions", [])
             }
             signals = [
                 s for s in all_signals if s["ticker"] not in open_tickers
@@ -820,12 +808,12 @@ def make_bot(token: str) -> RallyBot:
                 embed.set_footer(text="From watchlist mid-day scan")
                 await _send_alert(embed)
 
-        def _should_use_fast_alerts() -> bool:
+        async def _should_use_fast_alerts() -> bool:
             """Check if conditions warrant faster alert frequency."""
             if not PARAMS.adaptive_alerts_enabled:
                 return False
 
-            state = load_positions()
+            state = await get_merged_positions()
             positions = state.get("positions", [])
 
             # Check 1: any position within stop_proximity_pct of stop
@@ -861,7 +849,7 @@ def make_bot(token: str) -> RallyBot:
 
                 # Determine interval
                 if PARAMS.adaptive_alerts_enabled:
-                    fast = _should_use_fast_alerts()
+                    fast = await _should_use_fast_alerts()
                     new_interval = (
                         PARAMS.fast_alert_interval if fast
                         else PARAMS.base_alert_interval
