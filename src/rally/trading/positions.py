@@ -221,8 +221,14 @@ async def get_merged_positions() -> dict:
 def get_merged_positions_sync() -> dict:
     """Sync wrapper for get_merged_positions().
 
-    Falls back to DB-only when Alpaca keys aren't available.
+    Priority:
+    1. RALLY_API_URL set → fetch from Railway API (local dev)
+    2. Alpaca keys set   → query Alpaca + local DB
+    3. Fallback          → DB-only via load_positions()
     """
+    api_url = os.environ.get("RALLY_API_URL")
+    if api_url:
+        return _fetch_remote_positions(api_url)
     if not _has_alpaca_keys():
         return load_positions()
     try:
@@ -231,6 +237,24 @@ def get_merged_positions_sync() -> dict:
         return asyncio.run(get_merged_positions())
     # Already in async context — can't nest asyncio.run, fall back to DB
     return load_positions()
+
+
+def _fetch_remote_positions(api_url: str) -> dict:
+    """Fetch positions from the Railway API endpoint."""
+    import json
+    import urllib.request
+
+    url = f"{api_url.rstrip('/')}/api/positions"
+    req = urllib.request.Request(url)
+    api_key = os.environ.get("RALLY_API_KEY")
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        logger.warning("Failed to fetch positions from %s, falling back to local", url)
+        return load_positions()
 
 
 def _has_alpaca_keys() -> bool:

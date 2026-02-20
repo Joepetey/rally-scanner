@@ -1,6 +1,7 @@
 """Tests for position tracking — DB-backed CRUD, update, exit logic."""
 
-from unittest.mock import AsyncMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -503,3 +504,43 @@ def test_db_persistence_roundtrip(tmp_models_dir):
     assert loaded["order_id"] == "ord_123"
     assert loaded["trail_order_id"] == "trail_456"
     assert loaded["status"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# Remote fetch (RALLY_API_URL)
+# ---------------------------------------------------------------------------
+
+def test_remote_fetch_when_api_url_set(tmp_models_dir, monkeypatch):
+    """get_merged_positions_sync uses Railway API when RALLY_API_URL is set."""
+    from rally.trading.positions import get_merged_positions_sync
+
+    monkeypatch.setenv("RALLY_API_URL", "https://my-railway.app")
+    monkeypatch.setenv("RALLY_API_KEY", "secret123")
+
+    remote_data = {"positions": [{"ticker": "AAPL", "qty": 10}], "closed_today": []}
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(remote_data).encode()
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+        result = get_merged_positions_sync()
+
+    assert result == remote_data
+    # Verify auth header was set
+    req = mock_open.call_args[0][0]
+    assert req.get_header("Authorization") == "Bearer secret123"
+    assert req.full_url == "https://my-railway.app/api/positions"
+
+
+def test_remote_fetch_fallback_on_error(tmp_models_dir, monkeypatch):
+    """Falls back to local DB when Railway API is unreachable."""
+    from rally.trading.positions import get_merged_positions_sync
+
+    monkeypatch.setenv("RALLY_API_URL", "https://unreachable.app")
+
+    with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        result = get_merged_positions_sync()
+
+    assert "positions" in result
+    assert isinstance(result["positions"], list)

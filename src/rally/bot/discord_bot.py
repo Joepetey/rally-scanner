@@ -1,19 +1,24 @@
 """Interactive Discord bot for market-rally — slash commands + rich embeds.
 
-Reads shared disk state (positions.json, manifest.json, equity_history.csv)
-for system queries. Writes to SQLite for per-user trade tracking.
+Reads position data from Alpaca + SQLite, manifest, and equity history.
+Writes to SQLite for per-user trade tracking.
 
 Includes a built-in scheduler for scan/retrain so no external cron is needed
 (useful for Railway/cloud deployment).
+
+Exposes an HTTP API on $PORT (default 8080) for local tools to query
+positions from the Railway deployment.
 """
 
 import asyncio
+import json as _json
 import logging
 import os
 import zoneinfo
 from datetime import datetime, time
 
 import discord
+from aiohttp import web
 from discord.ext import commands, tasks
 
 from ..config import PARAMS
@@ -35,6 +40,43 @@ BLUE = 0x0099FF
 GOLD = 0xFFD700
 GRAY = 0x95A5A6
 
+
+# ---------------------------------------------------------------------------
+# HTTP API server (runs alongside the Discord bot)
+# ---------------------------------------------------------------------------
+
+async def _handle_positions(request: web.Request) -> web.Response:
+    """Return merged Alpaca + DB positions as JSON."""
+    api_key = os.environ.get("RALLY_API_KEY")
+    if api_key:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {api_key}":
+            return web.json_response({"error": "unauthorized"}, status=401)
+    state = await get_merged_positions()
+    return web.Response(
+        text=_json.dumps(state), content_type="application/json",
+    )
+
+
+async def _handle_health(request: web.Request) -> web.Response:
+    """Simple health check."""
+    return web.json_response({"status": "ok"})
+
+
+async def start_api_server() -> None:
+    """Start the aiohttp API server alongside the Discord bot."""
+    app = web.Application()
+    app.router.add_get("/api/positions", _handle_positions)
+    app.router.add_get("/health", _handle_health)
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("API server listening on port %d", port)
+
+
+# ---------------------------------------------------------------------------
 
 def _ensure_caller(interaction: discord.Interaction) -> None:
     """Auto-register the calling Discord user."""
@@ -65,6 +107,7 @@ class RallyBot(commands.Bot):
                 name="rally signals",
             )
         )
+        asyncio.create_task(start_api_server())
 
 
 def make_bot(token: str) -> RallyBot:

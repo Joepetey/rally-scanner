@@ -28,6 +28,7 @@ dev = [
 ]
 discord = [
     "discord.py>=2.3",
+    "aiohttp>=3.9",
 ]
 alpaca = [
     "alpaca-py>=0.29",
