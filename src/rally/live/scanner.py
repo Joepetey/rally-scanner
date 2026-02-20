@@ -22,7 +22,13 @@ from ..backtest.common import CONFIGS_BY_NAME
 from ..config import PARAMS, AssetConfig
 
 logger = logging.getLogger(__name__)
-from ..core.data import fetch_daily, fetch_daily_batch, fetch_vix_safe, merge_vix
+from ..core.data import (
+    fetch_daily,
+    fetch_daily_batch,
+    fetch_quotes,
+    fetch_vix_safe,
+    merge_vix,
+)
 from ..core.features import build_features
 from ..core.hmm import predict_hmm_probs
 from ..core.persistence import load_manifest, load_model
@@ -233,6 +239,20 @@ def scan_all(
                  and r.get("p_rally", 0) > PARAMS.watchlist_p_rally_min]
     errors = [r for r in results if r.get("status") != "ok"]
     ok_results = [r for r in results if r.get("status") == "ok"]
+
+    # Update signals with live prices so entries/stops/targets use current market price
+    if signals:
+        live_tickers = [s["ticker"] for s in signals]
+        quotes = fetch_quotes(live_tickers)
+        for sig in signals:
+            q = quotes.get(sig["ticker"], {})
+            if "price" in q:
+                daily_close = sig["close"]
+                sig["close"] = q["price"]
+                logger.info(
+                    "%s: live price $%.2f (daily close was $%.2f)",
+                    sig["ticker"], q["price"], daily_close,
+                )
 
     # --- MARKET BREADTH ---
     if ok_results:

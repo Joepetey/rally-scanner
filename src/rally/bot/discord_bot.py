@@ -1028,13 +1028,11 @@ def make_bot(token: str) -> RallyBot:
             except Exception:
                 logger.debug("No manifest found — watchlist empty until first scan")
 
-            # Run initial scan if market is open (don't wait for 4:30 PM)
+            # No auto-scan on restart to avoid unintended entries
             if _is_market_open():
-                logger.info("Market is open — running startup scan")
-                try:
-                    await _run_scan()
-                except Exception as e:
-                    logger.exception("Startup scan failed")
-                    await _send_error_alert("Startup Scan", e)
+                logger.info(
+                    "Market is open — skipping startup scan "
+                    "(next scheduled scan at 4:30 PM ET)"
+                )
 
     return bot

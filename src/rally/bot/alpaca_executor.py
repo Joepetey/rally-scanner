@@ -241,26 +241,47 @@ def _execute_exit_sync(
     client, ticker: str, trail_order_id: str | None = None,
 ) -> OrderResult:
     """Execute a single exit using an existing client (synchronous)."""
+    import time
+
     # Cancel the associated trailing stop before closing
     if trail_order_id:
         try:
             client.cancel_order_by_id(trail_order_id)
             logger.info("Cancelled trailing stop %s for %s", trail_order_id, ticker)
+            # Wait for Alpaca to release the held shares
+            time.sleep(0.5)
         except Exception as e:
             logger.warning(
                 "Could not cancel trailing stop %s for %s: %s",
                 trail_order_id, ticker, e,
             )
 
-    order = client.close_position(symbol_or_asset_id=ticker)
-    fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
-    raw_qty = order.qty or order.filled_qty or 0
-    qty = int(float(str(raw_qty)))
-    return OrderResult(
-        ticker=ticker, side="sell", qty=qty, success=True,
-        order_id=str(order.id),
-        fill_price=fill_price,
-    )
+    # Retry close in case cancel hasn't fully released held shares
+    last_err = None
+    for attempt in range(3):
+        try:
+            order = client.close_position(symbol_or_asset_id=ticker)
+            fill_price = (
+                float(order.filled_avg_price) if order.filled_avg_price else None
+            )
+            raw_qty = order.qty or order.filled_qty or 0
+            qty = int(float(str(raw_qty)))
+            return OrderResult(
+                ticker=ticker, side="sell", qty=qty, success=True,
+                order_id=str(order.id),
+                fill_price=fill_price,
+            )
+        except Exception as e:
+            last_err = e
+            if "40310000" in str(e) and attempt < 2:
+                logger.info(
+                    "Shares still held for %s, retrying in 1s (attempt %d/3)",
+                    ticker, attempt + 1,
+                )
+                time.sleep(1)
+            else:
+                raise
+    raise last_err  # unreachable, but satisfies type checker
 
 
 async def execute_exit(ticker: str, trail_order_id: str | None = None) -> OrderResult:

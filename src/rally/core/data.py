@@ -30,6 +30,9 @@ def fetch_daily(
     """
     Return a DataFrame with columns: Open, High, Low, Close, Volume
     indexed by Date (tz-naive).
+
+    Drops today's partial bar during market hours so features are computed
+    only on complete daily bars.
     """
     ticker = yf.Ticker(asset.ticker)
     kwargs = {"start": start, "interval": "1d", "auto_adjust": True}
@@ -39,6 +42,10 @@ def fetch_daily(
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df = df[OHLCV_COLS].dropna()
     df = df.sort_index()
+    # Drop today's partial bar — features need complete daily data
+    today = pd.Timestamp.now().normalize()
+    if len(df) and df.index[-1] >= today:
+        df = df.iloc[:-1]
     return df
 
 
@@ -192,6 +199,9 @@ def fetch_daily_batch(
         if raw.empty:
             raise ValueError("yf.download returned empty DataFrame")
 
+        # Drop today's partial bar — features need complete daily data
+        today = pd.Timestamp.now().normalize()
+
         # Parse results
         if len(tickers_to_fetch) == 1:
             # Single ticker: flat columns
@@ -201,6 +211,8 @@ def fetch_daily_batch(
                 df_t = raw[cols].dropna(how="all")
                 df_t.index = pd.to_datetime(df_t.index).tz_localize(None)
                 df_t = df_t.sort_index()
+                if len(df_t) and df_t.index[-1] >= today:
+                    df_t = df_t.iloc[:-1]
                 if cache is not None:
                     df_t = cache.update(ticker, df_t)
                 result[ticker] = df_t
@@ -215,6 +227,8 @@ def fetch_daily_batch(
                         continue
                     df_t.index = pd.to_datetime(df_t.index).tz_localize(None)
                     df_t = df_t.sort_index()
+                    if len(df_t) and df_t.index[-1] >= today:
+                        df_t = df_t.iloc[:-1]
                     if cache is not None:
                         df_t = cache.update(ticker, df_t)
                     result[ticker] = df_t
