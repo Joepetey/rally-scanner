@@ -435,18 +435,19 @@ def close_position_intraday(ticker: str, price: float, reason: str) -> dict | No
     return pos
 
 
-def update_fill_prices(fills: dict[str, float]) -> int:
+async def update_fill_prices(fills: dict[str, float]) -> int:
     """Update positions that have pending order_ids with actual fill prices."""
-    positions = load_all_position_meta()
-    updated = 0
-    for pos in positions:
-        oid = pos.get("order_id")
-        if oid and oid in fills:
-            pos["entry_price"] = fills[oid]
-            pos["order_id"] = None
-            save_position_meta(pos)
-            updated += 1
-    return updated
+    async with _positions_lock:
+        positions = load_all_position_meta()
+        updated = 0
+        for pos in positions:
+            oid = pos.get("order_id")
+            if oid and oid in fills:
+                pos["entry_price"] = fills[oid]
+                pos["order_id"] = None
+                save_position_meta(pos)
+                updated += 1
+        return updated
 
 
 def get_trail_order_ids() -> dict[str, str]:

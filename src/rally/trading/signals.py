@@ -8,6 +8,16 @@ import pandas as pd
 from ..config import PARAMS
 
 
+def pnl_pct(price: float, entry: float) -> float:
+    """Return percentage gain/loss from entry to price, rounded to 2 decimal places."""
+    return round((price / entry - 1) * 100, 2)
+
+
+def target_price(close: float, atr_val: float) -> float:
+    """Compute profit target: close + PARAMS.profit_atr_mult * ATR (dollar value)."""
+    return round(close + PARAMS.profit_atr_mult * atr_val, 2)
+
+
 def generate_signals(preds: pd.DataFrame, require_trend: bool = False) -> pd.Series:
     """
     Entry signal: LONG at close if all conditions met.

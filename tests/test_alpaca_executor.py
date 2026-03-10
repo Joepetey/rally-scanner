@@ -152,7 +152,8 @@ def test_close_position_intraday_not_found(tmp_models_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_update_fill_prices(tmp_models_dir):
+@pytest.mark.asyncio
+async def test_update_fill_prices(tmp_models_dir):
     save_positions({
         "positions": [
             {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
@@ -164,7 +165,7 @@ def test_update_fill_prices(tmp_models_dir):
         "closed_today": [],
     })
 
-    count = update_fill_prices({"order-123": 149.50})
+    count = await update_fill_prices({"order-123": 149.50})
     assert count == 1
 
     reloaded = load_positions()
@@ -173,7 +174,8 @@ def test_update_fill_prices(tmp_models_dir):
     assert aapl["order_id"] is None
 
 
-def test_update_fill_prices_no_matches(tmp_models_dir):
+@pytest.mark.asyncio
+async def test_update_fill_prices_no_matches(tmp_models_dir):
     save_positions({
         "positions": [
             {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
@@ -182,7 +184,7 @@ def test_update_fill_prices_no_matches(tmp_models_dir):
         "closed_today": [],
     })
 
-    count = update_fill_prices({"order-999": 149.50})
+    count = await update_fill_prices({"order-999": 149.50})
     assert count == 0
 
 

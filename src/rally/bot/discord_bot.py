@@ -97,10 +97,10 @@ class RallyBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
-        logger.info(f"Synced {len(self.tree.get_commands())} slash commands")
+        logger.info("Synced %d slash commands", len(self.tree.get_commands()))
 
     async def on_ready(self) -> None:
-        logger.info(f"Bot connected as {self.user} (ID: {self.user.id})")
+        logger.info("Bot connected as %s (ID: %s)", self.user, self.user.id)
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
@@ -461,7 +461,7 @@ def make_bot(token: str) -> RallyBot:
             await _send_alert(
                 discord.Embed.from_dict(_retrain_embed(health, elapsed))
             )
-            logger.info(f"Scheduler: retrain complete ({elapsed:.0f}s)")
+            logger.info("Scheduler: retrain complete (%.0fs)", elapsed)
 
         # -- Price alert configuration --
         _alert_interval = int(os.environ.get("PRICE_ALERT_INTERVAL_MINUTES", "15"))
@@ -522,9 +522,9 @@ def make_bot(token: str) -> RallyBot:
                 if pending_ids:
                     fills = await check_pending_fills(pending_ids)
                     if fills:
-                        n_filled = update_fill_prices(fills)
+                        n_filled = await update_fill_prices(fills)
                         if n_filled:
-                            logger.info(f"Updated {n_filled} fill prices from Alpaca")
+                            logger.info("Updated %d fill prices from Alpaca", n_filled)
 
                 # Place deferred trailing stops for filled entries without one
                 fresh_state = reload_positions()
@@ -619,7 +619,7 @@ def make_bot(token: str) -> RallyBot:
                                 await async_close_position(ticker, fill, "stop")
                                 alert["order_result"] = result.model_dump()
                             except Exception:
-                                logger.exception(f"Alpaca exit failed for {ticker}")
+                                logger.exception("Alpaca exit failed for %s", ticker)
                         breach_alerts.append(alert)
 
                 # Check target breach
@@ -649,7 +649,7 @@ def make_bot(token: str) -> RallyBot:
                                 await async_close_position(ticker, fill, "profit_target")
                                 alert["order_result"] = result.model_dump()
                             except Exception:
-                                logger.exception(f"Alpaca exit failed for {ticker}")
+                                logger.exception("Alpaca exit failed for %s", ticker)
                         breach_alerts.append(alert)
 
                 # Check approaching stop
@@ -700,8 +700,10 @@ def make_bot(token: str) -> RallyBot:
 
             n = len(breach_alerts) + len(approach_alerts)
             if n:
-                logger.info(f"Price alerts: {len(breach_alerts)} breaches, "
-                            f"{len(approach_alerts)} warnings")
+                logger.info(
+                    "Price alerts: %d breaches, %d warnings",
+                    len(breach_alerts), len(approach_alerts),
+                )
 
         async def _reconcile() -> None:
             """Check for trailing stop fills at broker."""
@@ -984,7 +986,7 @@ def make_bot(token: str) -> RallyBot:
 
         @bot.event
         async def on_ready() -> None:
-            logger.info(f"Bot connected as {bot.user} (ID: {bot.user.id})")
+            logger.info("Bot connected as %s (ID: %s)", bot.user, bot.user.id)
             await bot.change_presence(
                 activity=discord.Activity(
                     type=discord.ActivityType.watching,

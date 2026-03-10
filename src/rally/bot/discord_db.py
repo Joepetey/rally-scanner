@@ -64,17 +64,13 @@ def init_db(db_path: str | Path | None = None) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS conversation_history (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            discord_id   INTEGER NOT NULL REFERENCES users(discord_id),
-            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            discord_id   INTEGER PRIMARY KEY REFERENCES users(discord_id),
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
             history      TEXT NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_trades_user_status
             ON trades(discord_id, status);
-
-        CREATE INDEX IF NOT EXISTS idx_conversation_user
-            ON conversation_history(discord_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS system_positions (
             ticker         TEXT PRIMARY KEY,
@@ -130,6 +126,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ]:
         if col not in existing:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
+
+    ch_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(conversation_history)").fetchall()
+    }
+    if "id" in ch_cols:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_history_new (
+                discord_id INTEGER PRIMARY KEY REFERENCES users(discord_id),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                history    TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT OR REPLACE INTO conversation_history_new (discord_id, updated_at, history)
+            SELECT discord_id, created_at, history
+            FROM conversation_history
+            WHERE id IN (
+                SELECT MAX(id) FROM conversation_history GROUP BY discord_id
+            )
+        """)
+        conn.execute("DROP TABLE conversation_history")
+        conn.execute("ALTER TABLE conversation_history_new RENAME TO conversation_history")
 
 
 # ---------------------------------------------------------------------------
@@ -382,10 +400,7 @@ def get_conversation_history(
     """
     conn = get_db(db_path)
     row = conn.execute(
-        "SELECT history FROM conversation_history "
-        "WHERE discord_id = ? "
-        "ORDER BY created_at DESC "
-        "LIMIT 1",
+        "SELECT history FROM conversation_history WHERE discord_id = ?",
         (discord_id,),
     ).fetchone()
 
@@ -431,7 +446,10 @@ def save_conversation_history(
     """
     conn = get_db(db_path)
     conn.execute(
-        "INSERT INTO conversation_history (discord_id, history) VALUES (?, ?)",
+        "INSERT INTO conversation_history (discord_id, updated_at, history) "
+        "VALUES (?, datetime('now'), ?) "
+        "ON CONFLICT(discord_id) DO UPDATE SET "
+        "history = excluded.history, updated_at = excluded.updated_at",
         (discord_id, json.dumps(history)),
     )
     conn.commit()

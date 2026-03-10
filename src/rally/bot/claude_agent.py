@@ -600,7 +600,7 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
 
     try:
         # Run the scan
-        logger.info(f"Running market scan with config: {config}")
+        logger.info("Running market scan with config: %s", config)
         results = scan_all(tickers=None, show_positions=False, config_name=config)
 
         if not results:
@@ -821,7 +821,7 @@ Key conventions:
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                logger.info(f"Executing tool: {block.name} with input: {block.input}")
+                logger.info("Executing tool: %s with input: %s", block.name, block.input)
                 result = execute_tool(
                     block.name,
                     block.input,
@@ -872,6 +872,6 @@ Key conventions:
         "content": [block.model_dump() for block in response.content]
     })
 
-    logger.info(f"Claude response for {discord_username}: {response_text[:100]}...")
+    logger.info("Claude response for %s: %s...", discord_username, response_text[:100])
 
     return response_text, conversation_history, async_tasks

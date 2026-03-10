@@ -10,7 +10,6 @@ Directory structure:
 """
 
 import json
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -33,7 +32,7 @@ def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
     """
     MODELS_DIR.mkdir(exist_ok=True)
 
-    artifacts["asset_config"] = asdict(asset_config)
+    artifacts["asset_config"] = asset_config.model_dump()
     artifacts["saved_at"] = datetime.now().isoformat()
 
     path = MODELS_DIR / f"{ticker}.joblib"

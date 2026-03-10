@@ -183,7 +183,7 @@ def scan_all(
     manifest = load_manifest()
     if not manifest:
         logger.error("No trained models found. Run retrain.py first.")
-        return
+        return []
 
     if tickers:
         scan_tickers = [t for t in tickers if t in manifest]

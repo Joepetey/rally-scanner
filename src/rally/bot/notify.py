@@ -43,7 +43,7 @@ def send_discord(embeds: list[dict]) -> bool:
             logger.info("Discord message sent via bot")
             return True
         except Exception as e:
-            logger.error(f"Discord bot send failed: {e}")
+            logger.error("Discord bot send failed: %s", e)
             return False
 
     if webhook_url:
@@ -57,7 +57,7 @@ def send_discord(embeds: list[dict]) -> bool:
             logger.info("Discord message sent via webhook")
             return True
         except Exception as e:
-            logger.error(f"Discord webhook failed: {e}")
+            logger.error("Discord webhook failed: %s", e)
             return False
 
     return False

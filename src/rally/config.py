@@ -3,11 +3,10 @@ Rally Phase-Transition Detector — Configuration
 All thresholds, parameters, and asset definitions in one place.
 """
 
-from dataclasses import dataclass
+from pydantic import BaseModel
 
 
-@dataclass
-class AssetConfig:
+class AssetConfig(BaseModel):
     ticker: str
     asset_class: str  # "equity" or "crypto"
     r_up: float       # min rally magnitude
@@ -36,10 +35,9 @@ ASSETS: dict[str, AssetConfig] = {
 }
 
 
-@dataclass
-class Params:
+class Params(BaseModel):
     # --- Timeframes ---
-    lookbacks: tuple = (20, 40, 80)
+    lookbacks: tuple[int, ...] = (20, 40, 80)
     forward_horizon: int = 10           # H bars for label
 
     # --- Volatility compression ---
@@ -127,8 +125,7 @@ TICKER_TO_GROUP: dict[str, str] = {
 PARAMS = Params()
 
 
-@dataclass
-class PipelineConfig:
+class PipelineConfig(BaseModel):
     # --- Parallelism ---
     n_workers: int = 4              # safe with OMP_NUM_THREADS=2 (4 workers × 2 threads = 8)
     # --- OHLCV disk cache ---

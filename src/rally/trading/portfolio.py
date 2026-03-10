@@ -52,8 +52,10 @@ def update_daily_snapshot(positions_state: dict, scan_results: list[dict]) -> di
             writer.writeheader()
         writer.writerow({k: snapshot[k] for k in EQUITY_FIELDS})
 
-    logger.info(f"Daily snapshot: {snapshot['n_positions']} positions, "
-                f"{snapshot['total_exposure']:.1%} exposure")
+    logger.info(
+        "Daily snapshot: %d positions, %.1f%% exposure",
+        snapshot["n_positions"], snapshot["total_exposure"] * 100,
+    )
     return snapshot
 
 
@@ -71,7 +73,7 @@ def record_closed_trades(closed_trades: list[dict]) -> None:
             trade.setdefault("exit_date", datetime.now().strftime("%Y-%m-%d"))
             writer.writerow(trade)
 
-    logger.info(f"Recorded {len(closed_trades)} closed trades to journal")
+    logger.info("Recorded %d closed trades to journal", len(closed_trades))
 
 
 def load_equity_history(days: int | None = None) -> list[dict]:
