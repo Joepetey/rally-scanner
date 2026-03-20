@@ -348,17 +348,3 @@ def _error_embed(title: str, details: str) -> dict:
         "description": details[:4096],  # Discord limit
     }
 
-
-# ---------------------------------------------------------------------------
-# Dispatcher
-# ---------------------------------------------------------------------------
-
-def notify(
-    subject: str, body: str,
-    payload: dict | None = None, discord_embeds: list[dict] | None = None,
-) -> None:
-    """Send notification via Discord (if configured)."""
-    if discord_embeds:
-        send_discord(discord_embeds)
-
-
