@@ -90,8 +90,15 @@ def generate_signals_fast(preds: pd.DataFrame, cfg: Config,
 
 
 def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
-                         cfg: Config) -> pd.DataFrame:
-    """Simulate trades with config-specific parameters."""
+                         cfg: Config, close_only_tp: bool = False) -> pd.DataFrame:
+    """Simulate trades with config-specific parameters.
+
+    Args:
+        close_only_tp: If True, profit target is only triggered when the *close*
+            reaches the target (matching production behaviour).  Default False uses
+            the intraday *high*, which is optimistic but standard for limit-order
+            backtests.
+    """
     p = PARAMS
     n = len(preds)
     close = preds["Close"].values
@@ -121,11 +128,14 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
             exit_reason = None
             exit_price = close[i]
 
+            tp_level = entry_price + cfg.profit_atr * atr[entry_idx]
+            tp_check = close[i] >= tp_level if close_only_tp else high[i] >= tp_level
+
             if low[i] <= stop_price:
                 exit_price = stop_price
                 exit_reason = "stop"
-            elif high[i] >= entry_price + cfg.profit_atr * atr[entry_idx]:
-                exit_price = entry_price + cfg.profit_atr * atr[entry_idx]
+            elif tp_check:
+                exit_price = tp_level if not close_only_tp else close[i]
                 exit_reason = "profit_target"
             elif bars_held >= 2 and close[i] < trailing_stop:
                 exit_reason = "trail_stop"

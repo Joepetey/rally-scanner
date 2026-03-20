@@ -70,8 +70,8 @@ class Params(BaseModel):
     vol_target_k: float = 0.08         # risk budget scalar
     max_risk_frac: float = 0.15        # max position as fraction of equity
     min_position_size: float = 0.01    # minimum position size (skip if below)
-    profit_atr_mult: float = 2.0       # take-profit in ATR multiples
-    time_stop_bars: int = 8
+    profit_atr_mult: float = 1.0       # take-profit in ATR multiples
+    time_stop_bars: int = 3
     rv_exit_pct: float = 0.80          # RV percentile for exhaustion exit
     trailing_stop_atr_mult: float = 1.5  # trailing stop distance in ATR multiples
     fallback_stop_pct: float = 0.03      # fallback hard stop (3% below entry)
