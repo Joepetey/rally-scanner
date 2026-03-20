@@ -5,29 +5,29 @@ PYTEST := .venv/bin/pytest
 
 setup:
 	python3 -m venv .venv
-	.venv/bin/pip install -e ".[dev,discord]"
+	.venv/bin/pip install -r requirements.txt
 	@echo "Done. Activate with: source .venv/bin/activate"
 
 scan:
-	$(PYTHON) scripts/orchestrator.py scan
+	PYTHONPATH=src $(PYTHON) scripts/orchestrator.py scan
 
 retrain:
-	$(PYTHON) scripts/orchestrator.py retrain
+	PYTHONPATH=src $(PYTHON) scripts/orchestrator.py retrain
 
 dashboard:
-	$(PYTHON) scripts/dashboard.py
+	PYTHONPATH=src $(PYTHON) scripts/dashboard.py
 
 health:
-	$(PYTHON) scripts/orchestrator.py health
+	PYTHONPATH=src $(PYTHON) scripts/orchestrator.py health
 
 discord:
-	$(PYTHON) scripts/run_discord.py
+	PYTHONPATH=src $(PYTHON) scripts/run_discord.py
 
 test:
-	$(PYTEST) -v
+	PYTHONPATH=src $(PYTEST) -v
 
 lint:
-	.venv/bin/ruff check src/ tests/
+	PYTHONPATH=src .venv/bin/ruff check src/ tests/
 
 sync-models-down:
 	@echo "Pulling models from Railway → local models/"
@@ -38,6 +38,6 @@ sync-models-up:
 	tar cf - -C models . | railway run --service rally-bot -- tar xf - -C /app/models/
 
 clean:
-	rm -rf __pycache__ src/rally/__pycache__ tests/__pycache__
-	rm -rf .pytest_cache src/rally/.pytest_cache
+	rm -rf __pycache__ src/**/__pycache__ tests/__pycache__
+	rm -rf .pytest_cache
 	rm -rf *.egg-info src/*.egg-info

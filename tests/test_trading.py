@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from rally.trading.signals import compute_position_size, generate_signals
+from trading.signals import compute_position_size, generate_signals
 
 
 def _make_preds(**overrides):
@@ -53,7 +53,7 @@ def test_position_size_positive():
 def test_position_size_capped():
     preds = _make_preds(P_RALLY=0.99, ATR_pct=0.001)  # extreme values
     size = compute_position_size(preds)
-    from rally.config import PARAMS
+    from config import PARAMS
     assert size.iloc[0] <= PARAMS.max_risk_frac
 
 

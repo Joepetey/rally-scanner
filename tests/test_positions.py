@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from rally.config import PARAMS
-from rally.trading.positions import (
+from config import PARAMS
+from trading.positions import (
     add_signal_positions,
     get_merged_positions,
     load_positions,
@@ -440,7 +440,7 @@ async def test_merged_positions_alpaca_source(tmp_models_dir):
         "unrealized_pl": 50.0,
     }])
 
-    with patch("rally.bot.alpaca_executor.get_all_positions", mock_broker):
+    with patch("bot.alpaca_executor.get_all_positions", mock_broker):
         state = await get_merged_positions()
 
     assert len(state["positions"]) == 1
@@ -465,7 +465,7 @@ async def test_merged_positions_no_metadata(tmp_models_dir):
         "unrealized_pl": 50.0,
     }])
 
-    with patch("rally.bot.alpaca_executor.get_all_positions", mock_broker):
+    with patch("bot.alpaca_executor.get_all_positions", mock_broker):
         state = await get_merged_positions()
 
     assert len(state["positions"]) == 1
@@ -478,7 +478,7 @@ async def test_merged_positions_no_metadata(tmp_models_dir):
 
 def test_db_persistence_roundtrip(tmp_models_dir):
     """Positions written to DB can be read back with correct values."""
-    from rally.trading.positions import load_position_meta, save_position_meta
+    from trading.positions import load_position_meta, save_position_meta
 
     save_position_meta({
         "ticker": "GOOG",
@@ -512,7 +512,7 @@ def test_db_persistence_roundtrip(tmp_models_dir):
 
 def test_remote_fetch_when_api_url_set(tmp_models_dir, monkeypatch):
     """get_merged_positions_sync uses Railway API when RALLY_API_URL is set."""
-    from rally.trading.positions import get_merged_positions_sync
+    from trading.positions import get_merged_positions_sync
 
     monkeypatch.setenv("RALLY_API_URL", "https://my-railway.app")
     monkeypatch.setenv("RALLY_API_KEY", "secret123")
@@ -535,7 +535,7 @@ def test_remote_fetch_when_api_url_set(tmp_models_dir, monkeypatch):
 
 def test_remote_fetch_fallback_on_error(tmp_models_dir, monkeypatch):
     """Falls back to local DB when Railway API is unreachable."""
-    from rally.trading.positions import get_merged_positions_sync
+    from trading.positions import get_merged_positions_sync
 
     monkeypatch.setenv("RALLY_API_URL", "https://unreachable.app")
 

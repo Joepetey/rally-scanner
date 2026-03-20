@@ -1,11 +1,11 @@
 """Tests for adaptive scan frequency and watchlist scanning."""
 
-from rally.config import PARAMS
+from config import PARAMS
 
 
 def test_scan_watchlist_returns_results(monkeypatch):
     """scan_watchlist returns results for valid tickers."""
-    from rally.live import scanner
+    from live import scanner
 
     # Mock load_manifest to return known tickers
     monkeypatch.setattr(scanner, "load_manifest", lambda: {
@@ -35,7 +35,7 @@ def test_scan_watchlist_returns_results(monkeypatch):
         f.set_result(fn(item))
         return f
 
-    with patch("rally.live.scanner.ProcessPoolExecutor") as MockPool:
+    with patch("live.scanner.ProcessPoolExecutor") as MockPool:
         mock_pool = MagicMock()
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None
@@ -50,7 +50,7 @@ def test_scan_watchlist_returns_results(monkeypatch):
 
 def test_scan_watchlist_empty_manifest(monkeypatch):
     """scan_watchlist returns empty for no manifest."""
-    from rally.live import scanner
+    from live import scanner
     monkeypatch.setattr(scanner, "load_manifest", lambda: {})
     results = scanner.scan_watchlist(["AAPL"])
     assert results == []
@@ -58,7 +58,7 @@ def test_scan_watchlist_empty_manifest(monkeypatch):
 
 def test_scan_watchlist_unknown_tickers(monkeypatch):
     """scan_watchlist skips tickers not in manifest."""
-    from rally.live import scanner
+    from live import scanner
     monkeypatch.setattr(scanner, "load_manifest", lambda: {"AAPL": {}})
     monkeypatch.setattr(scanner, "apply_config", lambda _: None)
     monkeypatch.setattr(scanner, "fetch_vix_safe", lambda **kw: None)
@@ -77,7 +77,7 @@ def test_scan_watchlist_unknown_tickers(monkeypatch):
         f.set_result(fn(item))
         return f
 
-    with patch("rally.live.scanner.ProcessPoolExecutor") as MockPool:
+    with patch("live.scanner.ProcessPoolExecutor") as MockPool:
         mock_pool = MagicMock()
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None

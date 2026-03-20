@@ -1,6 +1,6 @@
 """Tests for portfolio tracking — CSV round-trip."""
 
-from rally.trading.portfolio import (
+from trading.portfolio import (
     load_equity_history,
     load_trade_journal,
     record_closed_trades,

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rally.bot.alpaca_executor import (
+from bot.alpaca_executor import (
     OrderResult,
     cancel_order,
     check_pending_fills,
@@ -18,8 +18,8 @@ from rally.bot.alpaca_executor import (
     is_enabled,
     place_trailing_stop,
 )
-from rally.bot.notify import _order_embed, _order_failure_embed
-from rally.trading.positions import (
+from bot.notify import _order_embed, _order_failure_embed
+from trading.positions import (
     close_position_intraday,
     get_trail_order_ids,
     load_positions,
@@ -229,10 +229,10 @@ async def test_execute_entries_skips_crypto():
     ]
 
     mock_client = MagicMock()
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client), \
-         patch("rally.trading.positions.get_total_exposure", return_value=0.0), \
-         patch("rally.trading.positions.get_group_exposure", return_value=(0, 0.0)), \
-         patch("rally.trading.portfolio.is_circuit_breaker_active", return_value=False):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
+         patch("trading.positions.get_total_exposure", return_value=0.0), \
+         patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 0
@@ -250,10 +250,10 @@ async def test_execute_entries_qty():
     mock_client = MagicMock()
     mock_client.submit_order.return_value = mock_order
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client), \
-         patch("rally.trading.positions.get_total_exposure", return_value=0.0), \
-         patch("rally.trading.positions.get_group_exposure", return_value=(0, 0.0)), \
-         patch("rally.trading.portfolio.is_circuit_breaker_active", return_value=False):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
+         patch("trading.positions.get_total_exposure", return_value=0.0), \
+         patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -279,10 +279,10 @@ async def test_execute_entries_exposure_cap():
     ]
 
     mock_client = MagicMock()
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client), \
-         patch("rally.trading.positions.get_total_exposure", return_value=0.95), \
-         patch("rally.trading.positions.get_group_exposure", return_value=(0, 0.0)), \
-         patch("rally.trading.portfolio.is_circuit_breaker_active", return_value=False):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
+         patch("trading.positions.get_total_exposure", return_value=0.95), \
+         patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -297,9 +297,9 @@ async def test_execute_entries_circuit_breaker():
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    with patch("rally.trading.portfolio.is_circuit_breaker_active", return_value=True), \
-         patch("rally.trading.positions.get_total_exposure", return_value=0.0), \
-         patch("rally.trading.positions.get_group_exposure", return_value=(0, 0.0)):
+    with patch("trading.portfolio.is_circuit_breaker_active", return_value=True), \
+         patch("trading.positions.get_total_exposure", return_value=0.0), \
+         patch("trading.positions.get_group_exposure", return_value=(0, 0.0)):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -315,10 +315,10 @@ async def test_execute_entries_group_limit():
     ]
 
     mock_client = MagicMock()
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client), \
-         patch("rally.trading.positions.get_total_exposure", return_value=0.0), \
-         patch("rally.trading.positions.get_group_exposure", return_value=(3, 0.3)), \
-         patch("rally.trading.portfolio.is_circuit_breaker_active", return_value=False):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
+         patch("trading.positions.get_total_exposure", return_value=0.0), \
+         patch("trading.positions.get_group_exposure", return_value=(3, 0.3)), \
+         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -340,7 +340,7 @@ async def test_execute_exit():
     mock_client = MagicMock()
     mock_client.close_position.return_value = mock_order
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         result = await execute_exit("AAPL")
 
     assert result.ticker == "AAPL"
@@ -367,7 +367,7 @@ async def test_check_pending_fills():
     mock_client = MagicMock()
     mock_client.get_orders.return_value = mock_orders
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         fills = await check_pending_fills(["order-1", "order-2"])
 
     assert fills == {"order-1": 150.25, "order-2": 400.50}
@@ -391,7 +391,7 @@ async def test_cancel_order_success():
     mock_client = MagicMock()
     mock_client.cancel_order_by_id.return_value = None  # cancel returns None
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         result = await cancel_order("trail-123")
 
     assert result is True
@@ -402,7 +402,7 @@ async def test_cancel_order_failure():
     mock_client = MagicMock()
     mock_client.cancel_order_by_id.side_effect = Exception("connection failed")
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         result = await cancel_order("trail-123")
 
     assert result is False
@@ -422,7 +422,7 @@ async def test_execute_exit_cancels_trailing_stop():
     mock_client = MagicMock()
     mock_client.close_position.return_value = mock_order
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         result = await execute_exit("AAPL", trail_order_id="trail-999")
 
     assert result.success is True
@@ -448,7 +448,7 @@ async def test_execute_exits_passes_trail_order_id():
     mock_client = MagicMock()
     mock_client.close_position.return_value = mock_order
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         results = await execute_exits(closed)
 
     assert len(results) == 1
@@ -472,7 +472,7 @@ async def test_check_trail_stop_fills():
     mock_client = MagicMock()
     mock_client.get_orders.return_value = mock_orders
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         fills = await check_trail_stop_fills({"AAPL": "trail-1"})
 
     assert fills == {"AAPL": 145.00}
@@ -524,7 +524,7 @@ async def test_get_account_equity():
     mock_client = MagicMock()
     mock_client.get_account.return_value = mock_account
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         equity = await get_account_equity()
 
     assert equity == 125000.50
@@ -546,7 +546,7 @@ async def test_get_all_positions():
     mock_client = MagicMock()
     mock_client.get_all_positions.return_value = mock_positions
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         positions = await get_all_positions()
 
     assert len(positions) == 2
@@ -563,7 +563,7 @@ async def test_get_all_positions_empty():
     mock_client = MagicMock()
     mock_client.get_all_positions.return_value = []
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         positions = await get_all_positions()
 
     assert positions == []
@@ -575,7 +575,7 @@ async def test_get_all_positions_api_error():
     mock_client = MagicMock()
     mock_client.get_all_positions.side_effect = Exception("unauthorized")
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         with pytest.raises(Exception, match="unauthorized"):
             await get_all_positions()
 
@@ -607,7 +607,7 @@ async def test_get_snapshots():
         "MSFT": mock_snap_msft,
     }
 
-    with patch("rally.bot.alpaca_executor._data_client", return_value=mock_data):
+    with patch("bot.alpaca_executor._data_client", return_value=mock_data):
         result = await get_snapshots(["AAPL", "MSFT"])
 
     assert result["AAPL"]["price"] == 152.50
@@ -635,7 +635,7 @@ async def test_place_trailing_stop():
     mock_client = MagicMock()
     mock_client.submit_order.return_value = mock_order
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
 
     assert trail_id == "trail-order-789"
@@ -654,7 +654,7 @@ async def test_place_trailing_stop_failure():
     mock_client = MagicMock()
     mock_client.submit_order.side_effect = Exception("order rejected")
 
-    with patch("rally.bot.alpaca_executor._trading_client", return_value=mock_client):
+    with patch("bot.alpaca_executor._trading_client", return_value=mock_client):
         trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
 
     assert trail_id is None

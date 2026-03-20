@@ -27,7 +27,7 @@ fi
 
 echo ""
 echo "=== Installing Package Dependencies ==="
-pip install --no-cache-dir -e ".[discord,alpaca]"
+pip install --no-cache-dir -r requirements.txt
 
 echo ""
 echo "=== Setting Up Directories ==="
@@ -37,4 +37,4 @@ echo "✓ Models directory created/verified"
 echo ""
 echo "=== Starting Discord Bot ==="
 echo "✓ API server will listen on port ${PORT:-8080}"
-exec python3 scripts/run_discord.py
+exec PYTHONPATH=/app/src python3 scripts/run_discord.py
