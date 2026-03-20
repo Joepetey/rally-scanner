@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from rally.backtest.common import (  # noqa: E402
+from backtest.common import (  # noqa: E402
     CONFIGS_BY_NAME,
     Config,
     generate_signals_fast,

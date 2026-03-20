@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from rally.core.features import (
+from core.features import (
     FEATURE_COLS,
     build_features,
     compute_compression,

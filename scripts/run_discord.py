@@ -22,9 +22,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from rally.bot.discord_bot import make_bot
-from rally.bot.discord_db import init_db
-from rally.log import setup_logging
+from bot.discord_bot import make_bot
+from bot.discord_db import init_db
+from log import setup_logging
 
 
 def main() -> int:
