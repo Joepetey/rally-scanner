@@ -1,4 +1,6 @@
-"""Shared test fixtures — synthetic OHLCV data."""
+"""Shared test fixtures — synthetic OHLCV data and PostgreSQL test DB."""
+
+import os
 
 import numpy as np
 import pandas as pd
@@ -55,29 +57,51 @@ def ohlcv_with_vix(ohlcv_df):
 
 
 @pytest.fixture
-def tmp_models_dir(tmp_path, monkeypatch):
-    """Redirect persistence/portfolio/positions to a temp directory."""
+def pg_db():
+    """Initialize PostgreSQL pool and truncate all tables before each test.
+
+    Requires TEST_DATABASE_URL env var. Skips the test if not set.
+    """
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL not set — skipping DB test")
+
+    os.environ["DATABASE_URL"] = url
+
+    import db.pool as pool_mod
+    from db import init_pool, init_schema
+    from db.pool import get_conn
+
+    # Re-initialize pool so it uses TEST_DATABASE_URL
+    if pool_mod._pool is not None:
+        pool_mod._pool.closeall()
+    pool_mod._pool = None
+    init_pool()
+    init_schema()
+
+    def _truncate():
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                TRUNCATE users, trades, conversation_history, system_positions,
+                         closed_positions, portfolio_snapshots, trade_journal CASCADE
+            """)
+            cur.execute(
+                "UPDATE portfolio_meta SET value = '0.0' WHERE key = 'high_water_mark'"
+            )
+
+    _truncate()
+    yield
+    _truncate()
+
+
+@pytest.fixture
+def tmp_models_dir(tmp_path, monkeypatch, pg_db):
+    """Redirect ML model persistence to a temp directory and set up a fresh DB."""
     models = tmp_path / "models"
     models.mkdir()
 
-    import bot.discord_db as discord_db
     import core.persistence as persist
-    import trading.portfolio as portfolio
-    import trading.positions as positions
-
     monkeypatch.setattr(persist, "MODELS_DIR", models)
-    monkeypatch.setattr(portfolio, "DATA_DIR", models)
-    monkeypatch.setattr(portfolio, "EQUITY_LOG", models / "equity_history.csv")
-    monkeypatch.setattr(portfolio, "TRADE_JOURNAL", models / "trade_journal.csv")
-
-    # Point positions DB to temp directory
-    db_path = models / "rally_test.db"
-    monkeypatch.setattr(discord_db, "DB_PATH", db_path)
-
-    # Reset DB initialization flag so tables get created fresh
-    monkeypatch.setattr(positions, "_db_initialized", False)
-
-    # Initialize DB tables
-    discord_db.init_db(db_path)
 
     return models

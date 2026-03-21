@@ -229,9 +229,11 @@ async def test_execute_entries_skips_crypto():
     ]
 
     mock_client = MagicMock()
+    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("trading.positions.load_positions", return_value=_empty), \
          patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
@@ -250,9 +252,11 @@ async def test_execute_entries_qty():
     mock_client = MagicMock()
     mock_client.submit_order.return_value = mock_order
 
+    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("trading.positions.load_positions", return_value=_empty), \
          patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
@@ -279,9 +283,11 @@ async def test_execute_entries_exposure_cap():
     ]
 
     mock_client = MagicMock()
+    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.95), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("trading.positions.load_positions", return_value=_empty), \
          patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
@@ -315,9 +321,11 @@ async def test_execute_entries_group_limit():
     ]
 
     mock_client = MagicMock()
+    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(3, 0.3)), \
+         patch("trading.positions.load_positions", return_value=_empty), \
          patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 

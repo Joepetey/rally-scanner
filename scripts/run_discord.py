@@ -5,7 +5,7 @@ Run the Market Rally Discord bot.
 Usage:
     python scripts/run_discord.py
 
-Requires DISCORD_BOT_TOKEN in .env (or environment).
+Requires DISCORD_BOT_TOKEN and DATABASE_URL in .env (or environment).
 
 Setup:
     1. Create a bot at https://discord.com/developers/applications
@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from bot.discord_bot import make_bot
-from bot.discord_db import init_db
+from db import init_pool, init_schema
 from log import setup_logging
 
 
@@ -35,7 +35,13 @@ def main() -> int:
         print("ERROR: DISCORD_BOT_TOKEN not set. Add it to .env or environment.")
         return 1
 
-    init_db()
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("ERROR: DATABASE_URL not set. Add it to .env or environment.")
+        return 1
+
+    init_pool()
+    init_schema()
 
     bot = make_bot(token)
     bot.run(token, log_handler=None)  # logging already configured

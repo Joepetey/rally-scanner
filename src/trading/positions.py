@@ -1,8 +1,8 @@
 """
-Position state tracking — persists metadata in SQLite, queries Alpaca for holdings.
+Position state tracking — business logic layer.
 
-Storage: models/rally_discord.db (system_positions + closed_positions tables)
-Broker:  Alpaca API is the source of truth for which positions are open.
+DB persistence is handled by db.positions.
+Broker source of truth is Alpaca API.
 """
 
 import asyncio
@@ -11,157 +11,49 @@ import os
 from datetime import datetime
 
 from config import PARAMS, TICKER_TO_GROUP
+from db.positions import (
+    delete_position_meta,
+    get_closed_today,
+    load_all_position_meta,
+    load_position_meta,
+    load_positions,
+    record_closed_position,
+    save_position_meta,
+    save_positions,
+    tighten_trailing_stop,
+)
 
 logger = logging.getLogger(__name__)
 
 # Async lock for concurrent position writes (scan + price alerts)
 _positions_lock = asyncio.Lock()
 
-# Lazy DB initialization flag
-_db_initialized = False
-
-
-def _ensure_db() -> None:
-    """Ensure system_positions + closed_positions tables exist."""
-    global _db_initialized
-    if not _db_initialized:
-        from bot.discord_db import init_db
-        init_db()
-        _db_initialized = True
-
-
-def _get_conn():
-    """Get a thread-local SQLite connection."""
-    _ensure_db()
-    from bot.discord_db import get_db
-    return get_db()
-
-
-# ---------------------------------------------------------------------------
-# DB CRUD — system_positions table
-# ---------------------------------------------------------------------------
-
-def save_position_meta(pos: dict) -> None:
-    """UPSERT a single position row into system_positions."""
-    conn = _get_conn()
-    conn.execute(
-        """INSERT INTO system_positions
-               (ticker, entry_price, entry_date, stop_price, target_price,
-                trailing_stop, highest_close, atr, bars_held, size, qty,
-                order_id, trail_order_id, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(ticker) DO UPDATE SET
-               entry_price=excluded.entry_price, entry_date=excluded.entry_date,
-               stop_price=excluded.stop_price, target_price=excluded.target_price,
-               trailing_stop=excluded.trailing_stop,
-               highest_close=excluded.highest_close,
-               atr=excluded.atr, bars_held=excluded.bars_held, size=excluded.size,
-               qty=excluded.qty, order_id=excluded.order_id,
-               trail_order_id=excluded.trail_order_id,
-               updated_at=datetime('now')""",
-        (
-            pos["ticker"], pos.get("entry_price", 0), pos.get("entry_date", ""),
-            pos.get("stop_price", 0), pos.get("target_price", 0),
-            pos.get("trailing_stop", 0),
-            pos.get("highest_close", pos.get("entry_price", 0)),
-            pos.get("atr", 0), pos.get("bars_held", 0), pos.get("size", 0),
-            pos.get("qty", 0), pos.get("order_id"), pos.get("trail_order_id"),
-        ),
-    )
-    conn.commit()
-
-
-def load_position_meta(ticker: str) -> dict | None:
-    """Load a single position's metadata."""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT * FROM system_positions WHERE ticker = ?", (ticker,)
-    ).fetchone()
-    if row is None:
-        return None
-    d = dict(row)
-    d["status"] = "open"
-    return d
-
-
-def load_all_position_meta() -> list[dict]:
-    """Load all open position metadata."""
-    conn = _get_conn()
-    rows = conn.execute("SELECT * FROM system_positions").fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["status"] = "open"
-        result.append(d)
-    return result
-
-
-def delete_position_meta(ticker: str) -> None:
-    """Remove a position from the DB."""
-    conn = _get_conn()
-    conn.execute("DELETE FROM system_positions WHERE ticker = ?", (ticker,))
-    conn.commit()
-
-
-def record_closed_position(pos: dict) -> None:
-    """Record a closed position in the closed_positions table."""
-    conn = _get_conn()
-    conn.execute(
-        """INSERT INTO closed_positions
-               (ticker, entry_price, entry_date, exit_price, exit_date,
-                exit_reason, realized_pnl_pct, bars_held, size)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            pos["ticker"], pos.get("entry_price", 0), pos.get("entry_date", ""),
-            pos.get("exit_price", 0), pos.get("exit_date", ""),
-            pos.get("exit_reason", ""), pos.get("realized_pnl_pct", 0),
-            pos.get("bars_held", 0), pos.get("size", 0),
-        ),
-    )
-    conn.commit()
-
-
-def get_closed_today() -> list[dict]:
-    """Get positions closed today."""
-    conn = _get_conn()
-    today = datetime.now().strftime("%Y-%m-%d")
-    rows = conn.execute(
-        "SELECT * FROM closed_positions WHERE exit_date = ?", (today,)
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
-# Backward-compat wrappers (same shape as old JSON-backed functions)
-# ---------------------------------------------------------------------------
-
-def load_positions() -> dict:
-    """Load positions from DB. Returns {"positions": [...], "closed_today": [...]}."""
-    return {
-        "positions": load_all_position_meta(),
-        "closed_today": get_closed_today(),
-        "last_updated": datetime.now().isoformat(),
-    }
-
-
-def save_positions(state: dict) -> None:
-    """Sync DB with the given state dict. Full replace for open positions."""
-    conn = _get_conn()
-    conn.execute("DELETE FROM system_positions")
-    conn.commit()
-    for pos in state.get("positions", []):
-        if pos.get("ticker"):
-            save_position_meta(pos)
-    # Record any closed positions that have exit_date = today
-    today = datetime.now().strftime("%Y-%m-%d")
-    for closed in state.get("closed_today", []):
-        if closed.get("exit_date") == today:
-            existing = conn.execute(
-                "SELECT 1 FROM closed_positions WHERE ticker = ? AND exit_date = ?",
-                (closed["ticker"], today),
-            ).fetchone()
-            if not existing:
-                record_closed_position(closed)
+# Re-export for callers that import directly from trading.positions
+__all__ = [
+    "load_positions",
+    "save_positions",
+    "load_position_meta",
+    "load_all_position_meta",
+    "save_position_meta",
+    "delete_position_meta",
+    "record_closed_position",
+    "get_closed_today",
+    "tighten_trailing_stop",
+    "get_merged_positions",
+    "get_merged_positions_sync",
+    "update_existing_positions",
+    "add_signal_positions",
+    "update_positions",
+    "close_position_intraday",
+    "update_fill_prices",
+    "get_trail_order_ids",
+    "close_position_by_trail_fill",
+    "get_total_exposure",
+    "get_group_exposure",
+    "async_close_position",
+    "async_save_positions",
+    "print_positions",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +169,6 @@ def update_existing_positions(state: dict, all_results: list[dict]) -> dict:
     """
     p = PARAMS
 
-    # Build price lookup from scan results
     price_map = {}
     for r in all_results:
         if r.get("status") == "ok":
@@ -351,7 +242,6 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
     current_exposure = sum(pos.get("size", 0) for pos in still_open)
     max_exposure = p.max_portfolio_exposure
 
-    # Pre-compute group counts/exposure from current open positions
     group_counts: dict[str, int] = {}
     group_exposures: dict[str, float] = {}
     for pos in still_open:
@@ -366,7 +256,6 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
         sig_size = sig.get("size", 0)
         if current_exposure + sig_size > max_exposure:
             continue
-        # Group concentration check
         g = TICKER_TO_GROUP.get(sig["ticker"])
         if g:
             if group_counts.get(g, 0) >= p.max_group_positions:
@@ -479,26 +368,6 @@ def get_group_exposure(group: str) -> tuple[int, float]:
             count += 1
             exposure += p.get("size", 0)
     return count, exposure
-
-
-def tighten_trailing_stop(ticker: str, new_stop: float) -> dict | None:
-    """Tighten a position's trailing stop (only if new_stop > current).
-
-    Returns the updated position dict, or None if not found or not tightened.
-    """
-    pos = load_position_meta(ticker)
-    if pos is None:
-        return None
-    current = pos.get("trailing_stop", 0)
-    if new_stop > current:
-        pos["trailing_stop"] = round(new_stop, 2)
-        save_position_meta(pos)
-        logger.info(
-            "Tightened trailing stop for %s: %.2f → %.2f",
-            ticker, current, new_stop,
-        )
-        return pos
-    return None
 
 
 # ---------------------------------------------------------------------------

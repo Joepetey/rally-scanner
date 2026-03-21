@@ -15,6 +15,13 @@ if [ -z "$DISCORD_BOT_TOKEN" ]; then
 fi
 echo "✓ DISCORD_BOT_TOKEN is set"
 
+if [ -z "$DATABASE_URL" ]; then
+    echo "ERROR: DATABASE_URL is not set!"
+    echo "Please add a PostgreSQL service to this Railway project"
+    exit 1
+fi
+echo "✓ DATABASE_URL is set"
+
 if [ "$ALPACA_AUTO_EXECUTE" = "1" ]; then
     if [ -z "$ALPACA_API_KEY" ] || [ -z "$ALPACA_SECRET_KEY" ]; then
         echo "WARNING: ALPACA_AUTO_EXECUTE=1 but API keys not set"

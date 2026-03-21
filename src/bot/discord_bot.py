@@ -25,12 +25,10 @@ from config import PARAMS
 from core.persistence import load_manifest
 from trading.positions import get_merged_positions, load_positions
 
+from db.conversations import get_conversation_history, save_conversation_history
+from db.users import ensure_user
+
 from .claude_agent import process_message
-from .discord_db import (
-    ensure_user,
-    get_conversation_history,
-    save_conversation_history,
-)
 
 logger = logging.getLogger(__name__)
 

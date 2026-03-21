@@ -18,16 +18,14 @@ from trading.portfolio import load_equity_history, load_trade_journal
 from trading.positions import get_merged_positions_sync
 
 # Local
-from .discord_db import (
+from db.trades import (
     close_trade,
-    ensure_user,
-    get_capital,
     get_open_trades,
     get_pnl_summary,
     get_trade_history,
     open_trade,
-    set_capital,
 )
+from db.users import ensure_user, get_capital, set_capital
 
 logger = logging.getLogger(__name__)
 
