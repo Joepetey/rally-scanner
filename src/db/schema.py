@@ -127,3 +127,59 @@ def init_schema() -> None:
             VALUES ('high_water_mark', '0.0')
             ON CONFLICT (key) DO NOTHING
         """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id           BIGSERIAL PRIMARY KEY,
+                ticker       TEXT NOT NULL,
+                side         TEXT NOT NULL,
+                order_type   TEXT NOT NULL,
+                qty          INTEGER NOT NULL DEFAULT 0,
+                context      TEXT NOT NULL,
+                requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                order_id     TEXT UNIQUE,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                fill_price   DOUBLE PRECISION,
+                filled_at    TIMESTAMPTZ,
+                error        TEXT
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS discord_messages (
+                id       BIGSERIAL PRIMARY KEY,
+                sent_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                msg_type TEXT NOT NULL,
+                title    TEXT,
+                summary  TEXT
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS price_alert_log (
+                id            BIGSERIAL PRIMARY KEY,
+                alerted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                alert_date    DATE NOT NULL,
+                ticker        TEXT NOT NULL,
+                alert_type    TEXT NOT NULL,
+                current_price DOUBLE PRECISION,
+                level_price   DOUBLE PRECISION,
+                entry_price   DOUBLE PRECISION,
+                pnl_pct       DOUBLE PRECISION,
+                UNIQUE (ticker, alert_type, alert_date)
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scheduler_events (
+                id          BIGSERIAL PRIMARY KEY,
+                started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                finished_at TIMESTAMPTZ,
+                event_type  TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'running',
+                n_signals   INTEGER,
+                n_exits     INTEGER,
+                duration_s  DOUBLE PRECISION,
+                error       TEXT
+            )
+        """)

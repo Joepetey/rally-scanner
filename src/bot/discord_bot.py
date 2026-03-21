@@ -266,13 +266,15 @@ def make_bot(token: str) -> RallyBot:
     if os.environ.get("ENABLE_SCHEDULER", "").strip() in ("1", "true", "yes"):
         alert_channel_id = os.environ.get("DISCORD_CHANNEL_ID", "")
 
-        async def _send_alert(embed: discord.Embed) -> None:
-            """Send an embed to the alerts channel."""
+        async def _send_alert(embed: discord.Embed, msg_type: str = "other") -> None:
+            """Send an embed to the alerts channel and log to DB."""
+            from db.events import log_discord_message
             if not alert_channel_id:
                 return
             channel = bot.get_channel(int(alert_channel_id))
             if channel:
                 await channel.send(embed=embed)
+            log_discord_message(msg_type, embed.title, (embed.description or "")[:500] or None)
 
         async def _send_error_alert(task_name: str, error: Exception) -> None:
             """Send an error embed to the alerts channel."""
@@ -282,7 +284,7 @@ def make_bot(token: str) -> RallyBot:
             tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
             details = f"```\n{tb[-3500:]}\n```"
             embed = discord.Embed.from_dict(_error_embed(f"{task_name} Failed", details))
-            await _send_alert(embed)
+            await _send_alert(embed, "error")
 
         def _save_watchlist(results: list, positions: dict) -> None:
             """Persist near-signal tickers for agent queries."""
@@ -325,16 +327,23 @@ def make_bot(token: str) -> RallyBot:
 
         async def _run_scan() -> None:
             """Run the scan pipeline in a thread, then post results."""
+            import time as _time
+
+            from db.events import finish_scheduler_event, log_scheduler_event
             from live.scanner import scan_all
             from trading.portfolio import record_closed_trades, update_daily_snapshot
 
             from .notify import _exit_embed, _positions_embed, _signal_embed
 
             logger.info("Scheduler: starting daily scan")
+            _scan_event_id = log_scheduler_event("scan")
+            _t0 = _time.time()
             results = await asyncio.to_thread(
                 scan_all, None, True, "conservative"
             )
             if not results:
+                finish_scheduler_event(_scan_event_id, "success", n_signals=0, n_exits=0,
+                                       duration_s=round(_time.time() - _t0, 1))
                 return
 
             all_signals = [r for r in results if r.get("signal")]
@@ -342,7 +351,7 @@ def make_bot(token: str) -> RallyBot:
             positions = await get_merged_positions()
             closed = positions.get("closed_today", [])
             if closed:
-                await _send_alert(discord.Embed.from_dict(_exit_embed(closed)))
+                await _send_alert(discord.Embed.from_dict(_exit_embed(closed)), "exit")
                 record_closed_trades(closed)
 
             update_daily_snapshot(positions, results)
@@ -360,15 +369,16 @@ def make_bot(token: str) -> RallyBot:
 
             # Only alert on genuinely new signals
             if signals:
-                await _send_alert(discord.Embed.from_dict(_signal_embed(signals)))
+                await _send_alert(discord.Embed.from_dict(_signal_embed(signals)), "signal")
 
             # Always show open positions summary
             open_pos = positions.get("positions", [])
-            await _send_alert(discord.Embed.from_dict(_positions_embed(open_pos)))
+            await _send_alert(discord.Embed.from_dict(_positions_embed(open_pos)), "positions")
 
             # Auto-execute on Alpaca if enabled — only add positions after fill
             from .alpaca_executor import is_enabled as alpaca_enabled
             if alpaca_enabled():
+                from db.events import log_order
                 from trading.positions import add_signal_positions
 
                 from .alpaca_executor import (
@@ -386,6 +396,11 @@ def make_bot(token: str) -> RallyBot:
                         ok = [r for r in entry_results if r.success]
                         fail = [r for r in entry_results if not r.success]
 
+                        for r in entry_results:
+                            log_order(r.ticker, "buy", "market", r.qty, "entry",
+                                      r.order_id, "filled" if r.success else "failed",
+                                      r.fill_price, r.error)
+
                         # Add only filled signals to DB
                         if ok:
                             filled_tickers = {r.ticker for r in ok}
@@ -396,28 +411,36 @@ def make_bot(token: str) -> RallyBot:
                             add_signal_positions(fresh_positions, filled_signals)
                             await _store_order_ids(entry_results)
                             await _send_alert(
-                                discord.Embed.from_dict(_order_embed(ok, equity))
+                                discord.Embed.from_dict(_order_embed(ok, equity)), "order"
                             )
                         if fail:
                             await _send_alert(
-                                discord.Embed.from_dict(_order_failure_embed(fail))
+                                discord.Embed.from_dict(_order_failure_embed(fail)), "order_failure"
                             )
                     if closed:
                         exit_results = await execute_exits(closed)
                         ok = [r for r in exit_results if r.success]
                         fail = [r for r in exit_results if not r.success]
+
+                        for r in exit_results:
+                            log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
+                                      r.order_id, "filled" if r.success else "failed",
+                                      r.fill_price, r.error)
+
                         if ok:
                             await _send_alert(
-                                discord.Embed.from_dict(_order_embed(ok, equity))
+                                discord.Embed.from_dict(_order_embed(ok, equity)), "order"
                             )
                         if fail:
                             await _send_alert(
-                                discord.Embed.from_dict(_order_failure_embed(fail))
+                                discord.Embed.from_dict(_order_failure_embed(fail)), "order_failure"
                             )
                 except Exception as e:
                     logger.exception("Alpaca execution failed")
                     await _send_error_alert("Alpaca Execution", e)
 
+            finish_scheduler_event(_scan_event_id, "success", n_signals=len(signals),
+                                   n_exits=len(closed), duration_s=round(_time.time() - _t0, 1))
             logger.info(
                 f"Scheduler: scan complete — {len(signals)} signals, "
                 f"{len(closed)} exits"
@@ -443,11 +466,13 @@ def make_bot(token: str) -> RallyBot:
             """Run retrain in a thread, then post results."""
             import time as _time
 
+            from db.events import finish_scheduler_event, log_scheduler_event
             from live.retrain import retrain_all
 
             from .notify import _retrain_embed
 
             logger.info("Scheduler: starting weekly retrain")
+            _retrain_event_id = log_scheduler_event("retrain")
             t0 = _time.time()
             await asyncio.to_thread(retrain_all)
             elapsed = _time.time() - t0
@@ -461,14 +486,14 @@ def make_bot(token: str) -> RallyBot:
                 "stale_count": 0,
             }
             await _send_alert(
-                discord.Embed.from_dict(_retrain_embed(health, elapsed))
+                discord.Embed.from_dict(_retrain_embed(health, elapsed)), "retrain"
             )
+            finish_scheduler_event(_retrain_event_id, "success", duration_s=round(elapsed, 1))
             logger.info("Scheduler: retrain complete (%.0fs)", elapsed)
 
         # -- Price alert configuration --
         _alert_interval = int(os.environ.get("PRICE_ALERT_INTERVAL_MINUTES", "15"))
         _alert_proximity_pct = float(os.environ.get("ALERT_PROXIMITY_PCT", "1.5"))
-        _sent_alerts: set[tuple[str, str, str]] = set()  # (ticker, alert_type, date)
 
         _ET = zoneinfo.ZoneInfo("America/New_York")
 
@@ -496,11 +521,9 @@ def make_bot(token: str) -> RallyBot:
             if not positions:
                 return
 
-            today = datetime.now(_ET).strftime("%Y-%m-%d")
+            from db.events import log_price_alert
 
-            # Clear stale alerts from previous days
-            stale = {k for k in _sent_alerts if k[2] != today}
-            _sent_alerts.difference_update(stale)
+            today = datetime.now(_ET).strftime("%Y-%m-%d")
 
             tickers = [p["ticker"] for p in positions]
 
@@ -526,6 +549,9 @@ def make_bot(token: str) -> RallyBot:
                 if pending_ids:
                     fills = await check_pending_fills(pending_ids)
                     if fills:
+                        from db.events import update_order_fill
+                        for oid, fp in fills.items():
+                            update_order_fill(oid, fp)
                         n_filled = await update_fill_prices(fills)
                         if n_filled:
                             logger.info("Updated %d fill prices from Alpaca", n_filled)
@@ -565,6 +591,9 @@ def make_bot(token: str) -> RallyBot:
                         )
                         if trail_id:
                             pos["trail_order_id"] = trail_id
+                            from db.events import log_order
+                            log_order(pos["ticker"], "sell", "trailing_stop",
+                                      pos.get("qty", 0), "trail_stop", trail_id, "pending")
                             logger.info(
                                 "Deferred trailing stop placed for %s: %s",
                                 pos["ticker"], trail_id,
@@ -597,9 +626,7 @@ def make_bot(token: str) -> RallyBot:
 
                 # Check stop breach
                 if effective_stop > 0 and price <= effective_stop:
-                    key = (ticker, "stop_breached", today)
-                    if key not in _sent_alerts:
-                        _sent_alerts.add(key)
+                    if log_price_alert(today, ticker, "stop_breached", price, effective_stop, entry, pnl_pct):
                         level_name = "Trailing Stop" if trailing > stop else "Stop"
                         alert = {
                             "ticker": ticker,
@@ -613,6 +640,7 @@ def make_bot(token: str) -> RallyBot:
                         # Execute exit immediately on Alpaca
                         if alpaca_enabled():
                             try:
+                                from db.events import log_order
                                 from trading.positions import async_close_position
 
                                 from .alpaca_executor import execute_exit
@@ -622,6 +650,9 @@ def make_bot(token: str) -> RallyBot:
                                 )
                                 fill = result.fill_price or price
                                 await async_close_position(ticker, fill, "stop")
+                                log_order(ticker, "sell", "market", result.qty, "exit_stop",
+                                          result.order_id, "filled" if result.success else "failed",
+                                          result.fill_price, result.error)
                                 alert["order_result"] = result.model_dump()
                             except Exception:
                                 logger.exception("Alpaca exit failed for %s", ticker)
@@ -629,9 +660,7 @@ def make_bot(token: str) -> RallyBot:
 
                 # Check target breach
                 elif target > 0 and price >= target:
-                    key = (ticker, "target_breached", today)
-                    if key not in _sent_alerts:
-                        _sent_alerts.add(key)
+                    if log_price_alert(today, ticker, "target_breached", price, target, entry, pnl_pct):
                         alert = {
                             "ticker": ticker,
                             "alert_type": "target_breached",
@@ -644,6 +673,7 @@ def make_bot(token: str) -> RallyBot:
                         # Execute exit immediately on Alpaca
                         if alpaca_enabled():
                             try:
+                                from db.events import log_order
                                 from trading.positions import async_close_position
 
                                 from .alpaca_executor import execute_exit
@@ -653,6 +683,9 @@ def make_bot(token: str) -> RallyBot:
                                 )
                                 fill = result.fill_price or price
                                 await async_close_position(ticker, fill, "profit_target")
+                                log_order(ticker, "sell", "market", result.qty, "exit_target",
+                                          result.order_id, "filled" if result.success else "failed",
+                                          result.fill_price, result.error)
                                 alert["order_result"] = result.model_dump()
                             except Exception:
                                 logger.exception("Alpaca exit failed for %s", ticker)
@@ -662,9 +695,7 @@ def make_bot(token: str) -> RallyBot:
                 elif _alert_proximity_pct > 0 and effective_stop > 0:
                     distance = (price / effective_stop - 1) * 100
                     if 0 < distance <= _alert_proximity_pct:
-                        key = (ticker, "near_stop", today)
-                        if key not in _sent_alerts:
-                            _sent_alerts.add(key)
+                        if log_price_alert(today, ticker, "near_stop", price, effective_stop, entry, pnl_pct):
                             level_name = "Trailing Stop" if trailing > stop else "Stop"
                             approach_alerts.append({
                                 "ticker": ticker,
@@ -681,9 +712,7 @@ def make_bot(token: str) -> RallyBot:
                 elif _alert_proximity_pct > 0 and target > 0:
                     distance = (target / price - 1) * 100
                     if 0 < distance <= _alert_proximity_pct:
-                        key = (ticker, "near_target", today)
-                        if key not in _sent_alerts:
-                            _sent_alerts.add(key)
+                        if log_price_alert(today, ticker, "near_target", price, target, entry, pnl_pct):
                             approach_alerts.append({
                                 "ticker": ticker,
                                 "alert_type": "near_target",
@@ -697,11 +726,11 @@ def make_bot(token: str) -> RallyBot:
 
             if breach_alerts:
                 await _send_alert(
-                    discord.Embed.from_dict(_price_alert_embed(breach_alerts))
+                    discord.Embed.from_dict(_price_alert_embed(breach_alerts)), "price_alert"
                 )
             if approach_alerts:
                 await _send_alert(
-                    discord.Embed.from_dict(_approaching_alert_embed(approach_alerts))
+                    discord.Embed.from_dict(_approaching_alert_embed(approach_alerts)), "price_alert"
                 )
 
             n = len(breach_alerts) + len(approach_alerts)
@@ -757,7 +786,7 @@ def make_bot(token: str) -> RallyBot:
             _cached_regime_states = get_regime_states()
 
             await _send_alert(
-                discord.Embed.from_dict(_regime_shift_embed(transitions))
+                discord.Embed.from_dict(_regime_shift_embed(transitions)), "regime_shift"
             )
 
             # Cascade: trigger early scan if many assets shifting
@@ -775,7 +804,7 @@ def make_bot(token: str) -> RallyBot:
                         "Running full scan now..."
                     ),
                     color=0xFF4500,
-                ))
+                ), "regime_shift")
                 await _run_scan()
 
         async def _run_risk_evaluation() -> None:
@@ -816,7 +845,7 @@ def make_bot(token: str) -> RallyBot:
             meaningful = [r for r in results if not r.get("skipped")]
             if meaningful:
                 await _send_alert(
-                    discord.Embed.from_dict(_risk_action_embed(meaningful))
+                    discord.Embed.from_dict(_risk_action_embed(meaningful)), "risk_action"
                 )
                 logger.info(
                     "Risk evaluation: %d actions taken (%s)",
@@ -861,7 +890,7 @@ def make_bot(token: str) -> RallyBot:
                 embed = discord.Embed.from_dict(_signal_embed(signals))
                 embed.title = f"Mid-day Signal ({len(signals)})"
                 embed.set_footer(text="From watchlist mid-day scan")
-                await _send_alert(embed)
+                await _send_alert(embed, "signal")
 
         async def _should_use_fast_alerts() -> bool:
             """Check if conditions warrant faster alert frequency."""
