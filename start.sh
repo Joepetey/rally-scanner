@@ -37,4 +37,4 @@ echo "✓ Models directory created/verified"
 echo ""
 echo "=== Starting Discord Bot ==="
 echo "✓ API server will listen on port ${PORT:-8080}"
-exec PYTHONPATH=/app/src python3 scripts/run_discord.py
+exec env PYTHONPATH=/app/src python3 scripts/run_discord.py
