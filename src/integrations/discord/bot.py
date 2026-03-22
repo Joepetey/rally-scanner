@@ -992,8 +992,8 @@ def make_bot(token: str) -> RallyBot:
                 logger.exception("Regime check failed")
                 await _send_error_alert("Regime Check", e)
 
-        # Mid-day scans: 2 PM and 3 PM ET (19:00, 20:00 UTC)
-        @tasks.loop(time=[time(hour=19, minute=0), time(hour=20, minute=0)])
+        # Mid-day scans: 11 AM and 1 PM ET (16:00, 18:00 UTC)
+        @tasks.loop(time=[time(hour=16, minute=0), time(hour=18, minute=0)])
         async def scheduled_midday_scan() -> None:
             weekday = datetime.utcnow().weekday()
             if weekday >= 5:
@@ -1054,7 +1054,7 @@ def make_bot(token: str) -> RallyBot:
                 logger.info("Scheduler: regime check armed (every 30m during market hours)")
             if not scheduled_midday_scan.is_running():
                 scheduled_midday_scan.start()
-                logger.info("Scheduler: mid-day scans armed (2 PM, 3 PM ET)")
+                logger.info("Scheduler: mid-day scans armed (11 AM, 1 PM ET)")
 
             # Populate watchlist from manifest so mid-day scans work immediately
             try:

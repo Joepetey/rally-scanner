@@ -465,6 +465,55 @@ async def test_execute_exits_passes_trail_order_id():
 
 
 # ---------------------------------------------------------------------------
+# position not found (40410000) — trailing stop already closed it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_exit_position_not_found():
+    """40410000 means trailing stop already closed the position — treat as success."""
+    mock_client = MagicMock()
+    mock_client.close_position.side_effect = Exception(
+        '{"code":40410000,"message":"position not found: WULF"}'
+    )
+
+    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
+        result = await execute_exit("WULF")
+
+    assert result.success is True
+    assert result.already_closed is True
+    assert result.ticker == "WULF"
+    assert result.qty == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_exits_position_not_found_does_not_fail_batch():
+    """A 40410000 on one ticker should not prevent other tickers from being processed."""
+    mock_order = _mock_order(order_id="order-exit-2", qty="5", filled_avg_price="50.00")
+    mock_client = MagicMock()
+    mock_client.close_position.side_effect = [
+        Exception('{"code":40410000,"message":"position not found: ABVX"}'),
+        mock_order,
+    ]
+
+    closed = [
+        {"ticker": "ABVX"},
+        {"ticker": "MSFT"},
+    ]
+
+    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
+        results = await execute_exits(closed)
+
+    assert len(results) == 2
+    abvx = next(r for r in results if r.ticker == "ABVX")
+    msft = next(r for r in results if r.ticker == "MSFT")
+    assert abvx.success is True
+    assert abvx.already_closed is True
+    assert msft.success is True
+    assert msft.fill_price == 50.0
+
+
+# ---------------------------------------------------------------------------
 # check_trail_stop_fills
 # ---------------------------------------------------------------------------
 

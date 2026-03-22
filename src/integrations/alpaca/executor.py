@@ -41,6 +41,7 @@ class OrderResult(BaseModel):
     fill_price: float | None = None
     trail_order_id: str | None = None
     error: str | None = None
+    already_closed: bool = False
 
 
 def is_enabled() -> bool:
@@ -274,12 +275,21 @@ def _execute_exit_sync(
             )
         except Exception as e:
             last_err = e
-            if "40310000" in str(e) and attempt < 2:
+            err_str = str(e)
+            if "40310000" in err_str and attempt < 2:
                 logger.info(
                     "Shares still held for %s, retrying in 1s (attempt %d/3)",
                     ticker, attempt + 1,
                 )
                 time.sleep(1)
+            elif "40410000" in err_str:
+                # Trailing stop already closed the position — treat as success
+                logger.info(
+                    "Position %s already closed in Alpaca (trailing stop triggered)", ticker,
+                )
+                return OrderResult(
+                    ticker=ticker, side="sell", qty=0, success=True, already_closed=True,
+                )
             else:
                 raise
     raise last_err  # unreachable, but satisfies type checker
