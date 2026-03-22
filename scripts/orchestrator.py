@@ -27,8 +27,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from log import setup_logging
-from live.scanner import scan_all
-from live.retrain import retrain_all
+from pipeline.scanner import scan_all
+from pipeline.retrain import retrain_all
 from trading.positions import get_merged_positions_sync
 from core.persistence import load_manifest
 from bot.notify import (

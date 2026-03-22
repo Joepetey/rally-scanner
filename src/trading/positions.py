@@ -57,7 +57,7 @@ async def get_merged_positions() -> dict:
     DB provides stop/target/trailing/bars_held metadata.
     Returns same shape as load_positions().
     """
-    from bot.alpaca_executor import get_all_positions
+    from trading.alpaca_executor import get_all_positions
 
     broker = await get_all_positions()
     meta_map = {p["ticker"]: p for p in load_all_position_meta()}

@@ -593,7 +593,7 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
     """Run the market scanner and return results."""
     from datetime import datetime
 
-    from live.scanner import scan_all
+    from pipeline.scanner import scan_all
     from trading.positions import get_merged_positions_sync
 
     try:

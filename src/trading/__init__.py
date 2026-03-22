@@ -1,4 +1,4 @@
-"""Trading signals, positions, and risk management."""
+"""Trading signals, positions, risk management, and broker execution."""
 
 from trading.positions import (
     async_close_position,

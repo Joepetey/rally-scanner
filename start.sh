@@ -33,10 +33,6 @@ else
 fi
 
 echo ""
-echo "=== Installing Package Dependencies ==="
-pip install --no-cache-dir -r requirements.txt
-
-echo ""
 echo "=== Setting Up Directories ==="
 mkdir -p models
 echo "✓ Models directory created/verified"

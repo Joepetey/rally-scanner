@@ -438,7 +438,7 @@ async def test_merged_positions_alpaca_source(tmp_models_dir):
         "unrealized_pl": 50.0,
     }])
 
-    with patch("bot.alpaca_executor.get_all_positions", mock_broker):
+    with patch("trading.alpaca_executor.get_all_positions", mock_broker):
         state = await get_merged_positions()
 
     assert len(state["positions"]) == 1
@@ -463,7 +463,7 @@ async def test_merged_positions_no_metadata(tmp_models_dir):
         "unrealized_pl": 50.0,
     }])
 
-    with patch("bot.alpaca_executor.get_all_positions", mock_broker):
+    with patch("trading.alpaca_executor.get_all_positions", mock_broker):
         state = await get_merged_positions()
 
     assert len(state["positions"]) == 1

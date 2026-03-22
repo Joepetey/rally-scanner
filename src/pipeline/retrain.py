@@ -26,18 +26,14 @@ os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 import numpy as np
 import pandas as pd
-from sklearn.isotonic import IsotonicRegression
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 
 from config import ASSETS, PARAMS, PIPELINE, AssetConfig
 from core.calibrate import calibrate_thresholds
 from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
-from core.features import build_features
-from core.hmm import fit_hmm, predict_hmm_probs
+from core.features import ALL_FEATURE_COLS, build_features
 from core.labels import compute_labels
-from core.features import ALL_FEATURE_COLS
 from core.persistence import load_manifest, save_model
+from core.train import fit_model
 from core.universe import get_universe
 
 logger = logging.getLogger(__name__)
@@ -48,89 +44,27 @@ warnings.filterwarnings("ignore")
 def train_last_fold(
     df: pd.DataFrame, asset: AssetConfig, live_features: bool = True,
 ) -> dict | None:
-    """
-    Train only the most recent fold (last 5 years of data).
+    """Train only the most recent fold (last 5 years of data).
+
     Returns dict of model artifacts ready for save_model(), or None on failure.
     """
-    p = PARAMS
-    train_yrs = p.walk_forward_train_years
-    target_col = "RALLY_ST"
-    feature_cols = ALL_FEATURE_COLS
-
-    # Build features
     df = build_features(df, live=live_features)
     df["RALLY_ST"] = compute_labels(df, asset)
 
-    years = df.index.year.unique().sort_values()
-    max_year = int(years.max())
-    train_start_year = max_year - train_yrs + 1
+    max_year = int(df.index.year.max())
+    train_start_year = max_year - PARAMS.walk_forward_train_years + 1
 
-    # Use last train_yrs years
-    train_mask = df.index.year >= train_start_year
-    df_train_raw = df.loc[train_mask]
-
-    if len(df_train_raw) < 200:
-        return None
-
-    # Fit HMM on training data
-    try:
-        hmm_model, hmm_scaler, state_order = fit_hmm(df_train_raw)
-    except (ValueError, np.linalg.LinAlgError):
-        # HMM failed (convergence or singular covariance) — train without HMM features
-        hmm_model, hmm_scaler, state_order = None, None, None
-    hmm_probs = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train_raw)
-    df_train_full = df_train_raw.join(hmm_probs)
-
-    # Filter valid rows
-    valid = df_train_full[feature_cols + [target_col]].notna().all(axis=1)
-    df_train = df_train_full.loc[valid]
-
+    df_train = df.loc[df.index.year >= train_start_year]
     if len(df_train) < 200:
         return None
 
-    X_train = df_train[feature_cols].values
-    y_train = df_train[target_col].values
-
-    # Check for sufficient positive labels
-    n_pos = y_train.sum()
-    if n_pos < 10:
+    artifacts = fit_model(df_train, ALL_FEATURE_COLS, min_train=200, min_positives=10)
+    if artifacts is None:
         return None
 
-    # Standardize
-    lr_scaler = StandardScaler()
-    X_train_s = lr_scaler.fit_transform(X_train)
-
-    # Fit logistic regression
-    lr = LogisticRegression(
-        C=1.0, l1_ratio=0, solver="lbfgs",
-        max_iter=1000, class_weight="balanced",
-    )
-    lr.fit(X_train_s, y_train)
-
-    # Isotonic calibration on last 20% as validation
-    val_split = int(len(X_train_s) * 0.8)
-    X_val_s = X_train_s[val_split:]
-    y_val = y_train[val_split:]
-    raw_val_probs = lr.predict_proba(X_val_s)[:, 1]
-
-    iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
-    if y_val.sum() >= 3:
-        iso.fit(raw_val_probs, y_val)
-    else:
-        # Not enough positives for calibration — use raw probs
-        iso.fit(np.array([0.0, 1.0]), np.array([0.0, 1.0]))
-
-    return {
-        "lr_model": lr,
-        "lr_scaler": lr_scaler,
-        "iso_calibrator": iso,
-        "hmm_model": hmm_model,
-        "hmm_scaler": hmm_scaler,
-        "state_order": state_order,
-        "feature_cols": feature_cols,
-        "train_start": str(train_start_year),
-        "train_end": str(max_year),
-    }
+    artifacts["train_start"] = str(train_start_year)
+    artifacts["train_end"] = str(max_year)
+    return artifacts
 
 
 # ---------------------------------------------------------------------------

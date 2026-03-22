@@ -243,10 +243,10 @@ async def _execute_close(action: RiskAction, positions: list[dict]) -> dict:
     price = pos.get("current_price", pos.get("entry_price", 0))
 
     try:
-        from bot.alpaca_executor import is_enabled as alpaca_enabled
+        from trading.alpaca_executor import is_enabled as alpaca_enabled
 
         if alpaca_enabled():
-            from bot.alpaca_executor import execute_exit
+            from trading.alpaca_executor import execute_exit
             trail_oid = pos.get("trail_order_id")
             order_result = await execute_exit(ticker, trail_order_id=trail_oid)
             if order_result.fill_price:
@@ -317,11 +317,11 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
             }
 
         # Update broker trailing stop if Alpaca is enabled
-        from bot.alpaca_executor import is_enabled as alpaca_enabled
+        from trading.alpaca_executor import is_enabled as alpaca_enabled
         if alpaca_enabled():
             trail_oid = pos.get("trail_order_id")
             if trail_oid:
-                from bot.alpaca_executor import cancel_order
+                from trading.alpaca_executor import cancel_order
                 await cancel_order(trail_oid)
 
             qty = pos.get("qty")
@@ -329,7 +329,7 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
                 entry = pos.get("entry_price", 1)
                 atr_pct = atr / entry if entry else PARAMS.default_atr_pct
                 trail_pct = round(max(action.new_trail_atr_mult * atr_pct * 100, 0.5), 2)
-                from bot.alpaca_executor import place_trailing_stop
+                from trading.alpaca_executor import place_trailing_stop
                 new_oid = await place_trailing_stop(ticker, qty, trail_pct)
                 if new_oid:
                     from db.positions import load_positions

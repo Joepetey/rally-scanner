@@ -1,1 +1,1 @@
-"""Discord bot, Claude agent, notifications, and broker execution."""
+"""Discord bot, Claude agent, and notifications."""

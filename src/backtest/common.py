@@ -6,13 +6,11 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.isotonic import IsotonicRegression
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 
 from config import CONFIGS, CONFIGS_BY_NAME, PARAMS, TradingConfig
 from core.features import ALL_FEATURE_COLS
-from core.hmm import fit_hmm, predict_hmm_probs
+from core.hmm import predict_hmm_probs
+from core.train import fit_model
 
 
 def generate_signals_fast(preds: pd.DataFrame, cfg: TradingConfig,
@@ -253,62 +251,29 @@ def walk_forward_train(df: pd.DataFrame) -> list[FoldResult]:
             fold_start += test_yrs
             continue
 
-        # Fit HMM on training data only
-        hmm_model, hmm_scaler, state_order = fit_hmm(df_train_raw)
-
-        # Predict HMM state probabilities for train and test
-        hmm_train = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train_raw)
-        hmm_test = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_test_raw)
-
-        # Merge HMM features
-        df_train_full = df_train_raw.join(hmm_train)
-        df_test_full = df_test_raw.join(hmm_test)
-
-        # Determine which features are available
-        feature_cols = ALL_FEATURE_COLS
-
-        # Drop rows with NaN in features or label
-        train_valid = df_train_full[feature_cols + [target_col]].notna().all(axis=1)
-        test_valid = df_test_full[feature_cols + [target_col]].notna().all(axis=1)
-        df_train = df_train_full.loc[train_valid]
-        df_test = df_test_full.loc[test_valid]
-
-        if len(df_train) < 100 or len(df_test) < 20:
+        artifacts = fit_model(df_train_raw, feature_cols)
+        if artifacts is None:
             fold_start += test_yrs
             continue
 
-        X_train = df_train[feature_cols].values
-        y_train = df_train[target_col].values
+        # Apply the fitted HMM to the test split, then predict
+        hmm_test = predict_hmm_probs(
+            artifacts["hmm_model"], artifacts["hmm_scaler"],
+            artifacts["state_order"], df_test_raw,
+        )
+        df_test_full = df_test_raw.join(hmm_test)
+        test_valid = df_test_full[feature_cols + [target_col]].notna().all(axis=1)
+        df_test = df_test_full.loc[test_valid]
+
+        if len(df_test) < 20:
+            fold_start += test_yrs
+            continue
+
         X_test = df_test[feature_cols].values
         y_test = df_test[target_col].values
-
-        # Standardize features
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_test_s = scaler.transform(X_test)
-
-        # Fit logistic regression
-        lr = LogisticRegression(
-            C=1.0,
-            l1_ratio=0,
-            solver="lbfgs",
-            max_iter=1000,
-            class_weight="balanced",
-        )
-        lr.fit(X_train_s, y_train)
-
-        # Isotonic calibration (fit on last 20% of training set as validation)
-        val_split = int(len(X_train_s) * 0.8)
-        X_val_s = X_train_s[val_split:]
-        y_val = y_train[val_split:]
-        raw_val_probs = lr.predict_proba(X_val_s)[:, 1]
-
-        iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
-        iso.fit(raw_val_probs, y_val)
-
-        # Calibrated probabilities on test set
-        raw_test_probs = lr.predict_proba(X_test_s)[:, 1]
-        cal_test_probs = iso.predict(raw_test_probs)
+        X_test_s = artifacts["lr_scaler"].transform(X_test)
+        raw_test_probs = artifacts["lr_model"].predict_proba(X_test_s)[:, 1]
+        cal_test_probs = artifacts["iso_calibrator"].predict(raw_test_probs)
 
         preds = pd.DataFrame({
             "P_RALLY": cal_test_probs,
@@ -316,26 +281,20 @@ def walk_forward_train(df: pd.DataFrame) -> list[FoldResult]:
             "RALLY_ST": y_test,
         }, index=df_test.index)
 
-        # Attach features for trading rules
         for col in feature_cols:
             preds[col] = df_test[col].values
-        # Attach price data for trading
         for col in ["Open", "High", "Low", "Close", "ATR", "ATR_pct", "RV",
-                     "p_RV", "RangeHigh", "RangeLow", "MA200", "RSI",
-                     "VIX_Close"]:
+                     "p_RV", "RangeHigh", "RangeLow", "MA200", "RSI", "VIX_Close"]:
             if col in df_test.columns:
                 preds[col] = df_test[col].values
-
-        coefs = dict(zip(feature_cols, lr.coef_[0] / scaler.scale_))
-        intercept = float(lr.intercept_[0])
 
         results.append(FoldResult(
             train_start=str(fold_start),
             train_end=str(train_end_year),
             test_start=str(test_start_year),
             test_end=str(test_end_year),
-            coefs=coefs,
-            intercept=intercept,
+            coefs=artifacts["coefs"],
+            intercept=artifacts["intercept"],
             predictions=preds,
         ))
 
