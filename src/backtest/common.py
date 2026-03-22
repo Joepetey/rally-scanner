@@ -28,6 +28,9 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
                          cfg: TradingConfig, close_only_tp: bool = False) -> pd.DataFrame:
     """Simulate trades with config-specific parameters.
 
+    Entry is deferred to the *next bar's open* to match live behaviour: signals
+    are generated after the close, so the earliest execution is next-day open.
+
     Args:
         close_only_tp: If True, profit target is only triggered when the *close*
             reaches the target (matching production behaviour).  Default False uses
@@ -36,6 +39,7 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
     """
     p = PARAMS
     n = len(preds)
+    open_ = preds["Open"].values
     close = preds["Close"].values
     high = preds["High"].values
     low = preds["Low"].values
@@ -44,7 +48,9 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
 
     trades = []
     in_trade = False
-    entry_idx = 0
+    pending_entry = False
+    signal_idx = 0       # bar where signal fired (used for ATR/size)
+    actual_entry_idx = 0 # bar where we actually entered (next-day open)
     entry_price = 0.0
     stop_price = 0.0
     trailing_stop = 0.0
@@ -53,17 +59,35 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
     highest_close = 0.0
 
     for i in range(n):
+        # Enter at this bar's open if a signal fired on the previous bar
+        if pending_entry and not in_trade:
+            actual_entry_idx = i
+            entry_price = open_[i]
+            stop_price = preds["RangeLow"].iloc[signal_idx]
+            if np.isnan(stop_price) or stop_price >= entry_price:
+                stop_price = entry_price * (1 - p.fallback_stop_pct)
+            p_rally = preds["P_RALLY"].iloc[signal_idx]
+            atr_pct = preds["ATR_pct"].iloc[signal_idx]
+            raw_size = cfg.vol_k * (p_rally - cfg.p_rally) / atr_pct if atr_pct > 0 else 0
+            size = max(0.0, min(raw_size, cfg.max_risk))
+            if size >= 0.01:
+                in_trade = True
+                bars_held = 0
+                highest_close = entry_price
+                trailing_stop = entry_price - p.trailing_stop_atr_mult * atr[signal_idx]
+            pending_entry = False
+
         if in_trade:
             bars_held += 1
             if close[i] > highest_close:
                 highest_close = close[i]
-                new_trail = highest_close - p.trailing_stop_atr_mult * atr[entry_idx]
+                new_trail = highest_close - p.trailing_stop_atr_mult * atr[signal_idx]
                 trailing_stop = max(trailing_stop, new_trail)
 
             exit_reason = None
             exit_price = close[i]
 
-            tp_level = entry_price + cfg.profit_atr * atr[entry_idx]
+            tp_level = entry_price + cfg.profit_atr * atr[signal_idx]
             tp_check = close[i] >= tp_level if close_only_tp else high[i] >= tp_level
 
             if low[i] <= stop_price:
@@ -82,7 +106,7 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
             if exit_reason:
                 pnl_pct = exit_price / entry_price - 1
                 trades.append({
-                    "entry_date": preds.index[entry_idx],
+                    "entry_date": preds.index[actual_entry_idx],
                     "exit_date": preds.index[i],
                     "pnl_pct": pnl_pct,
                     "pnl_sized": pnl_pct * size,
@@ -92,22 +116,9 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
                 })
                 in_trade = False
 
-        if not in_trade and signal.iloc[i]:
-            entry_idx = i
-            entry_price = close[i]
-            stop_price = preds["RangeLow"].iloc[i]
-            if np.isnan(stop_price) or stop_price >= entry_price:
-                stop_price = entry_price * (1 - p.fallback_stop_pct)
-
-            p_rally = preds["P_RALLY"].iloc[i]
-            atr_pct = preds["ATR_pct"].iloc[i]
-            raw_size = cfg.vol_k * (p_rally - cfg.p_rally) / atr_pct if atr_pct > 0 else 0
-            size = max(0.0, min(raw_size, cfg.max_risk))
-            if size >= 0.01:
-                in_trade = True
-                bars_held = 0
-                highest_close = entry_price
-                trailing_stop = entry_price - p.trailing_stop_atr_mult * atr[i]
+        if not in_trade and not pending_entry and signal.iloc[i]:
+            pending_entry = True
+            signal_idx = i
 
     return pd.DataFrame(trades) if trades else pd.DataFrame()
 
