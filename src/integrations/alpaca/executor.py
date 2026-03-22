@@ -42,6 +42,7 @@ class OrderResult(BaseModel):
     trail_order_id: str | None = None
     error: str | None = None
     already_closed: bool = False
+    skipped: bool = False  # intentional non-execution (risk cap, non-tradable, etc.)
 
 
 def is_enabled() -> bool:
@@ -155,7 +156,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                 ticker, current_exposure * 100, size * 100, max_exposure * 100,
             )
             results.append(OrderResult(
-                ticker=ticker, side="buy", qty=0, success=False,
+                ticker=ticker, side="buy", qty=0, success=False, skipped=True,
                 error=f"Portfolio exposure cap ({max_exposure:.0%}) exceeded",
             ))
             continue
@@ -170,7 +171,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                     ticker, group, g_count, config.PARAMS.max_group_positions,
                 )
                 results.append(OrderResult(
-                    ticker=ticker, side="buy", qty=0, success=False,
+                    ticker=ticker, side="buy", qty=0, success=False, skipped=True,
                     error=f"Group '{group}' at max positions"
                           f" ({config.PARAMS.max_group_positions})",
                 ))
@@ -182,7 +183,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                     config.PARAMS.max_group_exposure * 100,
                 )
                 results.append(OrderResult(
-                    ticker=ticker, side="buy", qty=0, success=False,
+                    ticker=ticker, side="buy", qty=0, success=False, skipped=True,
                     error=f"Group '{group}' exposure cap"
                           f" ({config.PARAMS.max_group_exposure:.0%})",
                 ))
@@ -218,10 +219,18 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             ))
             current_exposure += size
         except Exception as e:
-            results.append(OrderResult(
-                ticker=ticker, side="buy", qty=qty, success=False,
-                error=str(e),
-            ))
+            err_str = str(e)
+            if "42210000" in err_str:
+                logger.info("Skipping %s: not tradable on Alpaca", ticker)
+                results.append(OrderResult(
+                    ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+                    error=err_str,
+                ))
+            else:
+                results.append(OrderResult(
+                    ticker=ticker, side="buy", qty=qty, success=False,
+                    error=err_str,
+                ))
 
     return results
 

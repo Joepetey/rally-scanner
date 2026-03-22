@@ -395,7 +395,7 @@ def make_bot(token: str) -> RallyBot:
                     if signals:
                         entry_results = await execute_entries(signals, equity=equity)
                         ok = [r for r in entry_results if r.success]
-                        fail = [r for r in entry_results if not r.success]
+                        fail = [r for r in entry_results if not r.success and not r.skipped]
 
                         for r in entry_results:
                             log_order(r.ticker, "buy", "market", r.qty, "entry",

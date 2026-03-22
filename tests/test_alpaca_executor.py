@@ -292,6 +292,7 @@ async def test_execute_entries_exposure_cap():
 
     assert len(results) == 1
     assert results[0].success is False
+    assert results[0].skipped is True
     assert "exposure cap" in results[0].error.lower()
 
 
@@ -330,7 +331,32 @@ async def test_execute_entries_group_limit():
 
     assert len(results) == 1
     assert results[0].success is False
+    assert results[0].skipped is True
     assert "max positions" in results[0].error.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_entries_not_tradable():
+    """42210000 (asset not tradable) should be a skipped result, not a hard failure."""
+    signals = [
+        {"ticker": "RGC", "close": 10.0, "size": 0.05, "atr_pct": 0.02},
+    ]
+    mock_client = MagicMock()
+    mock_client.submit_order.side_effect = Exception(
+        '{"code":42210000,"message":"asset \\"RGC\\" is not tradable"}'
+    )
+    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
+    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
+         patch("trading.positions.get_total_exposure", return_value=0.0), \
+         patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("db.positions.load_positions", return_value=_empty), \
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
+        results = await execute_entries(signals, equity=100_000.0)
+
+    assert len(results) == 1
+    assert results[0].success is False
+    assert results[0].skipped is True
+    assert results[0].ticker == "RGC"
 
 
 # ---------------------------------------------------------------------------
