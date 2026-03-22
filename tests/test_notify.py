@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from bot.notify import (
+from integrations.discord.notify import (
     notify_error,
     notify_exits,
     notify_retrain_complete,

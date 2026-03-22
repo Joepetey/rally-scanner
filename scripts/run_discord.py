@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from bot.discord_bot import make_bot
+from integrations.discord.bot import make_bot
 from db import init_pool, init_schema
 from log import setup_logging
 

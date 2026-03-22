@@ -29,7 +29,7 @@ from trading.positions import get_merged_positions
 from db.conversations import get_conversation_history, save_conversation_history
 from db.users import ensure_user
 
-from .claude_agent import process_message
+from .agent import process_message
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +316,7 @@ def make_bot(token: str) -> RallyBot:
                     "signal": bool(r.get("signal")),
                 })
 
-            wl_path = _Path(__file__).resolve().parent.parent.parent
+            wl_path = _Path(__file__).resolve().parent.parent.parent.parent
             wl_path = wl_path / "models" / "watchlist.json"
             wl_path.parent.mkdir(exist_ok=True)
             with open(wl_path, "w") as f:
@@ -377,12 +377,12 @@ def make_bot(token: str) -> RallyBot:
             await _send_alert(discord.Embed.from_dict(_positions_embed(open_pos)), "positions")
 
             # Auto-execute on Alpaca if enabled — only add positions after fill
-            from trading.alpaca_executor import is_enabled as alpaca_enabled
+            from integrations.alpaca.executor import is_enabled as alpaca_enabled
             if alpaca_enabled():
                 from db.events import log_order
                 from trading.positions import add_signal_positions
 
-                from trading.alpaca_executor import (
+                from integrations.alpaca.executor import (
                     execute_entries,
                     execute_exits,
                     get_account_equity,
@@ -512,7 +512,7 @@ def make_bot(token: str) -> RallyBot:
             """Fetch live prices for open positions and alert on breaches."""
             from core.data import fetch_quotes
 
-            from trading.alpaca_executor import is_enabled as alpaca_enabled
+            from integrations.alpaca.executor import is_enabled as alpaca_enabled
             from .notify import _approaching_alert_embed, _price_alert_embed
 
             if not _is_market_open():
@@ -536,7 +536,7 @@ def make_bot(token: str) -> RallyBot:
                     update_fill_prices,
                 )
 
-                from trading.alpaca_executor import (
+                from integrations.alpaca.executor import (
                     check_pending_fills,
                     get_snapshots,
                     place_trailing_stop,
@@ -571,7 +571,7 @@ def make_bot(token: str) -> RallyBot:
                         if not qty:
                             # Estimate qty from broker positions
                             try:
-                                from trading.alpaca_executor import get_all_positions
+                                from integrations.alpaca.executor import get_all_positions
                                 broker_pos = await get_all_positions()
                                 for bp in broker_pos:
                                     if bp["ticker"] == pos["ticker"]:
@@ -643,7 +643,7 @@ def make_bot(token: str) -> RallyBot:
                                 from db.events import log_order
                                 from trading.positions import async_close_position
 
-                                from trading.alpaca_executor import execute_exit
+                                from integrations.alpaca.executor import execute_exit
                                 trail_oid = pos.get("trail_order_id")
                                 result = await execute_exit(
                                     ticker, trail_order_id=trail_oid,
@@ -676,7 +676,7 @@ def make_bot(token: str) -> RallyBot:
                                 from db.events import log_order
                                 from trading.positions import async_close_position
 
-                                from trading.alpaca_executor import execute_exit
+                                from integrations.alpaca.executor import execute_exit
                                 trail_oid = pos.get("trail_order_id")
                                 result = await execute_exit(
                                     ticker, trail_order_id=trail_oid,
@@ -747,8 +747,8 @@ def make_bot(token: str) -> RallyBot:
                 get_trail_order_ids,
             )
 
-            from trading.alpaca_executor import check_trail_stop_fills
-            from trading.alpaca_executor import is_enabled as alpaca_enabled
+            from integrations.alpaca.executor import check_trail_stop_fills
+            from integrations.alpaca.executor import is_enabled as alpaca_enabled
 
             if not alpaca_enabled() or not _is_market_open():
                 return
@@ -823,8 +823,8 @@ def make_bot(token: str) -> RallyBot:
 
             # Get equity
             try:
-                from trading.alpaca_executor import get_account_equity
-                from trading.alpaca_executor import is_enabled as alpaca_enabled
+                from integrations.alpaca.executor import get_account_equity
+                from integrations.alpaca.executor import is_enabled as alpaca_enabled
                 if alpaca_enabled():
                     equity = await get_account_equity()
                 else:
@@ -913,7 +913,7 @@ def make_bot(token: str) -> RallyBot:
             try:
                 from trading.risk_manager import compute_drawdown
 
-                from trading.alpaca_executor import is_enabled as alpaca_enabled
+                from integrations.alpaca.executor import is_enabled as alpaca_enabled
                 if alpaca_enabled():
                     # Use cached equity if available, skip if not
                     pass

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 # claude_agent imports anthropic at module level; stub it before importing.
 sys.modules.setdefault("anthropic", MagicMock())
 
-from bot.claude_agent import _get_price, execute_tool  # noqa: E402, I001
+from integrations.discord.agent import _get_price, execute_tool  # noqa: E402, I001
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ def test_get_price_network_error(mock_fetch):
 # ---------------------------------------------------------------------------
 
 
-@patch("bot.claude_agent._get_price")
+@patch("integrations.discord.agent._get_price")
 def test_execute_tool_dispatches_get_price(mock_gp):
     mock_gp.return_value = {"count": 1, "quotes": {"HD": {"price": 392}}}
     result = execute_tool("get_price", {"tickers": ["HD"]}, 12345, 10000)

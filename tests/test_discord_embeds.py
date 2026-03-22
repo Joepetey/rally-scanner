@@ -1,6 +1,6 @@
 """Tests for Discord embed builders in notify.py."""
 
-from bot.notify import _error_embed, _exit_embed, _retrain_embed, _signal_embed
+from integrations.discord.notify import _error_embed, _exit_embed, _retrain_embed, _signal_embed
 
 
 def test_signal_embed_structure():

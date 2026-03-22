@@ -1,6 +1,6 @@
 """Tests for price alert embeds and alert-checking logic."""
 
-from bot.notify import _approaching_alert_embed, _price_alert_embed
+from integrations.discord.notify import _approaching_alert_embed, _price_alert_embed
 
 # ---------------------------------------------------------------------------
 # _price_alert_embed

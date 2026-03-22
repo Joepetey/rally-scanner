@@ -652,7 +652,7 @@ def _get_watchlist() -> dict[str, Any]:
     from pathlib import Path
 
     wl_path = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent.parent.parent
         / "models" / "watchlist.json"
     )
     if not wl_path.exists():
