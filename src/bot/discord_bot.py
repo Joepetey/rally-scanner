@@ -23,7 +23,8 @@ from discord.ext import commands, tasks
 
 from config import PARAMS
 from core.persistence import load_manifest
-from trading.positions import get_merged_positions, load_positions
+from db.positions import load_positions
+from trading.positions import get_merged_positions
 
 from db.conversations import get_conversation_history, save_conversation_history
 from db.users import ensure_user
@@ -331,7 +332,7 @@ def make_bot(token: str) -> RallyBot:
 
             from db.events import finish_scheduler_event, log_scheduler_event
             from live.scanner import scan_all
-            from trading.portfolio import record_closed_trades, update_daily_snapshot
+            from db.portfolio import record_closed_trades, update_daily_snapshot
 
             from .notify import _exit_embed, _positions_embed, _signal_embed
 
@@ -448,7 +449,8 @@ def make_bot(token: str) -> RallyBot:
 
         async def _store_order_ids(results: list) -> None:
             """Save Alpaca order IDs + trailing stop IDs to positions.json."""
-            from trading.positions import async_save_positions, load_positions
+            from db.positions import load_positions
+            from trading.positions import async_save_positions
             state = load_positions()
             for result in results:
                 if result.success and result.order_id:
@@ -528,12 +530,10 @@ def make_bot(token: str) -> RallyBot:
             tickers = [p["ticker"] for p in positions]
 
             if alpaca_enabled():
+                from db.positions import load_positions as reload_positions
                 from trading.positions import (
                     async_save_positions,
                     update_fill_prices,
-                )
-                from trading.positions import (
-                    load_positions as reload_positions,
                 )
 
                 from .alpaca_executor import (
@@ -911,7 +911,7 @@ def make_bot(token: str) -> RallyBot:
 
             # Check 2: portfolio drawdown > Tier 1 threshold
             try:
-                from trading.portfolio import compute_drawdown
+                from trading.risk_manager import compute_drawdown
 
                 from .alpaca_executor import is_enabled as alpaca_enabled
                 if alpaca_enabled():

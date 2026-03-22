@@ -13,8 +13,8 @@ import argparse
 import sys
 from datetime import datetime
 
-from trading.positions import load_positions
-from trading.portfolio import load_equity_history, load_trade_journal
+from db.portfolio import load_equity_history, load_trade_journal
+from db.positions import load_positions
 from core.persistence import load_manifest
 
 

@@ -4,11 +4,11 @@ from datetime import date, timedelta
 
 import pytest
 
-from db.portfolio import save_snapshot
-from trading.portfolio import (
+from db.portfolio import (
     load_equity_history,
     load_trade_journal,
     record_closed_trades,
+    save_snapshot,
     update_daily_snapshot,
 )
 

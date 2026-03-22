@@ -1,6 +1,39 @@
 """Portfolio tracking persistence — snapshots, trade journal, high-water mark."""
 
+import logging
+from datetime import datetime
+
 from db.pool import get_conn, row_to_dict
+
+logger = logging.getLogger(__name__)
+
+
+def update_daily_snapshot(positions_state: dict, scan_results: list[dict]) -> dict:
+    """Persist today's portfolio snapshot. Called after each daily scan."""
+    open_positions = positions_state.get("positions", [])
+
+    total_exposure = sum(p.get("size", 0) for p in open_positions)
+    total_unrealized = sum(
+        p.get("unrealized_pnl_pct", 0) * p.get("size", 0)
+        for p in open_positions
+    )
+
+    snapshot = {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "n_positions": len(open_positions),
+        "total_exposure": round(total_exposure, 4),
+        "total_unrealized_pnl_pct": round(total_unrealized, 6),
+        "n_signals_today": sum(1 for r in scan_results if r.get("signal")),
+        "n_scanned": sum(1 for r in scan_results if r.get("status") == "ok"),
+    }
+
+    save_snapshot(snapshot)
+
+    logger.info(
+        "Daily snapshot: %d positions, %.1f%% exposure",
+        snapshot["n_positions"], snapshot["total_exposure"] * 100,
+    )
+    return snapshot
 
 
 def save_snapshot(snapshot: dict) -> None:

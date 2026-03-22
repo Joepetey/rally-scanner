@@ -18,8 +18,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from backtest.common import CONFIGS_BY_NAME
-from config import PARAMS, AssetConfig
+from config import CONFIGS_BY_NAME, PARAMS, AssetConfig
 
 logger = logging.getLogger(__name__)
 from core.data import (

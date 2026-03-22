@@ -296,3 +296,7 @@ FEATURE_COLS = [
     # VIX fear gauge
     "VIX_PCTILE",
 ]
+
+# Extended feature set: original + HMM regime probabilities
+HMM_FEATURE_COLS = ["P_compressed", "P_expanding", "HMM_transition_signal"]
+ALL_FEATURE_COLS = FEATURE_COLS + HMM_FEATURE_COLS

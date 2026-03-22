@@ -28,17 +28,7 @@ logger = logging.getLogger(__name__)
 # Async lock for concurrent position writes (scan + price alerts)
 _positions_lock = asyncio.Lock()
 
-# Re-export for callers that import directly from trading.positions
 __all__ = [
-    "load_positions",
-    "save_positions",
-    "load_position_meta",
-    "load_all_position_meta",
-    "save_position_meta",
-    "delete_position_meta",
-    "record_closed_position",
-    "get_closed_today",
-    "tighten_trailing_stop",
     "get_merged_positions",
     "get_merged_positions_sync",
     "update_existing_positions",
@@ -169,10 +159,7 @@ def update_existing_positions(state: dict, all_results: list[dict]) -> dict:
     """
     p = PARAMS
 
-    price_map = {}
-    for r in all_results:
-        if r.get("status") == "ok":
-            price_map[r["ticker"]] = r
+    price_map = {r["ticker"]: r for r in all_results if r.get("status") == "ok"}
 
     closed_today = []
     still_open = []
@@ -285,7 +272,6 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
         save_position_meta(new_pos)
         current_exposure += sig["size"]
         open_tickers.add(sig["ticker"])
-        g = TICKER_TO_GROUP.get(sig["ticker"])
         if g:
             group_counts[g] = group_counts.get(g, 0) + 1
             group_exposures[g] = group_exposures.get(g, 0) + sig["size"]
@@ -361,13 +347,8 @@ def get_total_exposure() -> float:
 
 def get_group_exposure(group: str) -> tuple[int, float]:
     """Return (count, total_exposure) for positions in the given asset group."""
-    count = 0
-    exposure = 0.0
-    for p in load_all_position_meta():
-        if TICKER_TO_GROUP.get(p["ticker"]) == group:
-            count += 1
-            exposure += p.get("size", 0)
-    return count, exposure
+    matched = [p for p in load_all_position_meta() if TICKER_TO_GROUP.get(p["ticker"]) == group]
+    return len(matched), sum(p.get("size", 0) for p in matched)
 
 
 # ---------------------------------------------------------------------------

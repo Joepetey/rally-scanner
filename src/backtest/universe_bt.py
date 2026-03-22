@@ -41,16 +41,17 @@ import pandas as pd
 
 from .common import (  # noqa: E402
     CONFIGS,
+    combine_predictions,
     generate_signals_fast,
     simulate_portfolio,
     simulate_trades_fast,
+    walk_forward_train,
 )
-from core.calibrate import calibrate_thresholds
 from config import PIPELINE
+from core.calibrate import calibrate_thresholds
 from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
 from core.features import build_features
 from core.labels import compute_labels
-from core.model import combine_predictions, walk_forward_train
 from core.universe import get_universe
 
 logger = logging.getLogger(__name__)

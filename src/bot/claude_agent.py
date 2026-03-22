@@ -14,7 +14,7 @@ from typing import Any
 import anthropic
 
 from core.persistence import load_manifest
-from trading.portfolio import load_equity_history, load_trade_journal
+from db.portfolio import load_equity_history, load_trade_journal
 from trading.positions import get_merged_positions_sync
 
 # Local

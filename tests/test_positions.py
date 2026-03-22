@@ -6,12 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from config import PARAMS
+from db.positions import load_positions, save_positions, tighten_trailing_stop
 from trading.positions import (
     add_signal_positions,
     get_merged_positions,
-    load_positions,
-    save_positions,
-    tighten_trailing_stop,
     update_existing_positions,
     update_positions,
 )
@@ -478,7 +476,7 @@ async def test_merged_positions_no_metadata(tmp_models_dir):
 
 def test_db_persistence_roundtrip(tmp_models_dir):
     """Positions written to DB can be read back with correct values."""
-    from trading.positions import load_position_meta, save_position_meta
+    from db.positions import load_position_meta, save_position_meta
 
     save_position_meta({
         "ticker": "GOOG",

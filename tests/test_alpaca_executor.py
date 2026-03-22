@@ -19,11 +19,10 @@ from bot.alpaca_executor import (
     place_trailing_stop,
 )
 from bot.notify import _order_embed, _order_failure_embed
+from db.positions import load_positions, save_positions
 from trading.positions import (
     close_position_intraday,
     get_trail_order_ids,
-    load_positions,
-    save_positions,
     update_fill_prices,
 )
 
@@ -233,8 +232,8 @@ async def test_execute_entries_skips_crypto():
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
-         patch("trading.positions.load_positions", return_value=_empty), \
-         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
+         patch("db.positions.load_positions", return_value=_empty), \
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 0
@@ -256,8 +255,8 @@ async def test_execute_entries_qty():
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
-         patch("trading.positions.load_positions", return_value=_empty), \
-         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
+         patch("db.positions.load_positions", return_value=_empty), \
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -287,8 +286,8 @@ async def test_execute_entries_exposure_cap():
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.95), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
-         patch("trading.positions.load_positions", return_value=_empty), \
-         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
+         patch("db.positions.load_positions", return_value=_empty), \
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -303,7 +302,7 @@ async def test_execute_entries_circuit_breaker():
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    with patch("trading.portfolio.is_circuit_breaker_active", return_value=True), \
+    with patch("trading.risk_manager.is_circuit_breaker_active", return_value=True), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)):
         results = await execute_entries(signals, equity=100_000.0)
@@ -325,8 +324,8 @@ async def test_execute_entries_group_limit():
     with patch("bot.alpaca_executor._trading_client", return_value=mock_client), \
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(3, 0.3)), \
-         patch("trading.positions.load_positions", return_value=_empty), \
-         patch("trading.portfolio.is_circuit_breaker_active", return_value=False):
+         patch("db.positions.load_positions", return_value=_empty), \
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1

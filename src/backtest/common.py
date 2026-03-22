@@ -1,84 +1,21 @@
-"""Shared backtest primitives — Config presets, signal generation, trade simulation,
+"""Backtest primitives — walk-forward training, signal generation, trade simulation,
 and portfolio-level performance evaluation.
-
-Used by optimize.py, backtest_universe.py, and scanner.py.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
-from config import PARAMS
-
-
-@dataclass
-class Config:
-    name: str
-    p_rally: float
-    comp_score: float
-    max_risk: float
-    vol_k: float
-    profit_atr: float
-    time_stop: int
-    leverage: float
-    cash_yield: float  # annual yield on idle capital
+from config import CONFIGS, CONFIGS_BY_NAME, PARAMS, TradingConfig
+from core.features import ALL_FEATURE_COLS
+from core.hmm import fit_hmm, predict_hmm_probs
 
 
-CONFIGS = [
-    # --- Baseline (current) ---
-    Config("Baseline", p_rally=0.50, comp_score=0.55, max_risk=0.25,
-           vol_k=0.10, profit_atr=2.0, time_stop=10, leverage=1.0, cash_yield=0.0),
-
-    # --- Baseline + cash yield ---
-    Config("Base+Cash4%", p_rally=0.50, comp_score=0.55, max_risk=0.25,
-           vol_k=0.10, profit_atr=2.0, time_stop=10, leverage=1.0, cash_yield=0.04),
-
-    # --- Aggressive: lower thresholds, longer holds ---
-    Config("Aggressive", p_rally=0.40, comp_score=0.45, max_risk=0.30,
-           vol_k=0.12, profit_atr=3.0, time_stop=15, leverage=1.0, cash_yield=0.0),
-
-    Config("Aggr+Cash4%", p_rally=0.40, comp_score=0.45, max_risk=0.30,
-           vol_k=0.12, profit_atr=3.0, time_stop=15, leverage=1.0, cash_yield=0.04),
-
-    # --- Concentrated: fewer trades, bigger bets ---
-    Config("Concentrated", p_rally=0.55, comp_score=0.60, max_risk=0.40,
-           vol_k=0.15, profit_atr=2.5, time_stop=12, leverage=1.0, cash_yield=0.0),
-
-    # --- Leveraged variants ---
-    Config("Base 2x Lev", p_rally=0.50, comp_score=0.55, max_risk=0.25,
-           vol_k=0.10, profit_atr=2.0, time_stop=10, leverage=2.0, cash_yield=0.04),
-
-    Config("Base 3x Lev", p_rally=0.50, comp_score=0.55, max_risk=0.25,
-           vol_k=0.10, profit_atr=2.0, time_stop=10, leverage=3.0, cash_yield=0.04),
-
-    Config("Aggr 2x Lev", p_rally=0.40, comp_score=0.45, max_risk=0.30,
-           vol_k=0.12, profit_atr=3.0, time_stop=15, leverage=2.0, cash_yield=0.04),
-
-    # --- Max return: aggressive + 3x ---
-    Config("Aggr 3x Lev", p_rally=0.40, comp_score=0.45, max_risk=0.30,
-           vol_k=0.12, profit_atr=3.0, time_stop=15, leverage=3.0, cash_yield=0.04),
-
-    # --- Conservative: minimize drawdown ---
-    Config("Conservative", p_rally=0.55, comp_score=0.60, max_risk=0.15,
-           vol_k=0.08, profit_atr=2.0, time_stop=8, leverage=1.0, cash_yield=0.05),
-
-    Config("Cons 2x Lev", p_rally=0.55, comp_score=0.60, max_risk=0.15,
-           vol_k=0.08, profit_atr=2.0, time_stop=8, leverage=2.0, cash_yield=0.05),
-]
-
-# Lookup by name for scanner.py apply_config()
-CONFIGS_BY_NAME: dict[str, Config] = {c.name.lower().replace(" ", "_"): c for c in CONFIGS}
-# Add friendly aliases used by scanner CLI
-CONFIGS_BY_NAME.update({
-    "baseline": CONFIGS[0],
-    "conservative": CONFIGS[9],
-    "aggressive": CONFIGS[2],
-    "concentrated": CONFIGS[4],
-})
-
-
-def generate_signals_fast(preds: pd.DataFrame, cfg: Config,
+def generate_signals_fast(preds: pd.DataFrame, cfg: TradingConfig,
                           require_trend: bool) -> pd.Series:
     signal = (
         (preds["P_RALLY"] > cfg.p_rally)
@@ -90,7 +27,7 @@ def generate_signals_fast(preds: pd.DataFrame, cfg: Config,
 
 
 def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
-                         cfg: Config, close_only_tp: bool = False) -> pd.DataFrame:
+                         cfg: TradingConfig, close_only_tp: bool = False) -> pd.DataFrame:
     """Simulate trades with config-specific parameters.
 
     Args:
@@ -177,7 +114,7 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
     return pd.DataFrame(trades) if trades else pd.DataFrame()
 
 
-def simulate_portfolio(all_trades: pd.DataFrame, cfg: Config,
+def simulate_portfolio(all_trades: pd.DataFrame, cfg: TradingConfig,
                        initial_capital: float = 100_000) -> dict:
     """Simulate portfolio with leverage and cash yield on idle capital."""
     if all_trades.empty:
@@ -265,3 +202,148 @@ def simulate_portfolio(all_trades: pd.DataFrame, cfg: Config,
         "equity_series": equity_series,
         "drawdown": drawdown,
     }
+
+
+# ---------------------------------------------------------------------------
+# Walk-forward training (used by universe_bt.py)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FoldResult:
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    coefs: dict
+    intercept: float
+    predictions: pd.DataFrame  # index=date, columns=[P_RALLY, RALLY_ST]
+
+
+def walk_forward_train(df: pd.DataFrame) -> list[FoldResult]:
+    """
+    Walk-forward: train on `train_years`, test on `test_years`, roll forward.
+    Fits HMM on training data per fold, uses state probs as features.
+    Returns list of FoldResult (one per fold).
+    """
+    p = PARAMS
+    train_yrs = p.walk_forward_train_years
+    test_yrs = p.walk_forward_test_years
+
+    target_col = "RALLY_ST"
+
+    years = df.index.year.unique().sort_values()
+    min_year = int(years.min())
+    max_year = int(years.max())
+
+    results: list[FoldResult] = []
+
+    fold_start = min_year
+    while fold_start + train_yrs + test_yrs - 1 <= max_year:
+        train_end_year = fold_start + train_yrs - 1
+        test_start_year = train_end_year + 1
+        test_end_year = test_start_year + test_yrs - 1
+
+        train_mask = (df.index.year >= fold_start) & (df.index.year <= train_end_year)
+        test_mask = (df.index.year >= test_start_year) & (df.index.year <= test_end_year)
+
+        df_train_raw = df.loc[train_mask]
+        df_test_raw = df.loc[test_mask]
+
+        if len(df_train_raw) < 100 or len(df_test_raw) < 20:
+            fold_start += test_yrs
+            continue
+
+        # Fit HMM on training data only
+        hmm_model, hmm_scaler, state_order = fit_hmm(df_train_raw)
+
+        # Predict HMM state probabilities for train and test
+        hmm_train = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train_raw)
+        hmm_test = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_test_raw)
+
+        # Merge HMM features
+        df_train_full = df_train_raw.join(hmm_train)
+        df_test_full = df_test_raw.join(hmm_test)
+
+        # Determine which features are available
+        feature_cols = ALL_FEATURE_COLS
+
+        # Drop rows with NaN in features or label
+        train_valid = df_train_full[feature_cols + [target_col]].notna().all(axis=1)
+        test_valid = df_test_full[feature_cols + [target_col]].notna().all(axis=1)
+        df_train = df_train_full.loc[train_valid]
+        df_test = df_test_full.loc[test_valid]
+
+        if len(df_train) < 100 or len(df_test) < 20:
+            fold_start += test_yrs
+            continue
+
+        X_train = df_train[feature_cols].values
+        y_train = df_train[target_col].values
+        X_test = df_test[feature_cols].values
+        y_test = df_test[target_col].values
+
+        # Standardize features
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_test_s = scaler.transform(X_test)
+
+        # Fit logistic regression
+        lr = LogisticRegression(
+            C=1.0,
+            l1_ratio=0,
+            solver="lbfgs",
+            max_iter=1000,
+            class_weight="balanced",
+        )
+        lr.fit(X_train_s, y_train)
+
+        # Isotonic calibration (fit on last 20% of training set as validation)
+        val_split = int(len(X_train_s) * 0.8)
+        X_val_s = X_train_s[val_split:]
+        y_val = y_train[val_split:]
+        raw_val_probs = lr.predict_proba(X_val_s)[:, 1]
+
+        iso = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
+        iso.fit(raw_val_probs, y_val)
+
+        # Calibrated probabilities on test set
+        raw_test_probs = lr.predict_proba(X_test_s)[:, 1]
+        cal_test_probs = iso.predict(raw_test_probs)
+
+        preds = pd.DataFrame({
+            "P_RALLY": cal_test_probs,
+            "P_RALLY_RAW": raw_test_probs,
+            "RALLY_ST": y_test,
+        }, index=df_test.index)
+
+        # Attach features for trading rules
+        for col in feature_cols:
+            preds[col] = df_test[col].values
+        # Attach price data for trading
+        for col in ["Open", "High", "Low", "Close", "ATR", "ATR_pct", "RV",
+                     "p_RV", "RangeHigh", "RangeLow", "MA200", "RSI",
+                     "VIX_Close"]:
+            if col in df_test.columns:
+                preds[col] = df_test[col].values
+
+        coefs = dict(zip(feature_cols, lr.coef_[0] / scaler.scale_))
+        intercept = float(lr.intercept_[0])
+
+        results.append(FoldResult(
+            train_start=str(fold_start),
+            train_end=str(train_end_year),
+            test_start=str(test_start_year),
+            test_end=str(test_end_year),
+            coefs=coefs,
+            intercept=intercept,
+            predictions=preds,
+        ))
+
+        fold_start += test_yrs
+
+    return results
+
+
+def combine_predictions(folds: list[FoldResult]) -> pd.DataFrame:
+    """Concatenate all out-of-sample predictions across folds."""
+    return pd.concat([f.predictions for f in folds], axis=0).sort_index()

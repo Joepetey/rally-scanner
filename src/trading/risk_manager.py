@@ -11,8 +11,43 @@ import logging
 from dataclasses import dataclass
 
 from config import PARAMS
+from db.portfolio import get_high_water_mark, set_high_water_mark
 
 logger = logging.getLogger(__name__)
+
+
+def compute_drawdown(equity: float) -> float:
+    """Compute current drawdown from equity high-water mark.
+
+    Returns drawdown as a positive fraction (e.g. 0.10 = 10% drawdown).
+    Returns 0.0 if equity is at/above the high-water mark.
+    """
+    if equity <= 0:
+        return 0.0
+
+    hwm = get_high_water_mark()
+    if hwm <= 0:
+        hwm = equity
+
+    if equity >= hwm:
+        set_high_water_mark(equity)
+        return 0.0
+
+    return (hwm - equity) / hwm
+
+
+def is_circuit_breaker_active(equity: float) -> bool:
+    """Check if the drawdown circuit breaker should block new entries."""
+    if not PARAMS.circuit_breaker_enabled:
+        return False
+    dd = compute_drawdown(equity)
+    if dd >= PARAMS.max_drawdown_pct:
+        logger.warning(
+            "Circuit breaker ACTIVE: drawdown %.1f%% >= threshold %.1f%%",
+            dd * 100, PARAMS.max_drawdown_pct * 100,
+        )
+        return True
+    return False
 
 
 @dataclass
@@ -77,7 +112,6 @@ def evaluate(
 
     # Compute drawdown if not provided
     if drawdown is None:
-        from .portfolio import compute_drawdown
         drawdown = compute_drawdown(equity)
 
     actions: list[RiskAction] = []
@@ -95,7 +129,7 @@ def evaluate(
             ))
 
     # --- Tier 2: Close weakest position at 10-15% drawdown ---
-    if drawdown >= PARAMS.risk_tier2_dd and len(positions) > 0:
+    if drawdown >= PARAMS.risk_tier2_dd:
         weakest = min(positions, key=lambda p: p.get("unrealized_pnl_pct", 0))
         actions.append(RiskAction(
             action_type="close_position",
@@ -198,8 +232,13 @@ async def _execute_close(action: RiskAction, positions: list[dict]) -> dict:
     ticker = action.ticker
     pos = next((p for p in positions if p["ticker"] == ticker), None)
     if not pos:
-        return {"ticker": ticker, "action": "close", "success": False,
-                "error": "Position not found", "reason": action.reason}
+        return {
+            "ticker": ticker,
+            "action": "close",
+            "success": False,
+            "error": "Position not found",
+            "reason": action.reason,
+        }
 
     price = pos.get("current_price", pos.get("entry_price", 0))
 
@@ -226,8 +265,13 @@ async def _execute_close(action: RiskAction, positions: list[dict]) -> dict:
         }
     except Exception as e:
         logger.exception("Risk close failed for %s", ticker)
-        return {"ticker": ticker, "action": "close", "success": False,
-                "error": str(e), "reason": action.reason}
+        return {
+            "ticker": ticker,
+            "action": "close",
+            "success": False,
+            "error": str(e),
+            "reason": action.reason,
+        }
 
 
 async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
@@ -235,8 +279,13 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
     ticker = action.ticker
     pos = next((p for p in positions if p["ticker"] == ticker), None)
     if not pos:
-        return {"ticker": ticker, "action": "tighten", "success": False,
-                "error": "Position not found", "reason": action.reason}
+        return {
+            "ticker": ticker,
+            "action": "tighten",
+            "success": False,
+            "error": "Position not found",
+            "reason": action.reason,
+        }
 
     atr = pos.get("atr", 0)
     highest = pos.get("highest_close", pos.get("current_price", pos.get("entry_price", 0)))
@@ -245,16 +294,27 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
 
     # Only tighten (never loosen)
     if new_trail <= old_trail:
-        return {"ticker": ticker, "action": "tighten", "success": True,
-                "skipped": True, "reason": action.reason,
-                "old_stop": old_trail, "new_stop": new_trail}
+        return {
+            "ticker": ticker,
+            "action": "tighten",
+            "success": True,
+            "skipped": True,
+            "reason": action.reason,
+            "old_stop": old_trail,
+            "new_stop": new_trail,
+        }
 
     try:
-        from .positions import tighten_trailing_stop
+        from db.positions import tighten_trailing_stop
         updated = tighten_trailing_stop(ticker, new_trail)
         if not updated:
-            return {"ticker": ticker, "action": "tighten", "success": False,
-                    "error": "Position not found in state", "reason": action.reason}
+            return {
+                "ticker": ticker,
+                "action": "tighten",
+                "success": False,
+                "error": "Position not found in state",
+                "reason": action.reason,
+            }
 
         # Update broker trailing stop if Alpaca is enabled
         from bot.alpaca_executor import is_enabled as alpaca_enabled
@@ -272,7 +332,8 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
                 from bot.alpaca_executor import place_trailing_stop
                 new_oid = await place_trailing_stop(ticker, qty, trail_pct)
                 if new_oid:
-                    from .positions import async_save_positions, load_positions
+                    from db.positions import load_positions
+                    from .positions import async_save_positions
                     state = load_positions()
                     for p in state.get("positions", []):
                         if p["ticker"] == ticker:
@@ -285,5 +346,10 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
                 "reason": action.reason}
     except Exception as e:
         logger.exception("Risk tighten failed for %s", ticker)
-        return {"ticker": ticker, "action": "tighten", "success": False,
-                "error": str(e), "reason": action.reason}
+        return {
+            "ticker": ticker,
+            "action": "tighten",
+            "success": False,
+            "error": str(e),
+            "reason": action.reason,
+        }

@@ -36,7 +36,7 @@ from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
 from core.features import build_features
 from core.hmm import fit_hmm, predict_hmm_probs
 from core.labels import compute_labels
-from core.model import ALL_FEATURE_COLS
+from core.features import ALL_FEATURE_COLS
 from core.persistence import load_manifest, save_model
 from core.universe import get_universe
 

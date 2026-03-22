@@ -34,7 +34,7 @@ from core.persistence import load_manifest
 from bot.notify import (
     notify_signals, notify_exits, notify_retrain_complete, notify_error,
 )
-from trading.portfolio import update_daily_snapshot, record_closed_trades
+from db.portfolio import record_closed_trades, update_daily_snapshot
 
 logger = logging.getLogger(__name__)
 

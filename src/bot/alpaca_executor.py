@@ -112,8 +112,9 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
 
 
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
-    from trading.portfolio import is_circuit_breaker_active
-    from trading.positions import get_group_exposure, get_total_exposure, load_positions
+    from db.positions import load_positions
+    from trading.positions import get_group_exposure, get_total_exposure
+    from trading.risk_manager import is_circuit_breaker_active
 
     results: list[OrderResult] = []
 

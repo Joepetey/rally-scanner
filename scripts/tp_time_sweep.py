@@ -30,9 +30,8 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from config import CONFIGS_BY_NAME, TradingConfig  # noqa: E402
 from backtest.common import (  # noqa: E402
-    CONFIGS_BY_NAME,
-    Config,
     generate_signals_fast,
     simulate_portfolio,
     simulate_trades_fast,
@@ -58,7 +57,7 @@ def _load_cache() -> dict[str, pd.DataFrame]:
 
 def _run_grid(
     cached: dict[str, pd.DataFrame],
-    base_cfg: Config,
+    base_cfg: TradingConfig,
     profit_atrs: list[float],
     time_stops: list[int],
     close_only: bool,
@@ -69,7 +68,7 @@ def _run_grid(
 
     for pa in profit_atrs:
         for ts in time_stops:
-            cfg = Config(
+            cfg = TradingConfig(
                 name=f"pa{pa}_ts{ts}",
                 p_rally=base_cfg.p_rally,
                 comp_score=base_cfg.comp_score,

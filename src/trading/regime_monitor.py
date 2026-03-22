@@ -6,7 +6,7 @@ on significant transitions (e.g. compressed → expanding).
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from config import PARAMS
@@ -46,9 +46,7 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
     Returns list of transition events:
         {ticker, prev_regime, new_regime, p_compressed, p_normal, p_expanding}
     """
-    from datetime import timedelta
-
-    from core.data import fetch_daily_batch, fetch_vix_safe
+    from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
     from core.features import build_features
     from core.hmm import predict_hmm_probs
     from core.persistence import load_manifest, load_model
@@ -94,7 +92,6 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
             if df is None or len(df) < 300:
                 continue
 
-            from core.data import merge_vix
             if vix_data is not None:
                 df = merge_vix(df, vix_data)
 
