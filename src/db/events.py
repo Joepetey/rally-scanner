@@ -27,7 +27,7 @@ def log_order(
             """,
             (ticker, side, order_type, qty, context, order_id, status, fill_price, error),
         )
-        return cur.fetchone()[0]
+        return cur.fetchone()["id"]
 
 
 def update_order_fill(order_id: str, fill_price: float, filled_at: datetime | None = None) -> None:
@@ -92,7 +92,7 @@ def log_scheduler_event(event_type: str) -> int:
             """,
             (event_type,),
         )
-        return cur.fetchone()[0]
+        return cur.fetchone()["id"]
 
 
 def finish_scheduler_event(
