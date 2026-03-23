@@ -219,6 +219,23 @@ def _mock_position(symbol="AAPL", qty="10", avg_entry_price="150.25",
 # execute_entries (mocked alpaca-py)
 # ---------------------------------------------------------------------------
 
+# Common no-op patches needed for all execute_entries tests (new DB helpers).
+_ENTRY_NOOP_PATCHES = [
+    patch("db.positions.load_all_position_meta", return_value=[]),
+    patch("db.positions.enqueue_signal"),
+    patch("db.positions.log_skipped_signal"),
+    patch("db.positions.remove_from_queue"),
+]
+
+
+def _apply_noop_patches(patches):
+    """Context manager that enters a list of patch objects."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    for p in patches:
+        stack.enter_context(p)
+    return stack
+
 
 @pytest.mark.asyncio
 async def test_execute_entries_skips_crypto():
@@ -233,7 +250,11 @@ async def test_execute_entries_skips_crypto():
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
          patch("db.positions.load_positions", return_value=_empty), \
-         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False), \
+         patch("db.positions.load_all_position_meta", return_value=[]), \
+         patch("db.positions.enqueue_signal"), \
+         patch("db.positions.log_skipped_signal"), \
+         patch("db.positions.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 0
@@ -256,7 +277,11 @@ async def test_execute_entries_qty():
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
          patch("db.positions.load_positions", return_value=_empty), \
-         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False), \
+         patch("db.positions.load_all_position_meta", return_value=[]), \
+         patch("db.positions.enqueue_signal"), \
+         patch("db.positions.log_skipped_signal"), \
+         patch("db.positions.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -276,24 +301,60 @@ async def test_execute_entries_qty():
 
 @pytest.mark.asyncio
 async def test_execute_entries_exposure_cap():
-    """Entries should be skipped when portfolio exposure cap is reached."""
+    """Signal is queued when no capital available even after partial sizing."""
+    # Exposure at 99.5% leaves only 0.5% — below min_position_size (1%)
+    # so partial sizing can't help and the signal is queued.
     signals = [
-        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02, "p_rally": 0.60},
     ]
 
     mock_client = MagicMock()
     _empty = {"positions": [], "closed_today": [], "last_updated": ""}
     with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("trading.positions.get_total_exposure", return_value=0.95), \
+         patch("trading.positions.get_total_exposure", return_value=0.995), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
          patch("db.positions.load_positions", return_value=_empty), \
-         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False), \
+         patch("db.positions.load_all_position_meta", return_value=[]), \
+         patch("db.positions.enqueue_signal") as mock_enqueue, \
+         patch("db.positions.log_skipped_signal"), \
+         patch("db.positions.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
     assert results[0].success is False
     assert results[0].skipped is True
     assert "exposure cap" in results[0].error.lower()
+    mock_enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_entries_partial_sizing():
+    """Signal is scaled down when available capital is below requested size."""
+    # 95% used, 5% available — signal wants 10% but gets scaled to 5%
+    signals = [
+        {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02, "p_rally": 0.60},
+    ]
+    mock_order = _mock_order(order_id="partial-1", filled_avg_price=None)
+    mock_client = MagicMock()
+    mock_client.submit_order.return_value = mock_order
+
+    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
+    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
+         patch("trading.positions.get_total_exposure", return_value=0.95), \
+         patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
+         patch("db.positions.load_positions", return_value=_empty), \
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False), \
+         patch("db.positions.load_all_position_meta", return_value=[]), \
+         patch("db.positions.enqueue_signal"), \
+         patch("db.positions.log_skipped_signal"), \
+         patch("db.positions.remove_from_queue"):
+        results = await execute_entries(signals, equity=100_000.0)
+
+    assert len(results) == 1
+    assert results[0].success is True
+    # qty = 100000 * 0.05 / 150 = 33 (scaled to 5% available)
+    assert results[0].qty == 33
 
 
 @pytest.mark.asyncio
@@ -326,7 +387,11 @@ async def test_execute_entries_group_limit():
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(3, 0.3)), \
          patch("db.positions.load_positions", return_value=_empty), \
-         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False), \
+         patch("db.positions.load_all_position_meta", return_value=[]), \
+         patch("db.positions.enqueue_signal"), \
+         patch("db.positions.log_skipped_signal"), \
+         patch("db.positions.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -350,7 +415,11 @@ async def test_execute_entries_not_tradable():
          patch("trading.positions.get_total_exposure", return_value=0.0), \
          patch("trading.positions.get_group_exposure", return_value=(0, 0.0)), \
          patch("db.positions.load_positions", return_value=_empty), \
-         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False):
+         patch("trading.risk_manager.is_circuit_breaker_active", return_value=False), \
+         patch("db.positions.load_all_position_meta", return_value=[]), \
+         patch("db.positions.enqueue_signal"), \
+         patch("db.positions.log_skipped_signal"), \
+         patch("db.positions.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1

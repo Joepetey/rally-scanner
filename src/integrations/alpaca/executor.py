@@ -114,8 +114,18 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
 
 
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
-    from db.positions import load_positions
-    from trading.positions import get_group_exposure, get_total_exposure
+    from db.positions import (
+        enqueue_signal,
+        load_all_position_meta,
+        load_positions,
+        log_skipped_signal,
+        remove_from_queue,
+    )
+    from trading.positions import (
+        async_close_position,
+        get_group_exposure,
+        get_total_exposure,
+    )
     from trading.risk_manager import is_circuit_breaker_active
 
     results: list[OrderResult] = []
@@ -131,6 +141,8 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
 
     current_exposure = get_total_exposure()
     max_exposure = config.PARAMS.max_portfolio_exposure
+    min_size = config.PARAMS.min_position_size
+    open_positions = load_all_position_meta()
     open_tickers = {p["ticker"] for p in load_positions().get("positions", [])}
     client = _trading_client()
 
@@ -148,18 +160,71 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
 
         price = sig.get("entry_price") or sig["close"]
         size = sig["size"]
+        available = max_exposure - current_exposure
 
-        # Portfolio exposure cap
+        # --- Feature 2: Partial sizing ---
+        # Scale down to available capital rather than skipping outright.
         if current_exposure + size > max_exposure:
-            logger.warning(
-                "Skipping %s: exposure %.1f%% + %.1f%% > cap %.0f%%",
-                ticker, current_exposure * 100, size * 100, max_exposure * 100,
-            )
-            results.append(OrderResult(
-                ticker=ticker, side="buy", qty=0, success=False, skipped=True,
-                error=f"Portfolio exposure cap ({max_exposure:.0%}) exceeded",
-            ))
-            continue
+            if config.PARAMS.partial_sizing_enabled and available >= min_size:
+                logger.info(
+                    "%s: partial size %.1f%% → %.1f%% (capital limited)",
+                    ticker, size * 100, available * 100,
+                )
+                size = available
+            else:
+                # No room even for a minimum position.
+                # --- Feature 4: Position rotation ---
+                # If the new signal scores significantly higher than the weakest
+                # open position, exit the weak one to fund this entry.
+                rotated = False
+                if config.PARAMS.rotation_enabled and open_positions:
+                    sig_p = sig.get("p_rally", 0)
+                    weakest = min(open_positions, key=lambda p: p.get("p_rally", 0))
+                    if sig_p > weakest.get("p_rally", 0) + config.PARAMS.rotation_p_rally_margin:
+                        wticker = weakest["ticker"]
+                        logger.info(
+                            "Rotation: closing %s (P=%.0f%%) to fund %s (P=%.0f%%)",
+                            wticker, weakest.get("p_rally", 0) * 100,
+                            ticker, sig_p * 100,
+                        )
+                        try:
+                            exit_result = await execute_exit(
+                                wticker, trail_order_id=weakest.get("trail_order_id"),
+                            )
+                            if exit_result.success or exit_result.already_closed:
+                                w_price = exit_result.fill_price or weakest.get("current_price", 0)
+                                await async_close_position(wticker, w_price, "rotation")
+                                freed = weakest.get("size", 0)
+                                current_exposure -= freed
+                                available = max_exposure - current_exposure
+                                open_positions = [
+                                    p for p in open_positions if p["ticker"] != wticker
+                                ]
+                                open_tickers.discard(wticker)
+                                size = min(size, available) if available >= min_size else 0.0
+                                if size >= min_size:
+                                    rotated = True
+                                    results.append(OrderResult(
+                                        ticker=wticker, side="sell",
+                                        qty=exit_result.qty, success=True,
+                                        order_id=exit_result.order_id,
+                                        fill_price=exit_result.fill_price,
+                                    ))
+                            else:
+                                logger.warning("Rotation exit failed for %s: %s", wticker, exit_result.error)
+                        except Exception as e:
+                            logger.warning("Rotation exit error for %s: %s", wticker, e)
+
+                if not rotated:
+                    # --- Feature 1: Signal queue + Feature 3: Opportunity cost ---
+                    enqueue_signal(sig, "capital")
+                    log_skipped_signal(sig, "capital")
+                    logger.info("Queued %s: no capital available", ticker)
+                    results.append(OrderResult(
+                        ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+                        error=f"Portfolio exposure cap ({max_exposure:.0%}) exceeded — queued",
+                    ))
+                    continue
 
         # Group concentration check
         group = config.TICKER_TO_GROUP.get(ticker)
@@ -170,6 +235,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                     "Skipping %s: group '%s' at %d/%d positions",
                     ticker, group, g_count, config.PARAMS.max_group_positions,
                 )
+                log_skipped_signal(sig, f"group_cap:{group}")
                 results.append(OrderResult(
                     ticker=ticker, side="buy", qty=0, success=False, skipped=True,
                     error=f"Group '{group}' at max positions"
@@ -182,6 +248,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                     ticker, group, g_exp * 100, size * 100,
                     config.PARAMS.max_group_exposure * 100,
                 )
+                log_skipped_signal(sig, f"group_exposure:{group}")
                 results.append(OrderResult(
                     ticker=ticker, side="buy", qty=0, success=False, skipped=True,
                     error=f"Group '{group}' exposure cap"
@@ -209,6 +276,9 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                 ),
             )
             fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
+
+            # Remove from queue if it was waiting
+            remove_from_queue(ticker)
 
             # Trailing stop is deferred until fill is confirmed
             # (handled by _check_price_alerts in discord_bot.py)

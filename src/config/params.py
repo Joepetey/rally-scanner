@@ -63,6 +63,12 @@ class Params(BaseModel):
     risk_expanding_threshold: float = 0.80  # P(expanding) for per-position tightening
     risk_vix_spike_pct: float = 0.20     # VIX % daily change trigger
 
+    # --- Signal queue & rotation ---
+    signal_queue_max_age_days: int = 2       # discard queued signal after N days
+    partial_sizing_enabled: bool = True      # scale down size to fit available capital
+    rotation_enabled: bool = True            # exit weakest pos to fund better signal
+    rotation_p_rally_margin: float = 0.08   # new signal must exceed weakest by this margin
+
     # --- Adaptive scan frequency (Phase 3) ---
     midday_scans_enabled: bool = True
     adaptive_alerts_enabled: bool = True

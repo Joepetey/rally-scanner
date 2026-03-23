@@ -24,8 +24,16 @@ def generate_signals_fast(preds: pd.DataFrame, cfg: TradingConfig,
     return signal
 
 
-def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
-                         cfg: TradingConfig, close_only_tp: bool = False) -> pd.DataFrame:
+def simulate_trades_fast(
+    preds: pd.DataFrame,
+    signal: pd.Series,
+    cfg: TradingConfig,
+    close_only_tp: bool = False,
+    require_fail_dn: bool = False,
+    gap_filter: bool = False,
+    require_volume: bool = False,
+    spy_trend: pd.Series | None = None,
+) -> pd.DataFrame:
     """Simulate trades with config-specific parameters.
 
     Entry is deferred to the *next bar's open* to match live behaviour: signals
@@ -36,6 +44,12 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
             reaches the target (matching production behaviour).  Default False uses
             the intraday *high*, which is optimistic but standard for limit-order
             backtests.
+        require_fail_dn: Only enter if FAIL_DN_SCORE > 0 on the signal bar.
+        gap_filter: Skip entry if next-day open is more than 0.5% below prior close
+            (adverse gap against the trade).
+        require_volume: Only enter if p_VOL > 0.5 (above-median volume) on signal bar.
+        spy_trend: Date-indexed boolean Series; if provided, skip signals where
+            SPY is below its 200-day MA on the signal date.
     """
     p = PARAMS
     n = len(preds)
@@ -45,6 +59,8 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
     low = preds["Low"].values
     atr = preds["ATR"].values
     rv_pct = preds["p_RV"].values if "p_RV" in preds.columns else np.full(n, 0.5)
+    fail_dn = preds["FAIL_DN_SCORE"].values if "FAIL_DN_SCORE" in preds.columns else np.zeros(n)
+    p_vol = preds["p_VOL"].values if "p_VOL" in preds.columns else np.full(n, 0.5)
 
     trades = []
     in_trade = False
@@ -61,21 +77,25 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
     for i in range(n):
         # Enter at this bar's open if a signal fired on the previous bar
         if pending_entry and not in_trade:
-            actual_entry_idx = i
-            entry_price = open_[i]
-            stop_price = preds["RangeLow"].iloc[signal_idx]
-            if np.isnan(stop_price) or stop_price >= entry_price:
-                stop_price = entry_price * (1 - p.fallback_stop_pct)
-            p_rally = preds["P_RALLY"].iloc[signal_idx]
-            atr_pct = preds["ATR_pct"].iloc[signal_idx]
-            raw_size = cfg.vol_k * (p_rally - cfg.p_rally) / atr_pct if atr_pct > 0 else 0
-            size = max(0.0, min(raw_size, cfg.max_risk))
-            if size >= 0.01:
-                in_trade = True
-                bars_held = 0
-                highest_close = entry_price
-                trailing_stop = entry_price - p.trailing_stop_atr_mult * atr[signal_idx]
-            pending_entry = False
+            # Gap filter: skip if open gaps down more than 0.5% vs prior close
+            if gap_filter and i > 0 and open_[i] < close[i - 1] * 0.995:
+                pending_entry = False
+            else:
+                actual_entry_idx = i
+                entry_price = open_[i]
+                stop_price = preds["RangeLow"].iloc[signal_idx]
+                if np.isnan(stop_price) or stop_price >= entry_price:
+                    stop_price = entry_price * (1 - p.fallback_stop_pct)
+                p_rally = preds["P_RALLY"].iloc[signal_idx]
+                atr_pct = preds["ATR_pct"].iloc[signal_idx]
+                raw_size = cfg.vol_k * (p_rally - cfg.p_rally) / atr_pct if atr_pct > 0 else 0
+                size = max(0.0, min(raw_size, cfg.max_risk))
+                if size >= 0.01:
+                    in_trade = True
+                    bars_held = 0
+                    highest_close = entry_price
+                    trailing_stop = entry_price - p.trailing_stop_atr_mult * atr[signal_idx]
+                pending_entry = False
 
         if in_trade:
             bars_held += 1
@@ -117,6 +137,16 @@ def simulate_trades_fast(preds: pd.DataFrame, signal: pd.Series,
                 in_trade = False
 
         if not in_trade and not pending_entry and signal.iloc[i]:
+            # Optional gates at signal bar
+            if require_fail_dn and fail_dn[i] <= 0:
+                continue
+            if require_volume and p_vol[i] <= 0.5:
+                continue
+            if spy_trend is not None:
+                date = preds.index[i]
+                spy_ok = spy_trend.get(date, True)  # default True if date missing
+                if not spy_ok:
+                    continue
             pending_entry = True
             signal_idx = i
 

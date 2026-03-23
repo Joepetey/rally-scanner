@@ -128,6 +128,46 @@ def init_schema() -> None:
             ON CONFLICT (key) DO NOTHING
         """)
 
+        # Add p_rally to system_positions if not present (migration-safe)
+        cur.execute("""
+            ALTER TABLE system_positions
+            ADD COLUMN IF NOT EXISTS p_rally DOUBLE PRECISION DEFAULT 0
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS signal_queue (
+                id          BIGSERIAL PRIMARY KEY,
+                ticker      TEXT NOT NULL UNIQUE,
+                p_rally     DOUBLE PRECISION NOT NULL,
+                comp_score  DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close       DOUBLE PRECISION NOT NULL,
+                size        DOUBLE PRECISION NOT NULL,
+                range_low   DOUBLE PRECISION NOT NULL,
+                atr_pct     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                signal_date DATE NOT NULL,
+                skip_reason TEXT NOT NULL DEFAULT 'capital',
+                queued_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS skipped_signals (
+                id            BIGSERIAL PRIMARY KEY,
+                ticker        TEXT NOT NULL,
+                signal_date   DATE NOT NULL,
+                p_rally       DOUBLE PRECISION NOT NULL,
+                comp_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close         DOUBLE PRECISION NOT NULL,
+                size          DOUBLE PRECISION NOT NULL,
+                skip_reason   TEXT NOT NULL,
+                outcome_date  DATE,
+                outcome_price DOUBLE PRECISION,
+                outcome_pct   DOUBLE PRECISION,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (ticker, signal_date)
+            )
+        """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id           BIGSERIAL PRIMARY KEY,
