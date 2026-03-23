@@ -12,15 +12,20 @@ from datetime import datetime
 
 from config import PARAMS, TICKER_TO_GROUP
 from db.positions import (
+    clear_expired_queue,
     delete_position_meta,
+    dequeue_signals,
     get_closed_today,
+    get_unevaluated_skipped,
     load_all_position_meta,
     load_position_meta,
     load_positions,
     record_closed_position,
+    remove_from_queue,
     save_position_meta,
     save_positions,
     tighten_trailing_stop,
+    update_skipped_outcome,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,8 @@ __all__ = [
     "async_close_position",
     "async_save_positions",
     "print_positions",
+    "process_signal_queue",
+    "update_skipped_outcomes",
 ]
 
 
@@ -87,7 +94,7 @@ async def get_merged_positions() -> dict:
             "atr": meta.get("atr", 0),
             "bars_held": meta.get("bars_held", 0),
             "size": meta.get("size", 0),
-            "entry_date": meta.get("entry_date", ""),
+            "entry_date": meta.get("entry_date") or datetime.now().strftime("%Y-%m-%d"),
             "order_id": meta.get("order_id"),
             "trail_order_id": meta.get("trail_order_id"),
             "status": "open",
@@ -256,6 +263,7 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
             "entry_date": sig["date"],
             "entry_price": sig["close"],
             "size": sig["size"],
+            "p_rally": sig.get("p_rally", 0),
             "stop_price": sig["range_low"],
             "target_price": round(sig["close"] + p.profit_atr_mult * atr_val, 2),
             "trailing_stop": round(
@@ -367,6 +375,53 @@ async def async_save_positions(state: dict) -> None:
     """Thread-safe save via asyncio.Lock."""
     async with _positions_lock:
         save_positions(state)
+
+
+# ---------------------------------------------------------------------------
+# Signal queue processing
+# ---------------------------------------------------------------------------
+
+def process_signal_queue() -> list[dict]:
+    """Return valid queued signals ready to re-attempt, clearing expired entries.
+
+    Signals are ordered by P(rally) descending. The caller is responsible for
+    attempting execution and calling remove_from_queue on success.
+    """
+    expired = clear_expired_queue(PARAMS.signal_queue_max_age_days)
+    if expired:
+        logger.info("Cleared %d expired signals from queue", expired)
+
+    return dequeue_signals(PARAMS.signal_queue_max_age_days)
+
+
+def update_skipped_outcomes(results: list[dict]) -> int:
+    """Fill in outcome data for previously skipped signals using today's scan prices.
+
+    Looks up each unevaluated skipped signal, finds a matching current price in
+    results, computes the return from signal_date close to today's close, and
+    persists it. Returns number of outcomes recorded.
+    """
+    unevaluated = get_unevaluated_skipped()
+    if not unevaluated:
+        return 0
+
+    price_map = {r["ticker"]: r["close"] for r in results if r.get("status") == "ok"}
+    recorded = 0
+    for entry in unevaluated:
+        ticker = entry["ticker"]
+        if ticker not in price_map:
+            continue
+        current_price = price_map[ticker]
+        signal_close = entry.get("close", 0)
+        if signal_close <= 0:
+            continue
+        outcome_pct = round((current_price / signal_close - 1) * 100, 2)
+        update_skipped_outcome(ticker, str(entry["signal_date"]), current_price, outcome_pct)
+        recorded += 1
+
+    if recorded:
+        logger.info("Updated outcomes for %d skipped signals", recorded)
+    return recorded
 
 
 # ---------------------------------------------------------------------------
