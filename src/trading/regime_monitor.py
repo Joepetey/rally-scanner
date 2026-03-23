@@ -4,18 +4,14 @@ Periodically checks HMM regime probabilities for all assets and alerts
 on significant transitions (e.g. compressed → expanding).
 """
 
-import json
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from config import PARAMS
-from utils import atomic_json_write
+from db.models import load_regime_states as _db_load_regime_states
+from db.models import save_regime_states as _db_save_regime_states
 
 logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-REGIME_STATE_FILE = PROJECT_ROOT / "models" / "regime_states.json"
 
 
 def _classify_regime(p_compressed: float, p_normal: float, p_expanding: float) -> str:
@@ -25,19 +21,16 @@ def _classify_regime(p_compressed: float, p_normal: float, p_expanding: float) -
 
 
 def _load_regime_states() -> dict:
-    """Load previous regime states from disk."""
-    if not REGIME_STATE_FILE.exists():
-        return {}
+    """Load previous regime states from DB."""
     try:
-        with open(REGIME_STATE_FILE) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
+        return _db_load_regime_states()
+    except Exception:
         return {}
 
 
 def _save_regime_states(states: dict) -> None:
-    """Save regime states to disk atomically."""
-    atomic_json_write(REGIME_STATE_FILE, states)
+    """Save regime states to DB."""
+    _db_save_regime_states(states)
 
 
 def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:

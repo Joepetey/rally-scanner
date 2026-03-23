@@ -6,18 +6,17 @@ Caches locally. Falls back to hardcoded S&P 100 if all fetches fail.
 """
 
 import io
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from urllib.request import Request, urlopen
 
 import pandas as pd
 
+from db.universe import load_universe_cache as _db_load_cache
+from db.universe import save_universe_cache as _db_save_cache
+
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CACHE_FILE = PROJECT_ROOT / "models" / "universe_cache.json"
 CACHE_MAX_AGE_DAYS = 30
 
 # Hardcoded fallback (S&P 100)
@@ -93,31 +92,15 @@ def _fetch_nasdaq_top500() -> list[str]:
 
 def _load_cache() -> dict | None:
     """Load cached universe if fresh enough."""
-    if not CACHE_FILE.exists():
-        return None
     try:
-        with open(CACHE_FILE) as f:
-            cache = json.load(f)
-        cached_date = datetime.fromisoformat(cache["fetched_at"])
-        age_days = (datetime.now() - cached_date).days
-        if age_days <= CACHE_MAX_AGE_DAYS:
-            return cache
-    except (json.JSONDecodeError, KeyError, ValueError):
-        pass
-    return None
+        return _db_load_cache(CACHE_MAX_AGE_DAYS)
+    except Exception:
+        return None
 
 
 def _save_cache(tickers: list[str], source: str) -> None:
-    """Save universe to cache file."""
-    CACHE_FILE.parent.mkdir(exist_ok=True)
-    cache = {
-        "tickers": tickers,
-        "source": source,
-        "count": len(tickers),
-        "fetched_at": datetime.now().isoformat(),
-    }
-    with open(CACHE_FILE, "w") as f:
-        json.dump(cache, f, indent=2)
+    """Save universe to DB cache."""
+    _db_save_cache(tickers, source)
 
 
 def fetch_universe(force_refresh: bool = False) -> list[str]:

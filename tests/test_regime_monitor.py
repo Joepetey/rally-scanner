@@ -47,11 +47,13 @@ def test_not_significant_normal_to_compressed():
     assert not _is_significant_transition("normal", "compressed", 0.7, 0.2, 0.1)
 
 
-def test_state_persistence(tmp_path, monkeypatch):
+def test_state_persistence(monkeypatch):
     """States are saved and loaded correctly."""
-    state_file = tmp_path / "regime_states.json"
+    store: dict = {}
+
     import trading.regime_monitor as rm
-    monkeypatch.setattr(rm, "REGIME_STATE_FILE", state_file)
+    monkeypatch.setattr(rm, "_db_save_regime_states", lambda s: store.update(s))
+    monkeypatch.setattr(rm, "_db_load_regime_states", lambda: dict(store))
 
     states = {
         "AAPL": {
@@ -68,11 +70,10 @@ def test_state_persistence(tmp_path, monkeypatch):
     assert loaded["AAPL"]["p_compressed"] == 0.8
 
 
-def test_state_persistence_empty(tmp_path, monkeypatch):
-    """Empty file returns empty dict."""
-    state_file = tmp_path / "regime_states.json"
+def test_state_persistence_empty(monkeypatch):
+    """Empty DB returns empty dict."""
     import trading.regime_monitor as rm
-    monkeypatch.setattr(rm, "REGIME_STATE_FILE", state_file)
+    monkeypatch.setattr(rm, "_db_load_regime_states", lambda: {})
 
     loaded = _load_regime_states()
     assert loaded == {}

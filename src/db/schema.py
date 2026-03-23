@@ -223,3 +223,52 @@ def init_schema() -> None:
                 error       TEXT
             )
         """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id          BIGSERIAL PRIMARY KEY,
+                scan_date   DATE NOT NULL,
+                ticker      TEXT NOT NULL,
+                p_rally     DOUBLE PRECISION NOT NULL,
+                comp_score  DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close       DOUBLE PRECISION NOT NULL,
+                is_signal   BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (scan_date, ticker)
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS model_manifest (
+                ticker      TEXT PRIMARY KEY,
+                saved_at    TIMESTAMPTZ NOT NULL,
+                train_start TEXT NOT NULL,
+                train_end   TEXT NOT NULL,
+                r_up        DOUBLE PRECISION NOT NULL,
+                d_dn        DOUBLE PRECISION NOT NULL,
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS regime_states (
+                ticker          TEXT PRIMARY KEY,
+                p_compressed    DOUBLE PRECISION NOT NULL,
+                p_normal        DOUBLE PRECISION NOT NULL,
+                p_expanding     DOUBLE PRECISION NOT NULL,
+                dominant_regime TEXT NOT NULL,
+                recorded_at     TIMESTAMPTZ NOT NULL,
+                updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS universe_cache (
+                id         INT PRIMARY KEY DEFAULT 1,
+                tickers    TEXT[] NOT NULL,
+                source     TEXT NOT NULL,
+                fetched_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CHECK (id = 1)
+            )
+        """)

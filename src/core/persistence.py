@@ -3,19 +3,21 @@ Model persistence — save and load trained model artifacts via joblib.
 
 Directory structure:
     models/
-        manifest.json       # {ticker: {saved_at, train_start, train_end, r_up, d_dn}}
         AAPL.joblib         # all model artifacts for AAPL
         MSFT.joblib
         ...
+
+Manifest metadata is stored in the `model_manifest` PostgreSQL table.
 """
 
-import json
 from datetime import datetime
 from pathlib import Path
 
 import joblib
 
 from config import AssetConfig
+from db.models import load_manifest as _db_load_manifest
+from db.models import save_manifest_entry
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
@@ -38,22 +40,13 @@ def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
     path = MODELS_DIR / f"{ticker}.joblib"
     joblib.dump(artifacts, path)
 
-    # Update manifest
-    manifest_path = MODELS_DIR / "manifest.json"
-    manifest = {}
-    if manifest_path.exists():
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-
-    manifest[ticker] = {
+    save_manifest_entry(ticker, {
         "saved_at": artifacts["saved_at"],
         "train_start": artifacts["train_start"],
         "train_end": artifacts["train_end"],
         "r_up": asset_config.r_up,
         "d_dn": asset_config.d_dn,
-    }
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    })
 
 
 def load_model(ticker: str) -> dict:
@@ -66,8 +59,4 @@ def load_model(ticker: str) -> dict:
 
 def load_manifest() -> dict:
     """Load the manifest of all trained models."""
-    manifest_path = MODELS_DIR / "manifest.json"
-    if not manifest_path.exists():
-        return {}
-    with open(manifest_path) as f:
-        return json.load(f)
+    return _db_load_manifest()

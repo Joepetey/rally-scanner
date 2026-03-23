@@ -1,7 +1,7 @@
 """System position persistence — open/closed position CRUD against PostgreSQL."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 from db.pool import get_conn, row_to_dict
 
@@ -290,6 +290,74 @@ def update_skipped_outcome(
                WHERE ticker = %s AND signal_date = %s""",
             (outcome_price, outcome_pct, ticker, signal_date),
         )
+
+
+# ---------------------------------------------------------------------------
+# Watchlist CRUD
+# ---------------------------------------------------------------------------
+
+def save_watchlist(entries: list[dict], scan_date: date) -> None:
+    """Upsert watchlist entries for a given scan date."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        for e in entries:
+            cur.execute(
+                """INSERT INTO watchlist
+                       (scan_date, ticker, p_rally, comp_score, close, is_signal)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (scan_date, ticker) DO UPDATE SET
+                       p_rally=EXCLUDED.p_rally,
+                       comp_score=EXCLUDED.comp_score,
+                       close=EXCLUDED.close,
+                       is_signal=EXCLUDED.is_signal""",
+                (
+                    scan_date,
+                    e["ticker"],
+                    e.get("p_rally", 0),
+                    e.get("comp_score", 0),
+                    e.get("close", 0),
+                    bool(e.get("signal", False)),
+                ),
+            )
+
+
+def load_watchlist() -> dict:
+    """Return the most recent watchlist in the same shape as the old JSON file.
+
+    Returns: {"updated": ISO str, "count": int, "tickers": [...]}
+    """
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT w.*
+               FROM watchlist w
+               WHERE scan_date = (SELECT MAX(scan_date) FROM watchlist)
+               ORDER BY p_rally DESC"""
+        )
+        rows = cur.fetchall()
+
+    if not rows:
+        return {"message": "No watchlist yet — run a scan first."}
+
+    tickers = []
+    for r in rows:
+        tickers.append({
+            "ticker": r["ticker"],
+            "p_rally": float(r["p_rally"]),
+            "comp_score": float(r["comp_score"]),
+            "close": float(r["close"]),
+            "signal": bool(r["is_signal"]),
+        })
+
+    updated = rows[0]["created_at"]
+    if hasattr(updated, "isoformat"):
+        updated = updated.isoformat()
+
+    return {
+        "updated": updated,
+        "count": len(tickers),
+        "tickers": tickers,
+    }
 
 
 def tighten_trailing_stop(ticker: str, new_stop: float) -> dict | None:

@@ -307,8 +307,9 @@ def make_bot(token: str) -> RallyBot:
 
         def _save_watchlist(results: list, positions: dict) -> None:
             """Persist near-signal tickers for agent queries."""
-            import json as _json
-            from pathlib import Path as _Path
+            from datetime import date as _date
+
+            from db.positions import save_watchlist as _db_save_watchlist
 
             open_tickers = {
                 p["ticker"] for p in positions.get("positions", [])
@@ -334,15 +335,7 @@ def make_bot(token: str) -> RallyBot:
                     "signal": bool(r.get("signal")),
                 })
 
-            wl_path = _Path(__file__).resolve().parent.parent.parent.parent
-            wl_path = wl_path / "models" / "watchlist.json"
-            wl_path.parent.mkdir(exist_ok=True)
-            with open(wl_path, "w") as f:
-                _json.dump({
-                    "updated": datetime.now(_ET).isoformat(),
-                    "count": len(watchlist),
-                    "tickers": watchlist,
-                }, f, indent=2)
+            _db_save_watchlist(watchlist, scan_date=_date.today())
 
         async def _run_scan() -> None:
             """Run the scan pipeline in a thread, then post results."""
@@ -1051,13 +1044,15 @@ def make_bot(token: str) -> RallyBot:
                 logger.exception("Reconciliation failed")
                 await _send_error_alert("Reconciliation", e)
 
-        # Weekly retrain: Sunday 6 PM ET (23:00 UTC)
+        # Weekly retrain: Sunday 6 PM ET (23:00 UTC), followed by a scan so
+        # Monday signals are ready before market open.
         @tasks.loop(time=time(hour=23, minute=0))
         async def scheduled_retrain() -> None:
             if datetime.utcnow().weekday() != 6:  # Sunday only
                 return
             try:
                 await _run_retrain()
+                await _run_scan()
             except Exception as e:
                 logger.exception("Scheduled retrain failed")
                 await _send_error_alert("Weekly Retrain", e)

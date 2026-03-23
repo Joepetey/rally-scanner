@@ -648,18 +648,9 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
 
 def _get_watchlist() -> dict[str, Any]:
     """Return tickers near signal threshold from the last scan."""
-    import json
-    from pathlib import Path
+    from db.positions import load_watchlist
 
-    wl_path = (
-        Path(__file__).resolve().parent.parent.parent.parent
-        / "models" / "watchlist.json"
-    )
-    if not wl_path.exists():
-        return {"message": "No watchlist yet — run a scan first."}
-
-    with open(wl_path) as f:
-        return json.load(f)
+    return load_watchlist()
 
 
 def _get_price(tickers: list[str]) -> dict[str, Any]:
