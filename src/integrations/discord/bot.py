@@ -121,56 +121,74 @@ def make_bot(token: str) -> RallyBot:
         channel: discord.abc.Messageable,
         tickers: list[str] | None = None
     ) -> None:
-        """Run model retraining with progress updates."""
+        """Run model retraining with live progress updates."""
+        import queue
         import time
 
         from pipeline.retrain import retrain_all
 
         try:
-            # Send initial message
             await channel.send(
                 "🔄 **Starting model retraining...**\n"
                 "This will take 10-30+ minutes depending on the number of tickers."
             )
 
-            # Run retrain in thread and time it
             start_time = time.time()
+            progress_queue: queue.Queue[tuple[int, int, int, int]] = queue.Queue()
 
-            # Send progress update every 5 minutes
-            async def send_updates():
-                elapsed = 0
+            def on_progress(done: int, total: int, success: int, failed: int) -> None:
+                # Overwrite queue with latest snapshot so we always report current state
+                try:
+                    progress_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                progress_queue.put((done, total, success, failed))
+
+            async def send_updates() -> None:
                 while True:
                     await asyncio.sleep(300)  # 5 minutes
-                    elapsed += 5
-                    await channel.send(f"⏳ Still training... {elapsed} minutes elapsed")
+                    elapsed_min = int((time.time() - start_time) / 60)
+                    try:
+                        done, total, success, failed = progress_queue.get_nowait()
+                        pct = int(done / total * 100) if total else 0
+                        await channel.send(
+                            f"⏳ **Retraining... {elapsed_min}m elapsed**\n"
+                            f"• Progress: {done}/{total} ({pct}%)\n"
+                            f"• Success: {success} | Failed: {failed}"
+                        )
+                    except queue.Empty:
+                        await channel.send(
+                            f"⏳ **Retraining... {elapsed_min}m elapsed** (fetching data)"
+                        )
 
-            # Start update task
             update_task = asyncio.create_task(send_updates())
 
             try:
-                # Run the actual retraining
-                await asyncio.to_thread(retrain_all, tickers)
+                await asyncio.to_thread(retrain_all, tickers, False, on_progress)
             finally:
-                # Cancel update task
                 update_task.cancel()
                 try:
                     await update_task
                 except asyncio.CancelledError:
                     pass
 
-            # Calculate elapsed time
             elapsed = time.time() - start_time
             minutes = int(elapsed / 60)
             seconds = int(elapsed % 60)
 
-            # Get model count
-            manifest = load_manifest()
-            model_count = len(manifest) if manifest else 0
+            # Get final counts from last progress snapshot
+            try:
+                done, total, success, failed = progress_queue.get_nowait()
+            except queue.Empty:
+                manifest = load_manifest()
+                success = len(manifest) if manifest else 0
+                failed = 0
+                total = success
 
-            # Send completion message
             await channel.send(
                 f"✅ **Retraining complete!**\n"
-                f"• Trained: {model_count} models\n"
+                f"• Trained: {success}/{total} models\n"
+                f"• Failed: {failed}\n"
                 f"• Time: {minutes}m {seconds}s\n"
                 f"• You can now run scans to find signals!"
             )
@@ -380,7 +398,7 @@ def make_bot(token: str) -> RallyBot:
             from integrations.alpaca.executor import is_enabled as alpaca_enabled
             if alpaca_enabled():
                 from db.events import log_order
-                from trading.positions import add_signal_positions
+                from trading.positions import add_signal_positions, process_signal_queue
 
                 from integrations.alpaca.executor import (
                     execute_entries,
@@ -436,9 +454,29 @@ def make_bot(token: str) -> RallyBot:
                             await _send_alert(
                                 discord.Embed.from_dict(_order_failure_embed(fail)), "order_failure"
                             )
+
+                    # --- Signal queue: re-attempt queued signals freed by today's closes ---
+                    queued = await asyncio.to_thread(process_signal_queue)
+                    if queued:
+                        logger.info("Processing %d queued signals", len(queued))
+                        q_results = await execute_entries(queued, equity=equity)
+                        q_ok = [r for r in q_results if r.success]
+                        if q_ok:
+                            filled_tickers = {r.ticker for r in q_ok}
+                            filled_queued = [s for s in queued if s["ticker"] in filled_tickers]
+                            add_signal_positions(load_positions(), filled_queued)
+                            await _store_order_ids(q_results)
+                            await _send_alert(
+                                discord.Embed.from_dict(_order_embed(q_ok, equity)), "order"
+                            )
+
                 except Exception as e:
                     logger.exception("Alpaca execution failed")
                     await _send_error_alert("Alpaca Execution", e)
+
+            # --- Opportunity cost: update outcomes for past skipped signals ---
+            from trading.positions import update_skipped_outcomes
+            await asyncio.to_thread(update_skipped_outcomes, results)
 
             finish_scheduler_event(_scan_event_id, "success", n_signals=len(signals),
                                    n_exits=len(closed), duration_s=round(_time.time() - _t0, 1))

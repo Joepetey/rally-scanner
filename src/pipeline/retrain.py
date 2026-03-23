@@ -14,6 +14,7 @@ import logging
 import os
 import time
 import warnings
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
@@ -114,7 +115,16 @@ def _is_fresh(manifest_entry: dict, max_age_days: int) -> bool:
 # Main retraining pipeline
 # ---------------------------------------------------------------------------
 
-def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> None:
+def retrain_all(
+    tickers: list[str] | None = None,
+    validate: bool = False,
+    progress_callback: Callable[[int, int, int, int], None] | None = None,
+) -> None:
+    """Retrain all models.
+
+    progress_callback is called after each ticker completes:
+        callback(done, total, success_count, fail_count)
+    """
     if tickers is None:
         logger.info("Fetching universe...")
         tickers = get_universe()
@@ -187,6 +197,9 @@ def retrain_all(tickers: list[str] | None = None, validate: bool = False) -> Non
                                     hand.r_up, hand.d_dn)
                 else:
                     failed.append((t_name, msg))
+
+                if progress_callback is not None:
+                    progress_callback(i, len(fetched), len(success), len(failed))
 
             except Exception as e:
                 logger.error("[%d/%d] %s: TIMEOUT/ERROR: %s",
