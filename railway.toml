@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install --no-cache-dir -r requirements.txt"
+buildCommand = "pip install --no-cache-dir ."
 
 [build.nixpacks]
 aptPkgs = []

@@ -33,9 +33,6 @@ os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import pandas as pd
 
@@ -59,7 +56,6 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-PLOTS_DIR = PROJECT_ROOT / "plots"
 CACHE_DIR = PROJECT_ROOT / "backtest_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 PREDICTIONS_CACHE = CACHE_DIR / "predictions.pkl"
@@ -223,119 +219,6 @@ def compute_per_asset_stats(cached: dict[str, pd.DataFrame], cfg) -> pd.DataFram
 
 
 # ---------------------------------------------------------------------------
-# Plots
-# ---------------------------------------------------------------------------
-
-def plot_results(results: list[dict], per_asset: pd.DataFrame) -> None:
-    """Generate frontier plot, equity curves, and per-asset distribution."""
-    # --- Efficient frontier ---
-    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-    for r in results:
-        cfg = r["config"]
-        dd = abs(r["max_dd"]) * 100
-        cagr = r["cagr"] * 100
-        color = "red" if cfg.leverage > 1 else "blue"
-        marker = "o" if cfg.cash_yield == 0 else "s"
-        ax.scatter(dd, cagr, c=color, marker=marker, s=100, zorder=5)
-        ax.annotate(cfg.name, (dd, cagr), textcoords="offset points",
-                    xytext=(8, 4), fontsize=8)
-
-    ax.scatter(55, 10.5, c="green", marker="*", s=200, zorder=5)
-    ax.annotate("SPY B&H", (55, 10.5), textcoords="offset points",
-                xytext=(8, 4), fontsize=9, fontweight="bold", color="green")
-    ax.set_xlabel("Max Drawdown (%)", fontsize=12)
-    ax.set_ylabel("CAGR (%)", fontsize=12)
-    ax.set_title(f"Rally Detector — Universe Backtest ({len(per_asset)} assets)", fontsize=14)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    PLOTS_DIR.mkdir(exist_ok=True)
-    plt.savefig(PLOTS_DIR / "universe_frontier.png", dpi=150)
-    plt.close()
-    logger.info("Saved: %s", PLOTS_DIR / "universe_frontier.png")
-
-    # --- Top equity curves ---
-    top3 = sorted(results, key=lambda x: x["sharpe"], reverse=True)[:3]
-    fig, ax = plt.subplots(1, 1, figsize=(14, 8))
-    for r in top3:
-        cfg = r["config"]
-        if "equity_series" in r:
-            eq = r["equity_series"]
-            ax.plot(eq.index, eq.values, linewidth=1.2,
-                    label=f"{cfg.name} (CAGR {r['cagr']:+.1%}, Sharpe {r['sharpe']:.2f})")
-    ax.set_title("Rally Detector — Top Configurations by Sharpe (Universe)", fontsize=14)
-    ax.set_ylabel("Equity ($)")
-    ax.set_xlabel("Date")
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.axhline(100_000, color="gray", linestyle="--", alpha=0.5)
-    plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "universe_equity_curves.png", dpi=150)
-    plt.close()
-    logger.info("Saved: %s", PLOTS_DIR / "universe_equity_curves.png")
-
-    # --- Per-asset PnL distribution ---
-    if not per_asset.empty and len(per_asset) > 5:
-        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-        # Histogram of profit factors
-        pf_vals = per_asset["pf"].clip(upper=10)  # clip for display
-        axes[0].hist(pf_vals, bins=30, edgecolor="black", alpha=0.7)
-        axes[0].axvline(1.0, color="red", linestyle="--", linewidth=2, label="Breakeven (PF=1)")
-        axes[0].set_xlabel("Profit Factor")
-        axes[0].set_ylabel("# Assets")
-        axes[0].set_title("Per-Asset Profit Factor Distribution")
-        axes[0].legend()
-
-        n_profitable = (per_asset["pf"] > 1.0).sum()
-        n_total = len(per_asset)
-        pct = n_profitable / n_total
-        axes[0].text(
-            0.95, 0.95, f"{n_profitable}/{n_total} profitable ({pct:.0%})",
-            transform=axes[0].transAxes, ha="right", va="top", fontsize=11,
-            bbox=dict(boxstyle="round", facecolor="lightyellow"),
-        )
-
-        # Win rate distribution
-        axes[1].hist(
-            per_asset["win_rate"] * 100, bins=30,
-            edgecolor="black", alpha=0.7, color="green",
-        )
-        axes[1].axvline(50, color="red", linestyle="--", linewidth=2, label="50% line")
-        axes[1].set_xlabel("Win Rate (%)")
-        axes[1].set_ylabel("# Assets")
-        axes[1].set_title("Per-Asset Win Rate Distribution")
-        axes[1].legend()
-
-        plt.tight_layout()
-        plt.savefig(PLOTS_DIR / "universe_asset_distributions.png", dpi=150)
-        plt.close()
-        logger.info("Saved: %s", PLOTS_DIR / "universe_asset_distributions.png")
-
-    # --- Top/Bottom 20 assets bar chart ---
-    if not per_asset.empty and len(per_asset) > 20:
-        top20 = per_asset.head(20)
-        bottom20 = per_asset.tail(20)
-
-        fig, axes = plt.subplots(1, 2, figsize=(18, 8))
-        colors = ["green" if x > 0 else "red" for x in top20["total_sized_pnl"]]
-        axes[0].barh(top20["ticker"], top20["total_sized_pnl"], color=colors)
-        axes[0].set_xlabel("Total Sized PnL")
-        axes[0].set_title("Top 20 Assets by Total PnL (OOS)")
-        axes[0].invert_yaxis()
-
-        colors = ["green" if x > 0 else "red" for x in bottom20["total_sized_pnl"]]
-        axes[1].barh(bottom20["ticker"], bottom20["total_sized_pnl"], color=colors)
-        axes[1].set_xlabel("Total Sized PnL")
-        axes[1].set_title("Bottom 20 Assets by Total PnL (OOS)")
-        axes[1].invert_yaxis()
-
-        plt.tight_layout()
-        plt.savefig(PLOTS_DIR / "universe_top_bottom_assets.png", dpi=150)
-        plt.close()
-        logger.info("Saved: %s", PLOTS_DIR / "universe_top_bottom_assets.png")
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -470,10 +353,6 @@ def main() -> None:
                   f"{row['win_rate']:>7.0%} {min(row['pf'], 99.9):>7.1f} "
                   f"{row['avg_pnl']:>+7.2%} {row['total_sized_pnl']:>+9.3f} "
                   f"{row['oos_years']:>5.1f}")
-
-    # Step 4: Plots
-    print("\n[4/4] Generating plots...")
-    plot_results(results, per_asset)
 
     # Save summary to JSON
     summary = []
