@@ -14,6 +14,7 @@ import logging
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,12 @@ from trading.signals import compute_position_size, generate_signals
 warnings.filterwarnings("ignore")
 
 LOOKBACK_DAYS = 500  # enough for 252-bar percentile window + buffer
+
+
+class ScanTask(NamedTuple):
+    ticker: str
+    vix_data: "pd.Series | None"
+    ohlcv_df: "pd.DataFrame | None"
 
 
 def apply_config(config_name: str) -> None:
@@ -158,9 +165,9 @@ def scan_single(
     }
 
 
-def _scan_one(args: tuple) -> dict:
+def _scan_one(task: ScanTask) -> dict:
     """Worker function for parallel scanning (must be top-level for pickling)."""
-    ticker, vix_data, ohlcv_df = args
+    ticker, vix_data, ohlcv_df = task
     try:
         artifacts = load_model(ticker)
         return scan_single(
@@ -216,7 +223,7 @@ def scan_all(
     # Scan all tickers in parallel using process pool
     n_workers = min(8, len(scan_tickers))
     work_items = [
-        (ticker, vix_data, ohlcv_cache.get(ticker))
+        ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
         for ticker in scan_tickers
     ]
 
@@ -438,7 +445,7 @@ def scan_watchlist(
 
     n_workers = min(4, len(scan_tickers))
     work_items = [
-        (ticker, vix_data, ohlcv_cache.get(ticker))
+        ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
         for ticker in scan_tickers
     ]
 

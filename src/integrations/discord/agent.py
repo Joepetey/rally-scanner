@@ -8,8 +8,6 @@ Users can interact conversationally instead of using slash commands.
 import json
 import logging
 import os
-from typing import Any
-
 # Third-party
 import anthropic
 
@@ -28,6 +26,17 @@ from db.trades import (
 from db.users import ensure_user, get_capital, set_capital
 
 logger = logging.getLogger(__name__)
+
+
+def _dollar_metrics(capital: float, size: float, entry: float, stop: float | None = None) -> dict:
+    """Compute dollar allocation and risk from capital, size fraction, entry price, and optional stop."""
+    metrics: dict = {}
+    if capital > 0 and size > 0:
+        metrics["dollar_allocation"] = capital * size
+        if stop and entry > stop:
+            metrics["dollar_risk"] = capital * size * (entry - stop) / entry
+    return metrics
+
 
 # ---------------------------------------------------------------------------
 # Anthropic Client
@@ -221,7 +230,7 @@ TOOLS = [
 # Tool Execution Functions
 # ---------------------------------------------------------------------------
 
-def _get_signals(discord_id: int, capital: float) -> dict[str, Any]:
+def _get_signals(discord_id: int, capital: float) -> dict:
     """Get recent entry signals (positions held ≤ 1 bar)."""
     state = get_merged_positions_sync()
     positions = state.get("positions", [])
@@ -245,15 +254,8 @@ def _get_signals(discord_id: int, capital: float) -> dict[str, Any]:
             "target_price": p.get("target_price", 0),
             "size_pct": size * 100,
             "pnl_pct": pnl,
+            **_dollar_metrics(capital, size, p["entry_price"], p.get("stop_price", 0)),
         }
-
-        if capital > 0 and size > 0:
-            dollar_size = capital * size
-            stop = p.get("stop_price", 0)
-            if stop and p["entry_price"] > stop:
-                dollar_risk = capital * size * (p["entry_price"] - stop) / p["entry_price"]
-                signal_info["dollar_allocation"] = dollar_size
-                signal_info["dollar_risk"] = dollar_risk
 
         signals_data.append(signal_info)
 
@@ -264,7 +266,7 @@ def _get_signals(discord_id: int, capital: float) -> dict[str, Any]:
     }
 
 
-def _get_system_positions(discord_id: int, capital: float) -> dict[str, Any]:
+def _get_system_positions(discord_id: int, capital: float) -> dict:
     """Get system's open positions."""
     state = get_merged_positions_sync()
     positions = state.get("positions", [])
@@ -278,6 +280,7 @@ def _get_system_positions(discord_id: int, capital: float) -> dict[str, Any]:
     for p in positions:
         pnl = p.get("unrealized_pnl_pct", 0)
         size = p.get("size", 0)
+        dollars = _dollar_metrics(capital, size, p["entry_price"])
         pos_info = {
             "ticker": p["ticker"],
             "entry_price": p["entry_price"],
@@ -287,13 +290,11 @@ def _get_system_positions(discord_id: int, capital: float) -> dict[str, Any]:
             "size_pct": size * 100,
             "pnl_pct": pnl,
             "bars_held": p.get("bars_held", 0),
+            **dollars,
         }
 
-        if capital > 0 and size > 0:
-            dollar_alloc = capital * size
-            dollar_pnl = dollar_alloc * pnl / 100
-            pos_info["dollar_allocation"] = dollar_alloc
-            pos_info["dollar_pnl"] = dollar_pnl
+        if "dollar_allocation" in dollars:
+            pos_info["dollar_pnl"] = dollars["dollar_allocation"] * pnl / 100
 
         positions_data.append(pos_info)
 
@@ -306,7 +307,7 @@ def _get_system_positions(discord_id: int, capital: float) -> dict[str, Any]:
     }
 
 
-def _get_user_positions(discord_id: int, capital: float) -> dict[str, Any]:
+def _get_user_positions(discord_id: int, capital: float) -> dict:
     """Get user's tracked open positions."""
     trades = get_open_trades(discord_id)
 
@@ -326,9 +327,7 @@ def _get_user_positions(discord_id: int, capital: float) -> dict[str, Any]:
         if trade.get("target_price"):
             pos_info["target_price"] = trade["target_price"]
 
-        if capital > 0:
-            dollar_size = capital * trade["size"]
-            pos_info["dollar_allocation"] = dollar_size
+        pos_info.update(_dollar_metrics(capital, trade["size"], trade["entry_price"]))
 
         positions_data.append(pos_info)
 
@@ -339,7 +338,7 @@ def _get_user_positions(discord_id: int, capital: float) -> dict[str, Any]:
     }
 
 
-def _enter_trade(discord_id: int, tool_input: dict[str, Any], capital: float) -> dict[str, Any]:
+def _enter_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
     """Record a trade entry."""
     ticker = tool_input["ticker"].upper()
     price = tool_input["price"]
@@ -390,18 +389,15 @@ def _enter_trade(discord_id: int, tool_input: dict[str, Any], capital: float) ->
         result["target_price"] = target
         result["reward_pct"] = reward_pct
 
-    if capital > 0 and size > 0:
-        dollar_size = capital * size
-        result["dollar_allocation"] = dollar_size
+    dollars = _dollar_metrics(capital, size, price, stop)
+    if dollars:
+        result.update(dollars)
         result["capital"] = capital
-        if stop:
-            dollar_risk = capital * size * (price - stop) / price
-            result["dollar_risk"] = dollar_risk
 
     return result
 
 
-def _exit_trade(discord_id: int, tool_input: dict[str, Any], capital: float) -> dict[str, Any]:
+def _exit_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
     """Close a trade."""
     ticker = tool_input["ticker"].upper()
     price = tool_input["price"]
@@ -434,7 +430,7 @@ def _exit_trade(discord_id: int, tool_input: dict[str, Any], capital: float) -> 
     return response
 
 
-def _get_pnl(discord_id: int, period: str = "all") -> dict[str, Any]:
+def _get_pnl(discord_id: int, period: str = "all") -> dict:
     """Get P&L summary."""
     days = None
     if period == "30d":
@@ -465,7 +461,7 @@ def _get_pnl(discord_id: int, period: str = "all") -> dict[str, Any]:
     return result
 
 
-def _set_capital(discord_id: int, amount: float) -> dict[str, Any]:
+def _set_capital(discord_id: int, amount: float) -> dict:
     """Set user's portfolio capital."""
     if amount <= 0:
         return {"error": "Capital amount must be greater than 0"}
@@ -479,7 +475,7 @@ def _set_capital(discord_id: int, amount: float) -> dict[str, Any]:
     }
 
 
-def _get_trade_history(discord_id: int, ticker: str | None = None, limit: int = 10) -> dict[str, Any]:
+def _get_trade_history(discord_id: int, ticker: str | None = None, limit: int = 10) -> dict:
     """Get trade history."""
     trades = get_trade_history(discord_id, ticker=ticker, limit=limit)
 
@@ -518,7 +514,7 @@ def _get_trade_history(discord_id: int, ticker: str | None = None, limit: int = 
     }
 
 
-def _get_portfolio(days: int = 30) -> dict[str, Any]:
+def _get_portfolio(days: int = 30) -> dict:
     """Get system portfolio info."""
     history = load_equity_history(days=days)
     trades = load_trade_journal(limit=10)
@@ -550,7 +546,7 @@ def _get_portfolio(days: int = 30) -> dict[str, Any]:
     return result
 
 
-def _get_health() -> dict[str, Any]:
+def _get_health() -> dict:
     """Get model health status."""
     from datetime import datetime
 
@@ -589,7 +585,7 @@ def _get_health() -> dict[str, Any]:
     return result
 
 
-def _run_scan(config: str = "conservative") -> dict[str, Any]:
+def _run_scan(config: str = "conservative") -> dict:
     """Run the market scanner and return results."""
     from datetime import datetime
 
@@ -646,14 +642,14 @@ def _run_scan(config: str = "conservative") -> dict[str, Any]:
         }
 
 
-def _get_watchlist() -> dict[str, Any]:
+def _get_watchlist() -> dict:
     """Return tickers near signal threshold from the last scan."""
     from db.positions import load_watchlist
 
     return load_watchlist()
 
 
-def _get_price(tickers: list[str]) -> dict[str, Any]:
+def _get_price(tickers: list[str]) -> dict:
     """Fetch current quotes for one or more tickers."""
     from core.data import fetch_quotes
 
@@ -675,10 +671,10 @@ def _get_price(tickers: list[str]) -> dict[str, Any]:
 
 def execute_tool(
     tool_name: str,
-    tool_input: dict[str, Any],
+    tool_input: dict,
     discord_id: int,
     capital: float,
-) -> dict[str, Any]:
+) -> dict:
     """Execute a tool and return results."""
     if tool_name == "get_signals":
         return _get_signals(discord_id, capital)

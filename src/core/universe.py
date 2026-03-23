@@ -6,6 +6,7 @@ Caches locally. Falls back to hardcoded S&P 100 if all fetches fail.
 """
 
 import io
+import json
 import logging
 from datetime import datetime
 from urllib.request import Request, urlopen

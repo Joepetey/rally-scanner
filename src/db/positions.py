@@ -12,36 +12,41 @@ logger = logging.getLogger(__name__)
 # system_positions CRUD
 # ---------------------------------------------------------------------------
 
+_UPSERT_POSITION_SQL = """INSERT INTO system_positions
+       (ticker, entry_price, entry_date, stop_price, target_price,
+        trailing_stop, highest_close, atr, bars_held, size, qty,
+        order_id, trail_order_id, p_rally, updated_at)
+   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+   ON CONFLICT (ticker) DO UPDATE SET
+       entry_price=EXCLUDED.entry_price, entry_date=EXCLUDED.entry_date,
+       stop_price=EXCLUDED.stop_price, target_price=EXCLUDED.target_price,
+       trailing_stop=EXCLUDED.trailing_stop,
+       highest_close=EXCLUDED.highest_close,
+       atr=EXCLUDED.atr, bars_held=EXCLUDED.bars_held, size=EXCLUDED.size,
+       qty=EXCLUDED.qty, order_id=EXCLUDED.order_id,
+       trail_order_id=EXCLUDED.trail_order_id,
+       p_rally=EXCLUDED.p_rally,
+       updated_at=NOW()"""
+
+
+def _position_params(pos: dict) -> tuple:
+    """Extract ordered parameters for the position UPSERT."""
+    return (
+        pos["ticker"], pos.get("entry_price", 0), pos.get("entry_date") or None,
+        pos.get("stop_price", 0), pos.get("target_price", 0),
+        pos.get("trailing_stop", 0),
+        pos.get("highest_close", pos.get("entry_price", 0)),
+        pos.get("atr", 0), pos.get("bars_held", 0), pos.get("size", 0),
+        pos.get("qty", 0), pos.get("order_id"), pos.get("trail_order_id"),
+        pos.get("p_rally", 0),
+    )
+
+
 def save_position_meta(pos: dict) -> None:
     """UPSERT a single position row into system_positions."""
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO system_positions
-                   (ticker, entry_price, entry_date, stop_price, target_price,
-                    trailing_stop, highest_close, atr, bars_held, size, qty,
-                    order_id, trail_order_id, p_rally, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-               ON CONFLICT (ticker) DO UPDATE SET
-                   entry_price=EXCLUDED.entry_price, entry_date=EXCLUDED.entry_date,
-                   stop_price=EXCLUDED.stop_price, target_price=EXCLUDED.target_price,
-                   trailing_stop=EXCLUDED.trailing_stop,
-                   highest_close=EXCLUDED.highest_close,
-                   atr=EXCLUDED.atr, bars_held=EXCLUDED.bars_held, size=EXCLUDED.size,
-                   qty=EXCLUDED.qty, order_id=EXCLUDED.order_id,
-                   trail_order_id=EXCLUDED.trail_order_id,
-                   p_rally=EXCLUDED.p_rally,
-                   updated_at=NOW()""",
-            (
-                pos["ticker"], pos.get("entry_price", 0), pos.get("entry_date") or None,
-                pos.get("stop_price", 0), pos.get("target_price", 0),
-                pos.get("trailing_stop", 0),
-                pos.get("highest_close", pos.get("entry_price", 0)),
-                pos.get("atr", 0), pos.get("bars_held", 0), pos.get("size", 0),
-                pos.get("qty", 0), pos.get("order_id"), pos.get("trail_order_id"),
-                pos.get("p_rally", 0),
-            ),
-        )
+        cur.execute(_UPSERT_POSITION_SQL, _position_params(pos))
 
 
 def load_position_meta(ticker: str) -> dict | None:
@@ -134,32 +139,7 @@ def save_positions(state: dict) -> None:
         for pos in state.get("positions", []):
             if not pos.get("ticker"):
                 continue
-            cur.execute(
-                """INSERT INTO system_positions
-                       (ticker, entry_price, entry_date, stop_price, target_price,
-                        trailing_stop, highest_close, atr, bars_held, size, qty,
-                        order_id, trail_order_id, p_rally, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (ticker) DO UPDATE SET
-                       entry_price=EXCLUDED.entry_price, entry_date=EXCLUDED.entry_date,
-                       stop_price=EXCLUDED.stop_price, target_price=EXCLUDED.target_price,
-                       trailing_stop=EXCLUDED.trailing_stop,
-                       highest_close=EXCLUDED.highest_close,
-                       atr=EXCLUDED.atr, bars_held=EXCLUDED.bars_held, size=EXCLUDED.size,
-                       qty=EXCLUDED.qty, order_id=EXCLUDED.order_id,
-                       trail_order_id=EXCLUDED.trail_order_id,
-                       p_rally=EXCLUDED.p_rally,
-                       updated_at=NOW()""",
-                (
-                    pos["ticker"], pos.get("entry_price", 0), pos.get("entry_date") or None,
-                    pos.get("stop_price", 0), pos.get("target_price", 0),
-                    pos.get("trailing_stop", 0),
-                    pos.get("highest_close", pos.get("entry_price", 0)),
-                    pos.get("atr", 0), pos.get("bars_held", 0), pos.get("size", 0),
-                    pos.get("qty", 0), pos.get("order_id"), pos.get("trail_order_id"),
-                    pos.get("p_rally", 0),
-                ),
-            )
+            cur.execute(_UPSERT_POSITION_SQL, _position_params(pos))
         # Record any closed positions from today not yet in DB
         for closed in state.get("closed_today", []):
             if closed.get("exit_date") != today:

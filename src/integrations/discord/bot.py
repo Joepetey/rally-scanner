@@ -539,6 +539,31 @@ def make_bot(token: str) -> RallyBot:
             market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
             return market_open <= now <= market_close
 
+        async def _execute_breach_exit(
+            ticker: str, pos: dict, price: float, exit_reason: str,
+        ) -> dict | None:
+            """Execute an Alpaca exit for a stop/target breach. Returns order result dict or None."""
+            from db.events import log_order
+            from trading.positions import async_close_position
+
+            from integrations.alpaca.executor import execute_exit
+
+            try:
+                trail_oid = pos.get("trail_order_id")
+                result = await execute_exit(ticker, trail_order_id=trail_oid)
+                fill = result.fill_price or price
+                await async_close_position(ticker, fill, exit_reason)
+                log_order(
+                    ticker, "sell", "market", result.qty,
+                    f"exit_{exit_reason}", result.order_id,
+                    "filled" if result.success else "failed",
+                    result.fill_price, result.error,
+                )
+                return result.model_dump()
+            except Exception:
+                logger.exception("Alpaca exit failed for %s", ticker)
+                return None
+
         async def _check_price_alerts() -> None:
             """Fetch live prices for open positions and alert on breaches."""
             from core.data import fetch_quotes
@@ -668,25 +693,10 @@ def make_bot(token: str) -> RallyBot:
                             "entry_price": entry,
                             "pnl_pct": pnl_pct,
                         }
-                        # Execute exit immediately on Alpaca
                         if alpaca_enabled():
-                            try:
-                                from db.events import log_order
-                                from trading.positions import async_close_position
-
-                                from integrations.alpaca.executor import execute_exit
-                                trail_oid = pos.get("trail_order_id")
-                                result = await execute_exit(
-                                    ticker, trail_order_id=trail_oid,
-                                )
-                                fill = result.fill_price or price
-                                await async_close_position(ticker, fill, "stop")
-                                log_order(ticker, "sell", "market", result.qty, "exit_stop",
-                                          result.order_id, "filled" if result.success else "failed",
-                                          result.fill_price, result.error)
-                                alert["order_result"] = result.model_dump()
-                            except Exception:
-                                logger.exception("Alpaca exit failed for %s", ticker)
+                            order_result = await _execute_breach_exit(ticker, pos, price, "stop")
+                            if order_result:
+                                alert["order_result"] = order_result
                         breach_alerts.append(alert)
 
                 # Check target breach
@@ -701,25 +711,10 @@ def make_bot(token: str) -> RallyBot:
                             "entry_price": entry,
                             "pnl_pct": pnl_pct,
                         }
-                        # Execute exit immediately on Alpaca
                         if alpaca_enabled():
-                            try:
-                                from db.events import log_order
-                                from trading.positions import async_close_position
-
-                                from integrations.alpaca.executor import execute_exit
-                                trail_oid = pos.get("trail_order_id")
-                                result = await execute_exit(
-                                    ticker, trail_order_id=trail_oid,
-                                )
-                                fill = result.fill_price or price
-                                await async_close_position(ticker, fill, "profit_target")
-                                log_order(ticker, "sell", "market", result.qty, "exit_target",
-                                          result.order_id, "filled" if result.success else "failed",
-                                          result.fill_price, result.error)
-                                alert["order_result"] = result.model_dump()
-                            except Exception:
-                                logger.exception("Alpaca exit failed for %s", ticker)
+                            order_result = await _execute_breach_exit(ticker, pos, price, "profit_target")
+                            if order_result:
+                                alert["order_result"] = order_result
                         breach_alerts.append(alert)
 
                 # Check approaching stop
