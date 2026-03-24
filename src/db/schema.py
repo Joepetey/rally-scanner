@@ -134,6 +134,12 @@ def init_schema() -> None:
             ADD COLUMN IF NOT EXISTS p_rally DOUBLE PRECISION DEFAULT 0
         """)
 
+        # Add exit order tracking columns if not present (migration-safe)
+        cur.execute("""
+            ALTER TABLE system_positions
+            ADD COLUMN IF NOT EXISTS target_order_id TEXT
+        """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS signal_queue (
                 id          BIGSERIAL PRIMARY KEY,
