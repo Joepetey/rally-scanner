@@ -398,11 +398,28 @@ def make_bot(token: str) -> RallyBot:
                     execute_exits,
                     get_account_equity,
                 )
-                from .notify import _order_embed, _order_failure_embed
+                from .notify import _cash_parking_embed, _order_embed, _order_failure_embed
 
                 # External system boundary — broker outage must not break scan
                 try:
                     equity = await get_account_equity()
+
+                    # Cash parking: sell only enough SGOV to cover the capital gap
+                    from integrations.alpaca.cash_parking import is_enabled as sgov_enabled
+                    if sgov_enabled() and signals:
+                        from integrations.alpaca.cash_parking import sell_sgov
+                        from trading.positions import get_total_exposure
+                        _available = PARAMS.max_portfolio_exposure - get_total_exposure()
+                        _needed = sum(s.get("size", 0) for s in signals)
+                        _gap = max(_needed - _available, 0.0)
+                        sgov_sell = await sell_sgov(equity, _gap)
+                        if sgov_sell and sgov_sell.success:
+                            await _send_alert(
+                                discord.Embed.from_dict(
+                                    _cash_parking_embed("unpark", sgov_sell, equity, _gap)
+                                ), "order"
+                            )
+
                     if signals:
                         entry_results = await execute_entries(signals, equity=equity)
                         ok = [r for r in entry_results if r.success]
@@ -461,6 +478,19 @@ def make_bot(token: str) -> RallyBot:
                             await _store_order_ids(q_results)
                             await _send_alert(
                                 discord.Embed.from_dict(_order_embed(q_ok, equity)), "order"
+                            )
+
+                    # Cash parking: park remaining idle capital in SGOV
+                    if sgov_enabled():
+                        from integrations.alpaca.cash_parking import buy_sgov
+                        from trading.positions import get_total_exposure
+                        idle = PARAMS.max_portfolio_exposure - get_total_exposure()
+                        sgov_buy = await buy_sgov(equity, idle)
+                        if sgov_buy and sgov_buy.success:
+                            await _send_alert(
+                                discord.Embed.from_dict(
+                                    _cash_parking_embed("park", sgov_buy, equity, idle)
+                                ), "order"
                             )
 
                 except Exception as e:

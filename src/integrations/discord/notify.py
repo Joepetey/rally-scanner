@@ -340,6 +340,29 @@ def _positions_embed(positions: list[dict]) -> dict:
     }
 
 
+def _cash_parking_embed(action: str, result, equity: float, idle_fraction: float) -> dict:
+    """Build a Discord embed for SGOV cash parking actions.
+
+    action: 'park' | 'unpark'
+    result: OrderResult
+    """
+    label = "Gap" if action == "unpark" else "Idle"
+    parts = [f"Qty: {result.qty}"]
+    if idle_fraction > 0:
+        parts.append(f"{label}: {idle_fraction:.1%}")
+    if result.fill_price:
+        parts.append(f"Fill: ${result.fill_price:.2f}")
+    if result.order_id:
+        parts.append(f"Order: `{result.order_id[:8]}`")
+    title = "SGOV Parked — Cash Management" if action == "park" else "SGOV Sold — Capital Freed"
+    return {
+        "title": title,
+        "color": 0xFFD700,  # gold — neutral, not a signal trade
+        "description": "\n".join(parts),
+        "footer": {"text": f"Account equity: ${equity:,.0f}"},
+    }
+
+
 def _error_embed(title: str, details: str) -> dict:
     """Build a Discord embed for error alerts."""
     return {
