@@ -344,12 +344,30 @@ def make_bot(token: str) -> RallyBot:
             from db.events import finish_scheduler_event, log_scheduler_event
             from pipeline.scanner import scan_all
             from db.portfolio import record_closed_trades, update_daily_snapshot
+            from core.persistence import load_manifest
 
             from .notify import _exit_embed, _positions_embed, _signal_embed
 
             logger.info("Scheduler: starting daily scan")
             _scan_event_id = log_scheduler_event("scan")
             _t0 = _time.time()
+
+            manifest = await asyncio.to_thread(load_manifest)
+            if not manifest:
+                duration = round(_time.time() - _t0, 1)
+                finish_scheduler_event(_scan_event_id, "error", n_signals=0, n_exits=0,
+                                       duration_s=duration)
+                embed = discord.Embed(
+                    title="⚠️ Daily Scan Skipped — No Trained Models",
+                    description=(
+                        "No trained models were found on the volume.\n"
+                        "Run retrain before the next scan: ask me to **retrain** or trigger it manually."
+                    ),
+                    color=discord.Color.orange(),
+                )
+                await _send_alert(embed, "scan_error")
+                return
+
             results = await asyncio.to_thread(
                 scan_all, None, True, "conservative"
             )
