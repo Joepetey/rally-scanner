@@ -316,31 +316,6 @@ async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
                 "reason": action.reason,
             }
 
-        # Update broker trailing stop if Alpaca is enabled
-        from integrations.alpaca.executor import is_enabled as alpaca_enabled
-        if alpaca_enabled():
-            trail_oid = pos.get("trail_order_id")
-            if trail_oid:
-                from integrations.alpaca.executor import cancel_order
-                await cancel_order(trail_oid)
-
-            qty = pos.get("qty")
-            if qty:
-                entry = pos.get("entry_price", 1)
-                atr_pct = atr / entry if entry else PARAMS.default_atr_pct
-                trail_pct = round(max(action.new_trail_atr_mult * atr_pct * 100, 0.5), 2)
-                from integrations.alpaca.executor import place_trailing_stop
-                new_oid = await place_trailing_stop(ticker, qty, trail_pct)
-                if new_oid:
-                    from db.positions import load_positions
-                    from .positions import async_save_positions
-                    state = load_positions()
-                    for p in state.get("positions", []):
-                        if p["ticker"] == ticker:
-                            p["trail_order_id"] = new_oid
-                            break
-                    await async_save_positions(state)
-
         return {"ticker": ticker, "action": "tighten", "success": True,
                 "old_stop": old_trail, "new_stop": new_trail,
                 "reason": action.reason}

@@ -19,8 +19,12 @@ try:
     from alpaca.trading.requests import (
         GetOrdersRequest,
         MarketOrderRequest,
+        OrderRequest,
+        StopLossRequest,
+        TakeProfitRequest,
         TrailingStopOrderRequest,
     )
+    from alpaca.trading.enums import OrderClass as AlpacaOrderClass, OrderType
 
     _ALPACA_AVAILABLE = True
 except ImportError:
@@ -492,6 +496,99 @@ async def place_trailing_stop(
     except Exception as e:
         logger.warning("Failed to place trailing stop for %s: %s", ticker, e)
         return None
+
+
+async def place_exit_orders(
+    ticker: str, qty: int, target_price: float, stop_price: float,
+) -> tuple[str | None, str | None]:
+    """Place an OCO exit: GTC limit sell at target + stop sell at stop_price.
+
+    Uses Alpaca's native OCO so both legs share qty — when one fills, Alpaca
+    automatically cancels the other.
+
+    Returns (target_order_id, stop_order_id) where both IDs refer to the two
+    legs of the OCO order. Either may be None on failure.
+    """
+    def _sync():
+        client = _trading_client()
+        try:
+            parent = client.submit_order(OrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=OrderSide.SELL,
+                type=OrderType.LIMIT,
+                time_in_force=TimeInForce.GTC,
+                order_class=AlpacaOrderClass.OCO,
+                take_profit=TakeProfitRequest(limit_price=round(target_price, 2)),
+                stop_loss=StopLossRequest(stop_price=round(stop_price, 2)),
+            ))
+            # Parent order IS the limit (target) leg; child leg is the stop
+            legs = parent.legs or []
+            target_oid = str(parent.id)
+            stop_oid = str(legs[0].id) if legs else target_oid
+            logger.info(
+                "OCO exit placed for %s: target=$%.2f stop=$%.2f "
+                "target_order=%s stop_order=%s",
+                ticker, target_price, stop_price, target_oid, stop_oid,
+            )
+            return target_oid, stop_oid
+        except Exception as e:
+            logger.warning("Failed to place OCO exit for %s: %s", ticker, e)
+            return None, None
+
+    return await asyncio.to_thread(_sync)
+
+
+async def cancel_exit_orders(
+    target_order_id: str | None, stop_order_id: str | None,
+) -> None:
+    """Cancel OCO exit orders. Cancels each unique ID once; ignores errors."""
+    ids = {oid for oid in (target_order_id, stop_order_id) if oid}
+    await asyncio.gather(*[cancel_order(oid) for oid in ids])
+
+
+async def check_exit_fills(
+    positions: list[dict],
+) -> list[dict]:
+    """Check whether any exit orders (target or stop) have filled on the broker.
+
+    Args:
+        positions: list of position dicts with 'ticker', 'target_order_id', 'trail_order_id'
+
+    Returns:
+        list of {ticker, fill_price, exit_reason} for positions whose exit order filled.
+    """
+    order_ids: dict[str, tuple[str, str]] = {}  # order_id -> (ticker, "target"|"stop")
+    for pos in positions:
+        t_oid = pos.get("target_order_id")
+        s_oid = pos.get("trail_order_id")
+        ticker = pos["ticker"]
+        if t_oid:
+            order_ids[t_oid] = (ticker, "profit_target")
+        if s_oid:
+            order_ids[s_oid] = (ticker, "stop")
+
+    if not order_ids:
+        return []
+
+    def _sync():
+        client = _trading_client()
+        orders = client.get_orders(filter=GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+        ))
+        filled = []
+        for order in orders:
+            oid = str(order.id)
+            if oid not in order_ids:
+                continue
+            if order.status != OrderStatus.FILLED:
+                continue
+            ticker, reason = order_ids[oid]
+            fill_price = float(order.filled_avg_price) if order.filled_avg_price else 0
+            filled.append({"ticker": ticker, "fill_price": fill_price, "exit_reason": reason})
+        return filled
+
+    return await asyncio.to_thread(_sync)
 
 
 async def check_pending_fills(order_ids: list[str]) -> dict[str, float]:

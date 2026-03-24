@@ -542,15 +542,19 @@ def make_bot(token: str) -> RallyBot:
         async def _execute_breach_exit(
             ticker: str, pos: dict, price: float, exit_reason: str,
         ) -> dict | None:
-            """Execute an Alpaca exit for a stop/target breach. Returns order result dict or None."""
+            """Cancel any open exit orders then execute a market sell. Returns order result dict or None."""
             from db.events import log_order
             from trading.positions import async_close_position
 
-            from integrations.alpaca.executor import execute_exit
+            from integrations.alpaca.executor import cancel_exit_orders, execute_exit
+
+            # Cancel standing limit/stop orders before firing market sell
+            await cancel_exit_orders(
+                pos.get("target_order_id"), pos.get("trail_order_id"),
+            )
 
             try:
-                trail_oid = pos.get("trail_order_id")
-                result = await execute_exit(ticker, trail_order_id=trail_oid)
+                result = await execute_exit(ticker)
                 fill = result.fill_price or price
                 await async_close_position(ticker, fill, exit_reason)
                 log_order(
@@ -595,7 +599,7 @@ def make_bot(token: str) -> RallyBot:
                 from integrations.alpaca.executor import (
                     check_pending_fills,
                     get_snapshots,
-                    place_trailing_stop,
+                    place_exit_orders,
                 )
 
                 quotes = await get_snapshots(tickers)
@@ -612,47 +616,34 @@ def make_bot(token: str) -> RallyBot:
                         if n_filled:
                             logger.info("Updated %d fill prices from Alpaca", n_filled)
 
-                # Place deferred trailing stops for filled entries without one
+                # Place exit orders for newly-filled entries that don't have them yet
                 fresh_state = reload_positions()
                 for pos in fresh_state.get("positions", []):
-                    if (not pos.get("order_id")        # fill confirmed (order_id removed)
-                            and not pos.get("trail_order_id")  # no trailing stop yet
-                            and pos.get("entry_price")):
-                        atr_pct = (pos["atr"] / pos["entry_price"]
-                                   if pos.get("atr") else PARAMS.default_atr_pct)
-                        trail_pct = round(
-                            max(PARAMS.trailing_stop_atr_mult * atr_pct * 100, 1.0), 2,
+                    if (not pos.get("order_id")               # fill confirmed
+                            and not pos.get("target_order_id")  # no limit sell yet
+                            and not pos.get("trail_order_id")   # no stop sell yet
+                            and pos.get("target_price") and pos.get("stop_price")
+                            and pos.get("qty")):
+                        effective_stop = max(
+                            pos.get("stop_price", 0), pos.get("trailing_stop", 0),
                         )
-                        qty = pos.get("qty")
-                        if not qty:
-                            # Estimate qty from broker positions
-                            try:
-                                from integrations.alpaca.executor import get_all_positions
-                                broker_pos = await get_all_positions()
-                                for bp in broker_pos:
-                                    if bp["ticker"] == pos["ticker"]:
-                                        qty = bp["qty"]
-                                        pos["qty"] = qty
-                                        break
-                            except Exception:
-                                pass
-                        if not qty:
-                            logger.warning(
-                                "Cannot place trailing stop for %s: qty unknown",
-                                pos["ticker"],
-                            )
-                            continue
-                        trail_id = await place_trailing_stop(
-                            pos["ticker"], qty, trail_pct,
+                        t_oid, s_oid = await place_exit_orders(
+                            pos["ticker"], pos["qty"],
+                            pos["target_price"], effective_stop,
                         )
-                        if trail_id:
-                            pos["trail_order_id"] = trail_id
+                        pos["target_order_id"] = t_oid
+                        pos["trail_order_id"] = s_oid
+                        if t_oid or s_oid:
                             from db.events import log_order
-                            log_order(pos["ticker"], "sell", "trailing_stop",
-                                      pos.get("qty", 0), "trail_stop", trail_id, "pending")
+                            if t_oid:
+                                log_order(pos["ticker"], "sell", "limit",
+                                          pos["qty"], "exit_target", t_oid, "pending")
+                            if s_oid:
+                                log_order(pos["ticker"], "sell", "stop",
+                                          pos["qty"], "exit_stop", s_oid, "pending")
                             logger.info(
-                                "Deferred trailing stop placed for %s: %s",
-                                pos["ticker"], trail_id,
+                                "Exit orders placed for %s: target=%s stop=%s",
+                                pos["ticker"], t_oid, s_oid,
                             )
                 await async_save_positions(fresh_state)
 
@@ -766,26 +757,29 @@ def make_bot(token: str) -> RallyBot:
                     len(breach_alerts), len(approach_alerts),
                 )
 
-        async def _reconcile() -> None:
-            """Check for trailing stop fills at broker."""
-            from trading.positions import (
-                close_position_by_trail_fill,
-                get_trail_order_ids,
-            )
 
-            from integrations.alpaca.executor import check_trail_stop_fills
+        async def _reconcile() -> None:
+            """Check whether any broker exit orders (limit/stop) have filled and sync the DB."""
+            from trading.positions import async_close_position
+
+            from integrations.alpaca.executor import check_exit_fills
             from integrations.alpaca.executor import is_enabled as alpaca_enabled
 
             if not alpaca_enabled() or not _is_market_open():
                 return
 
-            trail_ids = get_trail_order_ids()
-            if not trail_ids:
-                return
-            trail_fills = await check_trail_stop_fills(trail_ids)
-            for ticker, fill_price in trail_fills.items():
-                close_position_by_trail_fill(ticker, fill_price)
-                logger.info("Trail stop filled: %s at %.2f", ticker, fill_price)
+            state = await get_merged_positions()
+            positions = state.get("positions", [])
+            filled = await check_exit_fills(positions)
+            for fill in filled:
+                ticker = fill["ticker"]
+                fill_price = fill["fill_price"]
+                exit_reason = fill["exit_reason"]
+                logger.info(
+                    "Broker exit filled for %s at %.2f (%s) — syncing DB",
+                    ticker, fill_price, exit_reason,
+                )
+                await async_close_position(ticker, fill_price, exit_reason)
 
         # -- Proactive state --
         _cached_regime_states: dict = {}
@@ -1030,8 +1024,9 @@ def make_bot(token: str) -> RallyBot:
                 logger.exception("Mid-day scan failed")
                 await _send_error_alert("Mid-day Scan", e)
 
-        # Reconciliation: every 30 minutes during market hours
-        @tasks.loop(minutes=30)
+        # Reconciliation: every 15 minutes during market hours — sync DB when
+        # broker exit orders (limit/stop) fill without our loop catching it first.
+        @tasks.loop(minutes=15)
         async def scheduled_reconcile() -> None:
             try:
                 await _reconcile()
@@ -1076,7 +1071,7 @@ def make_bot(token: str) -> RallyBot:
                 )
             if not scheduled_reconcile.is_running():
                 scheduled_reconcile.start()
-                logger.info("Scheduler: reconciliation armed (every 30m during market hours)")
+                logger.info("Scheduler: reconciliation armed (every 15m during market hours)")
             if not scheduled_regime_check.is_running():
                 scheduled_regime_check.start()
                 logger.info("Scheduler: regime check armed (every 30m during market hours)")
