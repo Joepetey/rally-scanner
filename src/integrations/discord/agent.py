@@ -603,9 +603,27 @@ def _run_scan(config: str = "conservative") -> dict:
                 "error": "No models found. Run retrain first."
             }
 
-        # Get updated positions
+        # Persist all scan results for later queries
+        from datetime import date
+        from db.positions import save_watchlist
+        open_tickers = set()
         state = get_merged_positions_sync()
         positions = state.get("positions", [])
+        open_tickers = {p["ticker"] for p in positions}
+        save_watchlist(
+            [
+                {
+                    "ticker": r["ticker"],
+                    "p_rally": round(r.get("p_rally", 0) * 100, 1),
+                    "comp_score": round(r.get("comp_score", 0), 3),
+                    "close": r.get("close", 0),
+                    "signal": bool(r.get("signal")),
+                }
+                for r in sorted(results, key=lambda x: x.get("p_rally", 0), reverse=True)
+                if r.get("status") == "ok" and r["ticker"] not in open_tickers
+            ],
+            scan_date=date.today(),
+        )
 
         # Find new signals (bars_held <= 1)
         new_signals = [p for p in positions if p.get("bars_held", 99) <= 1]
