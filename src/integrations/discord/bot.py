@@ -306,7 +306,7 @@ def make_bot(token: str) -> RallyBot:
             await _send_alert(embed, "error")
 
         def _save_watchlist(results: list, positions: dict) -> None:
-            """Persist near-signal tickers for agent queries."""
+            """Persist all scan results for agent queries."""
             from datetime import date as _date
 
             from db.positions import save_watchlist as _db_save_watchlist
@@ -325,8 +325,6 @@ def make_bot(token: str) -> RallyBot:
                 if r["ticker"] in open_tickers:
                     continue
                 p_rally = r.get("p_rally", 0)
-                if p_rally < PARAMS.watchlist_p_rally_min:
-                    continue
                 watchlist.append({
                     "ticker": r["ticker"],
                     "p_rally": round(p_rally * 100, 1),
