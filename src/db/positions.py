@@ -328,6 +328,72 @@ def save_watchlist(entries: list[dict], scan_date: date) -> None:
             )
 
 
+def save_latest_scan(results: list[dict], positions: dict) -> None:
+    """Replace current-state scan tables atomically on each scan."""
+    open_tickers = {p["ticker"] for p in positions.get("positions", [])}
+    ok = [r for r in results if r.get("status") == "ok"]
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("TRUNCATE latest_scan_results, current_signals, current_watchlist")
+
+        for r in ok:
+            is_sig = bool(r.get("signal"))
+            is_pos = r["ticker"] in open_tickers
+            p_rally_pct = round(r.get("p_rally", 0) * 100, 1)
+
+            cur.execute(
+                """INSERT INTO latest_scan_results
+                       (ticker, p_rally, p_rally_raw, comp_score, fail_dn,
+                        trend, golden_cross, hmm_compressed, rv_pctile, atr_pct,
+                        macd_hist, vol_ratio, vix_pctile, rsi, close, size,
+                        is_signal, is_position)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    r["ticker"], p_rally_pct, r.get("p_rally_raw", 0),
+                    r.get("comp_score", 0), r.get("fail_dn", 0),
+                    r.get("trend", 0), r.get("golden_cross", 0),
+                    r.get("hmm_compressed", 0), r.get("rv_pctile", 0),
+                    r.get("atr_pct", 0), r.get("macd_hist", 0),
+                    r.get("vol_ratio", 1), r.get("vix_pctile", 0),
+                    r.get("rsi", 0), r.get("close", 0), r.get("size", 0),
+                    is_sig, is_pos,
+                ),
+            )
+
+            if is_sig:
+                cur.execute(
+                    """INSERT INTO current_signals
+                           (ticker, p_rally, comp_score, fail_dn, close, size,
+                            atr_pct, trend, golden_cross, rsi, is_position)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        r["ticker"], p_rally_pct, r.get("comp_score", 0),
+                        r.get("fail_dn", 0), r.get("close", 0), r.get("size", 0),
+                        r.get("atr_pct", 0), r.get("trend", 0),
+                        r.get("golden_cross", 0), r.get("rsi", 0), is_pos,
+                    ),
+                )
+
+            if not is_sig and not is_pos:
+                cur.execute(
+                    """INSERT INTO current_watchlist
+                           (ticker, p_rally, p_rally_raw, comp_score, fail_dn,
+                            close, size, trend, golden_cross, hmm_compressed,
+                            rv_pctile, atr_pct, macd_hist, vol_ratio, vix_pctile, rsi)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        r["ticker"], p_rally_pct, r.get("p_rally_raw", 0),
+                        r.get("comp_score", 0), r.get("fail_dn", 0),
+                        r.get("close", 0), r.get("size", 0), r.get("trend", 0),
+                        r.get("golden_cross", 0), r.get("hmm_compressed", 0),
+                        r.get("rv_pctile", 0), r.get("atr_pct", 0),
+                        r.get("macd_hist", 0), r.get("vol_ratio", 1),
+                        r.get("vix_pctile", 0), r.get("rsi", 0),
+                    ),
+                )
+
+
 def load_watchlist() -> dict:
     """Return the most recent watchlist in the same shape as the old JSON file.
 

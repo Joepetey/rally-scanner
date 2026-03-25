@@ -399,6 +399,10 @@ def make_bot(token: str) -> RallyBot:
             # Persist watchlist (near-signal tickers) for agent queries
             _save_watchlist(results, positions)
 
+            # Replace current-state snapshot tables (latest scan only)
+            from db.positions import save_latest_scan as _save_latest_scan
+            await asyncio.to_thread(_save_latest_scan, results, positions)
+
             # Filter out signals for tickers we already hold
             open_tickers = {
                 p["ticker"] for p in positions.get("positions", [])

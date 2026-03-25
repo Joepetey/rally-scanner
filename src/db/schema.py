@@ -276,6 +276,69 @@ def init_schema() -> None:
             )
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS latest_scan_results (
+                ticker          TEXT PRIMARY KEY,
+                p_rally         DOUBLE PRECISION NOT NULL DEFAULT 0,
+                p_rally_raw     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                comp_score      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                fail_dn         DOUBLE PRECISION NOT NULL DEFAULT 0,
+                trend           INTEGER NOT NULL DEFAULT 0,
+                golden_cross    INTEGER NOT NULL DEFAULT 0,
+                hmm_compressed  DOUBLE PRECISION NOT NULL DEFAULT 0,
+                rv_pctile       DOUBLE PRECISION NOT NULL DEFAULT 0,
+                atr_pct         DOUBLE PRECISION NOT NULL DEFAULT 0,
+                macd_hist       DOUBLE PRECISION NOT NULL DEFAULT 0,
+                vol_ratio       DOUBLE PRECISION NOT NULL DEFAULT 1,
+                vix_pctile      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                rsi             DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close           DOUBLE PRECISION NOT NULL DEFAULT 0,
+                size            DOUBLE PRECISION NOT NULL DEFAULT 0,
+                is_signal       BOOLEAN NOT NULL DEFAULT FALSE,
+                is_position     BOOLEAN NOT NULL DEFAULT FALSE,
+                updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS current_signals (
+                ticker       TEXT PRIMARY KEY,
+                p_rally      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                comp_score   DOUBLE PRECISION NOT NULL DEFAULT 0,
+                fail_dn      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close        DOUBLE PRECISION NOT NULL DEFAULT 0,
+                size         DOUBLE PRECISION NOT NULL DEFAULT 0,
+                atr_pct      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                trend        INTEGER NOT NULL DEFAULT 0,
+                golden_cross INTEGER NOT NULL DEFAULT 0,
+                rsi          DOUBLE PRECISION NOT NULL DEFAULT 0,
+                is_position  BOOLEAN NOT NULL DEFAULT FALSE,
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS current_watchlist (
+                ticker         TEXT PRIMARY KEY,
+                p_rally        DOUBLE PRECISION NOT NULL DEFAULT 0,
+                p_rally_raw    DOUBLE PRECISION NOT NULL DEFAULT 0,
+                comp_score     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                fail_dn        DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close          DOUBLE PRECISION NOT NULL DEFAULT 0,
+                size           DOUBLE PRECISION NOT NULL DEFAULT 0,
+                trend          INTEGER NOT NULL DEFAULT 0,
+                golden_cross   INTEGER NOT NULL DEFAULT 0,
+                hmm_compressed DOUBLE PRECISION NOT NULL DEFAULT 0,
+                rv_pctile      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                atr_pct        DOUBLE PRECISION NOT NULL DEFAULT 0,
+                macd_hist      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                vol_ratio      DOUBLE PRECISION NOT NULL DEFAULT 1,
+                vix_pctile     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                rsi            DOUBLE PRECISION NOT NULL DEFAULT 0,
+                updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS model_manifest (
                 ticker      TEXT PRIMARY KEY,
                 saved_at    TIMESTAMPTZ NOT NULL,
