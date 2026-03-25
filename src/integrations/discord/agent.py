@@ -606,7 +606,6 @@ def _run_scan(config: str = "conservative") -> dict:
         # Persist all scan results for later queries
         from datetime import date
         from db.positions import save_watchlist
-        open_tickers = set()
         state = get_merged_positions_sync()
         positions = state.get("positions", [])
         open_tickers = {p["ticker"] for p in positions}
@@ -615,8 +614,20 @@ def _run_scan(config: str = "conservative") -> dict:
                 {
                     "ticker": r["ticker"],
                     "p_rally": round(r.get("p_rally", 0) * 100, 1),
-                    "comp_score": round(r.get("comp_score", 0), 3),
+                    "p_rally_raw": r.get("p_rally_raw", 0),
+                    "comp_score": r.get("comp_score", 0),
+                    "fail_dn": r.get("fail_dn", 0),
+                    "trend": r.get("trend", 0),
+                    "golden_cross": r.get("golden_cross", 0),
+                    "hmm_compressed": r.get("hmm_compressed", 0),
+                    "rv_pctile": r.get("rv_pctile", 0),
+                    "atr_pct": r.get("atr_pct", 0),
+                    "macd_hist": r.get("macd_hist", 0),
+                    "vol_ratio": r.get("vol_ratio", 1),
+                    "vix_pctile": r.get("vix_pctile", 0),
+                    "rsi": r.get("rsi", 0),
                     "close": r.get("close", 0),
+                    "size": r.get("size", 0),
                     "signal": bool(r.get("signal")),
                 }
                 for r in sorted(results, key=lambda x: x.get("p_rally", 0), reverse=True)
@@ -625,8 +636,8 @@ def _run_scan(config: str = "conservative") -> dict:
             scan_date=date.today(),
         )
 
-        # Find new signals (bars_held <= 1)
-        new_signals = [p for p in positions if p.get("bars_held", 99) <= 1]
+        # New signals: from scan results directly (not just entered positions)
+        new_signals = [r for r in results if r.get("signal") and r["ticker"] not in open_tickers]
 
         # Count closed positions
         closed_today = state.get("closed_today", [])
@@ -643,13 +654,14 @@ def _run_scan(config: str = "conservative") -> dict:
             "closed_today": len(closed_today),
             "signals": [
                 {
-                    "ticker": p["ticker"],
-                    "entry_price": p["entry_price"],
-                    "size_pct": p.get("size", 0) * 100,
-                    "stop_price": p.get("stop_price"),
-                    "target_price": p.get("target_price"),
+                    "ticker": r["ticker"],
+                    "p_rally": round(r.get("p_rally", 0) * 100, 1),
+                    "comp_score": round(r.get("comp_score", 0), 3),
+                    "close": r.get("close", 0),
+                    "size_pct": round(r.get("size", 0) * 100, 1),
+                    "stop_price": round(r.get("range_low", 0), 2),
                 }
-                for p in new_signals
+                for r in new_signals
             ]
         }
     except Exception as e:

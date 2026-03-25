@@ -328,8 +328,20 @@ def make_bot(token: str) -> RallyBot:
                 watchlist.append({
                     "ticker": r["ticker"],
                     "p_rally": round(p_rally * 100, 1),
-                    "comp_score": round(r.get("comp_score", 0), 3),
+                    "p_rally_raw": r.get("p_rally_raw", 0),
+                    "comp_score": r.get("comp_score", 0),
+                    "fail_dn": r.get("fail_dn", 0),
+                    "trend": r.get("trend", 0),
+                    "golden_cross": r.get("golden_cross", 0),
+                    "hmm_compressed": r.get("hmm_compressed", 0),
+                    "rv_pctile": r.get("rv_pctile", 0),
+                    "atr_pct": r.get("atr_pct", 0),
+                    "macd_hist": r.get("macd_hist", 0),
+                    "vol_ratio": r.get("vol_ratio", 1),
+                    "vix_pctile": r.get("vix_pctile", 0),
+                    "rsi": r.get("rsi", 0),
                     "close": r.get("close", 0),
+                    "size": r.get("size", 0),
                     "signal": bool(r.get("signal")),
                 })
 

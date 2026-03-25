@@ -232,17 +232,48 @@ def init_schema() -> None:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS watchlist (
-                id          BIGSERIAL PRIMARY KEY,
-                scan_date   DATE NOT NULL,
-                ticker      TEXT NOT NULL,
-                p_rally     DOUBLE PRECISION NOT NULL,
-                comp_score  DOUBLE PRECISION NOT NULL DEFAULT 0,
-                close       DOUBLE PRECISION NOT NULL,
-                is_signal   BOOLEAN NOT NULL DEFAULT FALSE,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                id            BIGSERIAL PRIMARY KEY,
+                scan_date     DATE NOT NULL,
+                ticker        TEXT NOT NULL,
+                p_rally       DOUBLE PRECISION NOT NULL,
+                p_rally_raw   DOUBLE PRECISION NOT NULL DEFAULT 0,
+                comp_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
+                fail_dn       DOUBLE PRECISION NOT NULL DEFAULT 0,
+                trend         INTEGER NOT NULL DEFAULT 0,
+                golden_cross  INTEGER NOT NULL DEFAULT 0,
+                hmm_compressed DOUBLE PRECISION NOT NULL DEFAULT 0,
+                rv_pctile     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                atr_pct       DOUBLE PRECISION NOT NULL DEFAULT 0,
+                macd_hist     DOUBLE PRECISION NOT NULL DEFAULT 0,
+                vol_ratio     DOUBLE PRECISION NOT NULL DEFAULT 1,
+                vix_pctile    DOUBLE PRECISION NOT NULL DEFAULT 0,
+                rsi           DOUBLE PRECISION NOT NULL DEFAULT 0,
+                close         DOUBLE PRECISION NOT NULL,
+                size          DOUBLE PRECISION NOT NULL DEFAULT 0,
+                is_signal     BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE (scan_date, ticker)
             )
         """)
+
+        # Migration: add new columns to existing watchlist table
+        for col, definition in [
+            ("p_rally_raw",    "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("fail_dn",        "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("trend",          "INTEGER NOT NULL DEFAULT 0"),
+            ("golden_cross",   "INTEGER NOT NULL DEFAULT 0"),
+            ("hmm_compressed", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("rv_pctile",      "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("atr_pct",        "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("macd_hist",      "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("vol_ratio",      "DOUBLE PRECISION NOT NULL DEFAULT 1"),
+            ("vix_pctile",     "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("rsi",            "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("size",           "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+        ]:
+            cur.execute(
+                f"ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS {col} {definition}"
+            )
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS model_manifest (

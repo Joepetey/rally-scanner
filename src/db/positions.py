@@ -284,19 +284,45 @@ def save_watchlist(entries: list[dict], scan_date: date) -> None:
         for e in entries:
             cur.execute(
                 """INSERT INTO watchlist
-                       (scan_date, ticker, p_rally, comp_score, close, is_signal)
-                   VALUES (%s, %s, %s, %s, %s, %s)
+                       (scan_date, ticker, p_rally, p_rally_raw, comp_score, fail_dn,
+                        trend, golden_cross, hmm_compressed, rv_pctile, atr_pct,
+                        macd_hist, vol_ratio, vix_pctile, rsi, close, size, is_signal)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (scan_date, ticker) DO UPDATE SET
                        p_rally=EXCLUDED.p_rally,
+                       p_rally_raw=EXCLUDED.p_rally_raw,
                        comp_score=EXCLUDED.comp_score,
+                       fail_dn=EXCLUDED.fail_dn,
+                       trend=EXCLUDED.trend,
+                       golden_cross=EXCLUDED.golden_cross,
+                       hmm_compressed=EXCLUDED.hmm_compressed,
+                       rv_pctile=EXCLUDED.rv_pctile,
+                       atr_pct=EXCLUDED.atr_pct,
+                       macd_hist=EXCLUDED.macd_hist,
+                       vol_ratio=EXCLUDED.vol_ratio,
+                       vix_pctile=EXCLUDED.vix_pctile,
+                       rsi=EXCLUDED.rsi,
                        close=EXCLUDED.close,
+                       size=EXCLUDED.size,
                        is_signal=EXCLUDED.is_signal""",
                 (
                     scan_date,
                     e["ticker"],
                     e.get("p_rally", 0),
+                    e.get("p_rally_raw", 0),
                     e.get("comp_score", 0),
+                    e.get("fail_dn", 0),
+                    e.get("trend", 0),
+                    e.get("golden_cross", 0),
+                    e.get("hmm_compressed", 0),
+                    e.get("rv_pctile", 0),
+                    e.get("atr_pct", 0),
+                    e.get("macd_hist", 0),
+                    e.get("vol_ratio", 1),
+                    e.get("vix_pctile", 0),
+                    e.get("rsi", 0),
                     e.get("close", 0),
+                    e.get("size", 0),
                     bool(e.get("signal", False)),
                 ),
             )
