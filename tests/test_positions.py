@@ -10,6 +10,7 @@ from db.positions import load_positions, save_positions, tighten_trailing_stop
 from trading.positions import (
     add_signal_positions,
     get_merged_positions,
+    sync_positions_from_alpaca,
     update_existing_positions,
     update_positions,
 )
@@ -542,3 +543,79 @@ def test_remote_fetch_fallback_on_error(tmp_models_dir, monkeypatch):
 
     assert "positions" in result
     assert isinstance(result["positions"], list)
+
+
+# ---------------------------------------------------------------------------
+# sync_positions_from_alpaca — three reconcile cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_updates_qty_and_entry_keeps_metadata(tmp_models_dir):
+    """Case 1: position in both Alpaca and DB — broker qty/entry wins, metadata preserved."""
+    save_positions({"positions": [{
+        "ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
+        "stop_price": 145.0, "target_price": 160.0, "trailing_stop": 148.0,
+        "highest_close": 155.0, "atr": 3.0, "bars_held": 5, "size": 0.10, "qty": 10,
+    }], "closed_today": []})
+
+    mock_broker = AsyncMock(return_value=[{
+        "ticker": "AAPL", "qty": 12, "avg_entry_price": 152.0,
+        "market_value": 1824.0, "unrealized_pl": 24.0,
+    }])
+    with patch("trading.positions.get_all_positions", mock_broker), \
+         patch("trading.positions.get_recent_sell_fills", AsyncMock(return_value={})):
+        result = await sync_positions_from_alpaca()
+
+    assert result == {"synced": 1, "closed": 0, "inserted": 0}
+    from db.positions import load_position_meta
+    pos = load_position_meta("AAPL")
+    assert pos["qty"] == 12
+    assert pos["entry_price"] == 152.0
+    assert pos["stop_price"] == 145.0   # DB metadata unchanged
+    assert pos["bars_held"] == 5        # DB metadata unchanged
+
+
+@pytest.mark.asyncio
+async def test_sync_inserts_untracked_alpaca_position(tmp_models_dir):
+    """Case 2: position in Alpaca but not DB — insert with broker values + derived stops."""
+    mock_broker = AsyncMock(return_value=[{
+        "ticker": "TSLA", "qty": 5, "avg_entry_price": 200.0,
+        "market_value": 1050.0, "unrealized_pl": 50.0,
+    }])
+    with patch("trading.positions.get_all_positions", mock_broker), \
+         patch("trading.positions.get_recent_sell_fills", AsyncMock(return_value={})):
+        result = await sync_positions_from_alpaca()
+
+    assert result == {"synced": 0, "closed": 0, "inserted": 1}
+    from db.positions import load_position_meta
+    pos = load_position_meta("TSLA")
+    assert pos["qty"] == 5
+    assert pos["entry_price"] == 200.0
+    assert pos["stop_price"] == round(200.0 * (1 - PARAMS.fallback_stop_pct), 4)
+    assert pos["target_price"] > 200.0
+    assert pos["trailing_stop"] < 200.0
+    assert pos["bars_held"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_closes_position_missing_from_broker(tmp_models_dir):
+    """Case 3: position in DB but not Alpaca — broker closed it, recover fill and record."""
+    save_positions({"positions": [{
+        "ticker": "MSFT", "entry_price": 400.0, "entry_date": "2024-01-10",
+        "stop_price": 390.0, "target_price": 420.0, "trailing_stop": 395.0,
+        "highest_close": 410.0, "atr": 4.0, "bars_held": 3, "size": 0.08, "qty": 8,
+    }], "closed_today": []})
+
+    with patch("trading.positions.get_all_positions", AsyncMock(return_value=[])), \
+         patch("trading.positions.get_recent_sell_fills", AsyncMock(return_value={"MSFT": 405.0})):
+        result = await sync_positions_from_alpaca()
+
+    assert result == {"synced": 0, "closed": 1, "inserted": 0}
+    from db.positions import get_closed_today, load_position_meta
+    assert load_position_meta("MSFT") is None
+    closed = get_closed_today()
+    assert len(closed) == 1
+    assert closed[0]["ticker"] == "MSFT"
+    assert closed[0]["exit_reason"] == "broker_closed"
+    assert closed[0]["exit_price"] == 405.0

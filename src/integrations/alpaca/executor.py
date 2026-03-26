@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
 # third-party
 from pydantic import BaseModel
@@ -603,6 +604,33 @@ async def check_trail_stop_fills(
             oid = str(order.id)
             if oid in oid_to_ticker and order.filled_avg_price:
                 fills[oid_to_ticker[oid]] = float(order.filled_avg_price)
+        return fills
+
+    return await asyncio.to_thread(_sync)
+
+
+async def get_recent_sell_fills(tickers: list[str]) -> dict[str, float]:
+    """Return {ticker: fill_price} for sell orders filled in the last 24h."""
+    if not tickers:
+        return {}
+
+    def _sync() -> dict[str, float]:
+        client = _trading_client()
+        after = datetime.now(timezone.utc) - timedelta(hours=24)
+        orders = client.get_orders(filter=GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            after=after,
+        ))
+        tickers_set = set(tickers)
+        fills: dict[str, float] = {}
+        for order in orders:
+            if order.status != OrderStatus.FILLED:
+                continue
+            if order.side != OrderSide.SELL:
+                continue
+            sym = str(order.symbol)
+            if sym in tickers_set and order.filled_avg_price:
+                fills[sym] = float(order.filled_avg_price)
         return fills
 
     return await asyncio.to_thread(_sync)

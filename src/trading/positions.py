@@ -53,6 +53,7 @@ __all__ = [
     "print_positions",
     "process_signal_queue",
     "update_skipped_outcomes",
+    "sync_positions_from_alpaca",
 ]
 
 
@@ -107,6 +108,89 @@ async def get_merged_positions() -> dict:
         "closed_today": get_closed_today(),
         "last_updated": datetime.now().isoformat(),
     }
+
+
+async def sync_positions_from_alpaca() -> dict:
+    """Reconcile DB with Alpaca broker state.
+
+    Three cases:
+    1. In Alpaca + in DB  → update qty/entry_price from broker, keep all metadata
+    2. In Alpaca, not DB  → insert with broker values and PARAMS-derived stops
+    3. In DB, not Alpaca  → broker closed it; recover fill price, delete + record closed
+    """
+    async with _positions_lock:
+        # Local import to avoid circular dependency (executor imports from trading.positions)
+        from integrations.alpaca.executor import get_recent_sell_fills
+
+        broker_list = await get_all_positions()
+        broker_map = {p["ticker"]: p for p in broker_list}
+        meta_list = load_all_position_meta()
+        meta_map = {p["ticker"]: p for p in meta_list}
+
+        broker_tickers = set(broker_map)
+        db_tickers = set(meta_map)
+
+        # Case 3: in DB, gone from Alpaca — broker closed the position
+        closed_tickers = db_tickers - broker_tickers
+        fills = {}
+        if closed_tickers:
+            fills = await get_recent_sell_fills(list(closed_tickers))
+        for ticker in closed_tickers:
+            pos = meta_map[ticker]
+            fill_price = fills.get(ticker, 0.0)
+            pnl = (
+                round((fill_price / pos["entry_price"] - 1) * 100, 2)
+                if fill_price and pos.get("entry_price") else 0.0
+            )
+            pos["exit_price"] = fill_price
+            pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
+            pos["exit_reason"] = "broker_closed"
+            pos["realized_pnl_pct"] = pnl
+            pos["status"] = "closed"
+            delete_position_meta(ticker)
+            record_closed_position(pos)
+            logger.info("sync: closed %s (broker_closed), fill=%.4f", ticker, fill_price)
+
+        # Case 2: in Alpaca, not in DB — untracked position (manually opened / missed fill)
+        # Derive stops/target from entry price using PARAMS defaults
+        inserted_tickers = broker_tickers - db_tickers
+        for ticker in inserted_tickers:
+            bp = broker_map[ticker]
+            p = PARAMS
+            entry = bp["avg_entry_price"]
+            atr_val = round(entry * p.default_atr_pct, 4)
+            new_pos = {
+                "ticker": ticker,
+                "qty": bp["qty"],
+                "entry_price": entry,
+                "entry_date": datetime.now().strftime("%Y-%m-%d"),
+                "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
+                "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
+                "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
+                "highest_close": entry,
+                "atr": atr_val,
+                "bars_held": 0,
+                "size": 0.0,
+                "p_rally": 0.0,
+                "status": "open",
+            }
+            save_position_meta(new_pos)
+            logger.warning("sync: inserted untracked position %s with default stops", ticker)
+
+        # Case 1: in both — update qty/entry from broker, keep all metadata unchanged
+        matched_tickers = broker_tickers & db_tickers
+        for ticker in matched_tickers:
+            bp = broker_map[ticker]
+            pos = meta_map[ticker]
+            pos["qty"] = bp["qty"]
+            pos["entry_price"] = bp["avg_entry_price"]
+            save_position_meta(pos)
+
+        return {
+            "synced": len(matched_tickers),
+            "closed": len(closed_tickers),
+            "inserted": len(inserted_tickers),
+        }
 
 
 def get_merged_positions_sync() -> dict:
