@@ -9,6 +9,8 @@ import logging
 import os
 from urllib.request import Request, urlopen
 
+from config import PARAMS as _P
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,8 +71,6 @@ def send_discord(embeds: list[dict]) -> bool:
 
 def _signal_embed(signals: list[dict]) -> dict:
     """Build a Discord embed for new signals."""
-    from config import PARAMS as _P
-
     fields = []
     for s in sorted(signals, key=lambda x: x.get("p_rally", 0), reverse=True):
         close = s.get("close", 0)

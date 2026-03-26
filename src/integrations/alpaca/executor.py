@@ -2,14 +2,13 @@
 import asyncio
 import logging
 import os
+import time
 
 # third-party
 from pydantic import BaseModel
 
 try:
-    from alpaca.data.historical.stock import StockHistoricalDataClient
     from alpaca.data.requests import StockSnapshotRequest
-    from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import (
         OrderSide,
         OrderStatus,
@@ -32,6 +31,16 @@ except ImportError:
 
 # local
 import config
+from db.positions import (
+    enqueue_signal,
+    load_all_position_meta,
+    load_positions,
+    log_skipped_signal,
+    remove_from_queue,
+)
+from integrations.alpaca.broker import _data_client, _safe_qty, _trading_client, get_all_positions
+from trading.positions import async_close_position, get_group_exposure, get_total_exposure
+from trading.risk_manager import is_circuit_breaker_active
 
 logger = logging.getLogger(__name__)
 
@@ -58,22 +67,6 @@ def has_alpaca_keys() -> bool:
     """True if Alpaca API keys are configured (regardless of auto-execute)."""
     return bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
 
-
-def _trading_client():
-    """Create an Alpaca TradingClient."""
-    return TradingClient(
-        api_key=os.environ["ALPACA_API_KEY"],
-        secret_key=os.environ["ALPACA_SECRET_KEY"],
-        paper=os.environ.get("ALPACA_PAPER_TRADE", "true").lower() == "true",
-    )
-
-
-def _data_client():
-    """Create an Alpaca StockHistoricalDataClient."""
-    return StockHistoricalDataClient(
-        api_key=os.environ["ALPACA_API_KEY"],
-        secret_key=os.environ["ALPACA_SECRET_KEY"],
-    )
 
 
 async def get_account_equity() -> float:
@@ -118,22 +111,14 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
     return await asyncio.to_thread(_sync)
 
 
-def _safe_qty(raw) -> int:
-    """Convert Alpaca's qty field (may be str, float, or Decimal) to int."""
-    return int(float(str(raw)))
-
 
 def _check_group_constraints(
     ticker: str, size: float, sig: dict,
 ) -> OrderResult | None:
     """Check group position count and exposure limits. Returns skip result or None."""
-    from db.positions import log_skipped_signal
-
     group = config.TICKER_TO_GROUP.get(ticker)
     if not group:
         return None
-
-    from trading.positions import get_group_exposure
 
     g_count, g_exp = get_group_exposure(group)
     if g_count >= config.PARAMS.max_group_positions:
@@ -175,8 +160,6 @@ async def _attempt_rotation(
 
     Returns (size, current_exposure, open_positions, open_tickers, rotated).
     """
-    from trading.positions import async_close_position
-
     ticker = sig["ticker"]
     size = sig["size"]
     sig_p = sig.get("p_rally", 0)
@@ -220,16 +203,6 @@ async def _attempt_rotation(
 
 
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
-    from db.positions import (
-        enqueue_signal,
-        load_all_position_meta,
-        load_positions,
-        log_skipped_signal,
-        remove_from_queue,
-    )
-    from trading.positions import get_total_exposure
-    from trading.risk_manager import is_circuit_breaker_active
-
     results: list[OrderResult] = []
 
     # Circuit breaker check
@@ -363,12 +336,10 @@ async def cancel_order(order_id: str) -> bool:
 
 
 def _execute_exit_sync(
-    client, ticker: str, trail_order_id: str | None = None,
+    client: "TradingClient", ticker: str, trail_order_id: str | None = None,
     target_order_id: str | None = None,
 ) -> OrderResult:
     """Execute a single exit using an existing client (synchronous)."""
-    import time
-
     # Cancel OCO exit orders before closing. OCO orders hold shares until cancelled —
     # skipping this causes close_position() to fail with error 40310000 (shares held).
     # Cancelling one OCO leg auto-cancels the other on Alpaca, but we cancel both
@@ -460,25 +431,6 @@ async def execute_exits(closed: list[dict]) -> list[OrderResult]:
                 error=str(e),
             ))
     return results
-
-
-async def get_all_positions() -> list[dict]:
-    """Fetch all open positions from the broker."""
-    def _sync():
-        client = _trading_client()
-        positions = client.get_all_positions()
-        return [
-            {
-                "ticker": str(p.symbol),
-                "qty": _safe_qty(p.qty),
-                "avg_entry_price": float(str(p.avg_entry_price)),
-                "market_value": float(str(p.market_value)),
-                "unrealized_pl": float(str(p.unrealized_pl)),
-            }
-            for p in positions
-        ]
-
-    return await asyncio.to_thread(_sync)
 
 
 async def place_trailing_stop(

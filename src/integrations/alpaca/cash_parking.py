@@ -3,8 +3,18 @@ import asyncio
 import logging
 import os
 
+# third-party
+try:
+    from alpaca.data.requests import StockSnapshotRequest
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import MarketOrderRequest
+except ImportError:
+    pass
+
 # local
 from config import PARAMS
+from integrations.alpaca.broker import _data_client, _trading_client
+from integrations.alpaca.executor import OrderResult
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +27,7 @@ def is_enabled() -> bool:
 
 async def get_sgov_price() -> float:
     """Fetch current SGOV price via Alpaca snapshot. Returns 0.0 on failure."""
-    from integrations.alpaca.executor import _data_client
-
     try:
-        from alpaca.data.requests import StockSnapshotRequest
-
         def _sync() -> float:
             client = _data_client()
             req = StockSnapshotRequest(symbol_or_symbols=[_TICKER])
@@ -40,8 +46,6 @@ async def get_sgov_price() -> float:
 
 async def get_sgov_qty() -> int:
     """Return current SGOV share count from Alpaca. Returns 0 if no position."""
-    from integrations.alpaca.executor import _trading_client
-
     def _sync() -> int:
         client = _trading_client()
         try:
@@ -56,14 +60,12 @@ async def get_sgov_qty() -> int:
     return await asyncio.to_thread(_sync)
 
 
-async def buy_sgov(equity: float, idle_fraction: float) -> "OrderResult | None":
+async def buy_sgov(equity: float, idle_fraction: float) -> OrderResult | None:
     """Buy SGOV shares to park idle capital.
 
     Returns None if the idle fraction is below the minimum threshold or the
     computed qty rounds to zero.
     """
-    from integrations.alpaca.executor import OrderResult, _trading_client
-
     if idle_fraction < PARAMS.sgov_min_idle_fraction:
         return None
 
@@ -74,9 +76,6 @@ async def buy_sgov(equity: float, idle_fraction: float) -> "OrderResult | None":
     qty = int(equity * idle_fraction / price)
     if qty < 1:
         return None
-
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
 
     def _sync() -> OrderResult:
         client = _trading_client()
@@ -104,14 +103,12 @@ async def buy_sgov(equity: float, idle_fraction: float) -> "OrderResult | None":
         return OrderResult(ticker=_TICKER, side="buy", qty=qty, success=False, error=str(exc))
 
 
-async def sell_sgov(equity: float, gap_fraction: float) -> "OrderResult | None":
+async def sell_sgov(equity: float, gap_fraction: float) -> OrderResult | None:
     """Sell enough SGOV shares to cover gap_fraction of equity.
 
     Only sells the minimum needed — capped at the actual qty held.
     Returns None if no SGOV is held or gap is zero.
     """
-    from integrations.alpaca.executor import OrderResult, _trading_client
-
     if gap_fraction <= 0:
         return None
 
@@ -125,9 +122,6 @@ async def sell_sgov(equity: float, gap_fraction: float) -> "OrderResult | None":
 
     # Add 1 share as rounding buffer so we don't come up fractionally short
     qty_to_sell = min(int(gap_fraction * equity / price) + 1, qty_held)
-
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
 
     def _sync() -> OrderResult:
         client = _trading_client()

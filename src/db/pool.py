@@ -38,7 +38,7 @@ def close_pool() -> None:
         _pool.closeall()
 
 
-def row_to_dict(row) -> dict:
+def row_to_dict(row: psycopg2.extras.RealDictRow) -> dict:
     """Convert a psycopg2 RealDictRow to a plain dict with dates as ISO strings."""
     d = dict(row)
     for k, v in d.items():

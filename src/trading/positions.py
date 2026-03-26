@@ -6,11 +6,14 @@ Broker source of truth is Alpaca API.
 """
 
 import asyncio
+import json
 import logging
 import os
+import urllib.request
 from datetime import datetime
 
 from config import PARAMS, TICKER_TO_GROUP
+from integrations.alpaca.broker import get_all_positions
 from db.positions import (
     clear_expired_queue,
     delete_position_meta,
@@ -64,8 +67,6 @@ async def get_merged_positions() -> dict:
     DB provides stop/target/trailing/bars_held metadata.
     Returns same shape as load_positions().
     """
-    from integrations.alpaca.executor import get_all_positions
-
     broker = await get_all_positions()
     meta_map = {p["ticker"]: p for p in load_all_position_meta()}
 
@@ -131,9 +132,6 @@ def get_merged_positions_sync() -> dict:
 
 def _fetch_remote_positions(api_url: str) -> dict:
     """Fetch positions from the Railway API endpoint."""
-    import json
-    import urllib.request
-
     url = f"{api_url.rstrip('/')}/api/positions"
     req = urllib.request.Request(url)
     api_key = os.environ.get("RALLY_API_KEY")

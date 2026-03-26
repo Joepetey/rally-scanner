@@ -8,14 +8,16 @@ Users can interact conversationally instead of using slash commands.
 import json
 import logging
 import os
+from datetime import date, datetime
+
 # Third-party
 import anthropic
 
+# Local
+from core.data import fetch_quotes
 from core.persistence import load_manifest
 from db.portfolio import load_equity_history, load_trade_journal
-from trading.positions import get_merged_positions_sync
-
-# Local
+from db.positions import load_watchlist, save_watchlist
 from db.trades import (
     close_trade,
     get_open_trades,
@@ -24,6 +26,8 @@ from db.trades import (
     open_trade,
 )
 from db.users import ensure_user, get_capital, set_capital
+from pipeline.scanner import scan_all
+from trading.positions import get_merged_positions_sync
 
 logger = logging.getLogger(__name__)
 
@@ -548,8 +552,6 @@ def _get_portfolio(days: int = 30) -> dict:
 
 def _get_health() -> dict:
     """Get model health status."""
-    from datetime import datetime
-
     manifest = load_manifest()
     now = datetime.now()
 
@@ -587,11 +589,6 @@ def _get_health() -> dict:
 
 def _run_scan(config: str = "conservative") -> dict:
     """Run the market scanner and return results."""
-    from datetime import datetime
-
-    from pipeline.scanner import scan_all
-    from trading.positions import get_merged_positions_sync
-
     try:
         # Run the scan
         logger.info("Running market scan with config: %s", config)
@@ -604,8 +601,6 @@ def _run_scan(config: str = "conservative") -> dict:
             }
 
         # Persist all scan results for later queries
-        from datetime import date
-        from db.positions import save_watchlist
         state = get_merged_positions_sync()
         positions = state.get("positions", [])
         open_tickers = {p["ticker"] for p in positions}
@@ -674,15 +669,11 @@ def _run_scan(config: str = "conservative") -> dict:
 
 def _get_watchlist() -> dict:
     """Return tickers near signal threshold from the last scan."""
-    from db.positions import load_watchlist
-
     return load_watchlist()
 
 
 def _get_price(tickers: list[str]) -> dict:
     """Fetch current quotes for one or more tickers."""
-    from core.data import fetch_quotes
-
     if not tickers:
         return {"error": "No tickers provided"}
     if len(tickers) > 10:

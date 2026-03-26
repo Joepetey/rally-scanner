@@ -8,6 +8,10 @@ import logging
 from datetime import datetime, timedelta
 
 from config import PARAMS
+from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
+from core.features import build_features
+from core.hmm import predict_hmm_probs
+from core.persistence import load_manifest, load_model
 from db.models import load_regime_states as _db_load_regime_states
 from db.models import save_regime_states as _db_save_regime_states
 
@@ -39,11 +43,6 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
     Returns list of transition events:
         {ticker, prev_regime, new_regime, p_compressed, p_normal, p_expanding}
     """
-    from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
-    from core.features import build_features
-    from core.hmm import predict_hmm_probs
-    from core.persistence import load_manifest, load_model
-
     manifest = load_manifest()
     if not manifest:
         return []
