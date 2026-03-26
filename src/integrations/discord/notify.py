@@ -216,6 +216,30 @@ def _order_embed(results: list, equity: float) -> dict:
     }
 
 
+def _fill_confirmation_embed(fills: list[dict]) -> dict:
+    """Build a Discord embed for confirmed entry fill prices.
+
+    Each dict: {ticker, fill_price, qty, stop_price, target_price}
+    """
+    fields = []
+    for f in fills:
+        fields.append({
+            "name": f["ticker"],
+            "value": (
+                f"Fill confirmed: **${f['fill_price']:.2f}**\n"
+                f"Qty: {f.get('qty', '?')}\n"
+                f"Stop: ${f.get('stop_price', 0):.2f}  Target: ${f.get('target_price', 0):.2f}"
+            ),
+            "inline": True,
+        })
+    return {
+        "title": f"Entry Fills Confirmed ({len(fills)})",
+        "color": 0x87CEEB,
+        "fields": fields[:25],
+        "footer": {"text": "Intraday fill confirmation"},
+    }
+
+
 def _order_failure_embed(results: list) -> dict:
     """Build a Discord embed for failed Alpaca order executions."""
     fields = []

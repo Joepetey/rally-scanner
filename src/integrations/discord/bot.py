@@ -710,11 +710,26 @@ def make_bot(token: str) -> RallyBot:
                     fills = await check_pending_fills(pending_ids)
                     if fills:
                         from db.events import update_order_fill
+                        from .notify import _fill_confirmation_embed
                         for oid, fp in fills.items():
                             update_order_fill(oid, fp)
                         n_filled = await update_fill_prices(fills)
                         if n_filled:
                             logger.info("Updated %d fill prices from Alpaca", n_filled)
+                            fill_notify = [
+                                {
+                                    "ticker": p["ticker"],
+                                    "fill_price": fills[p["order_id"]],
+                                    "qty": p.get("qty"),
+                                    "stop_price": p.get("stop_price", 0),
+                                    "target_price": p.get("target_price", 0),
+                                }
+                                for p in positions
+                                if p.get("order_id") in fills
+                            ]
+                            await _send_alert(
+                                discord.Embed.from_dict(_fill_confirmation_embed(fill_notify)), "order"
+                            )
 
                 # Place exit orders for newly-filled entries that don't have them yet
                 fresh_state = reload_positions()
@@ -873,6 +888,8 @@ def make_bot(token: str) -> RallyBot:
 
             from integrations.alpaca.executor import check_exit_fills
             from integrations.alpaca.executor import is_enabled as alpaca_enabled
+            from .notify import _exit_embed
+            from db.portfolio import record_closed_trades
 
             if not alpaca_enabled() or not _is_market_open():
                 return
@@ -880,6 +897,7 @@ def make_bot(token: str) -> RallyBot:
             state = await get_merged_positions()
             positions = state.get("positions", [])
             filled = await check_exit_fills(positions)
+            closed = []
             for fill in filled:
                 ticker = fill["ticker"]
                 fill_price = fill["fill_price"]
@@ -888,7 +906,12 @@ def make_bot(token: str) -> RallyBot:
                     "Broker exit filled for %s at %.2f (%s) — syncing DB",
                     ticker, fill_price, exit_reason,
                 )
-                await async_close_position(ticker, fill_price, exit_reason)
+                pos = await async_close_position(ticker, fill_price, exit_reason)
+                if pos:
+                    closed.append(pos)
+            if closed:
+                await _send_alert(discord.Embed.from_dict(_exit_embed(closed)), "exit")
+                record_closed_trades(closed)
 
         # -- Proactive state --
         _cached_regime_states: dict = {}
