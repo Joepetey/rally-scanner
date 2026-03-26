@@ -1185,7 +1185,7 @@ def make_bot(token: str) -> RallyBot:
                 logger.info("Scheduler: daily scan armed (4:30 PM ET)")
             if not scheduled_retrain.is_running():
                 scheduled_retrain.start()
-                logger.info("Scheduler: weekly retrain armed (Sun 23:00 UTC)")
+                logger.info("Scheduler: weekly retrain armed (Sun 6:00 PM ET)")
             if not scheduled_price_alerts.is_running():
                 scheduled_price_alerts.start()
                 logger.info(
