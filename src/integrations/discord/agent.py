@@ -57,7 +57,7 @@ def _get_client() -> anthropic.Anthropic | None:
 TOOLS = [
     {
         "name": "get_signals",
-        "description": "Show recent entry signals from the market scanner. These are positions the system recently opened or plans to enter.",
+        "description": "Show recent entry signals from the market scanner. These are BUY SIGNALS only — NOT confirmed open positions. Whether actual trades were placed depends on whether Alpaca auto-execution is enabled. Use get_system_positions to see what is actually open.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -167,7 +167,7 @@ TOOLS = [
     },
     {
         "name": "run_scan",
-        "description": "Run the market scanner to find new rally signals. This scans all trained tickers and updates positions. Returns scan results and timestamp.",
+        "description": "Run the market scanner to find new rally signals. Returns ticker signals — NOT confirmed trades. Actual positions are only opened if Alpaca auto-execution is configured; check get_system_positions to see what is actually open.",
         "input_schema": {
             "type": "object",
             "properties": {
