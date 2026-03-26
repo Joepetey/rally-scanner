@@ -97,6 +97,7 @@ async def get_merged_positions() -> dict:
             "entry_date": meta.get("entry_date") or datetime.now().strftime("%Y-%m-%d"),
             "order_id": meta.get("order_id"),
             "trail_order_id": meta.get("trail_order_id"),
+            "target_order_id": meta.get("target_order_id"),
             "status": "open",
         })
 
@@ -158,11 +159,21 @@ def _has_alpaca_keys() -> bool:
 # Position update logic
 # ---------------------------------------------------------------------------
 
-def update_existing_positions(state: dict, all_results: list[dict]) -> dict:
+def update_existing_positions(
+    state: dict, all_results: list[dict], commit_exits: bool = True,
+) -> dict:
     """Update open positions with current prices and check exit conditions.
 
     Only touches already-open positions — never adds new ones.
-    Persists to DB and returns updated state.
+
+    Args:
+        state: current position state dict.
+        all_results: scan results with latest prices.
+        commit_exits: if True (default), immediately write exits to DB
+            (delete from system_positions, insert into closed_positions).
+            Pass False when the caller needs to confirm broker execution
+            before committing — the caller is then responsible for calling
+            delete_position_meta() and record_closed_position() per exit.
     """
     p = PARAMS
 
@@ -212,8 +223,9 @@ def update_existing_positions(state: dict, all_results: list[dict]) -> dict:
             pos["realized_pnl_pct"] = pos["unrealized_pnl_pct"]
             pos["status"] = "closed"
             closed_today.append(pos)
-            delete_position_meta(ticker)
-            record_closed_position(pos)
+            if commit_exits:
+                delete_position_meta(ticker)
+                record_closed_position(pos)
         else:
             still_open.append(pos)
             save_position_meta(pos)

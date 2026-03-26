@@ -328,7 +328,7 @@ def scan_all(
             print(f"    {r['ticker']}: {r['status']}")
 
     # --- POSITIONS ---
-    if show_positions or signals:
+    if show_positions:
         positions = get_merged_positions_sync()
         positions = update_existing_positions(positions, results)
         print_positions(positions)

@@ -355,6 +355,7 @@ def make_bot(token: str) -> RallyBot:
             from pipeline.scanner import scan_all
             from db.portfolio import record_closed_trades, update_daily_snapshot
             from core.persistence import load_manifest
+            from trading.positions import update_existing_positions
 
             from .notify import _exit_embed, _positions_embed, _signal_embed
 
@@ -379,7 +380,7 @@ def make_bot(token: str) -> RallyBot:
                 return
 
             results = await asyncio.to_thread(
-                scan_all, None, True, "conservative"
+                scan_all, None, False, "conservative"
             )
             if not results:
                 finish_scheduler_event(_scan_event_id, "success", n_signals=0, n_exits=0,
@@ -388,9 +389,23 @@ def make_bot(token: str) -> RallyBot:
 
             all_signals = [r for r in results if r.get("signal")]
 
+            # Get positions WITH full metadata (trail_order_id, target_order_id) before
+            # any exits are detected, so order IDs are available for OCO cancellation.
+            from integrations.alpaca.executor import is_enabled as alpaca_enabled
             positions = await get_merged_positions()
+
+            # Detect exits + update bars_held / trailing_stop for open positions.
+            # When Alpaca is enabled we defer DB commits (commit_exits=False) so we can
+            # confirm the broker order before removing the position from system_positions.
+            # Without Alpaca there is no broker to confirm, so we commit immediately.
+            positions = await asyncio.to_thread(
+                update_existing_positions, positions, results,
+                not alpaca_enabled(),  # commit_exits
+            )
             closed = positions.get("closed_today", [])
-            if closed:
+
+            if closed and not alpaca_enabled():
+                # Non-Alpaca path: exits already committed to DB, notify now.
                 await _send_alert(discord.Embed.from_dict(_exit_embed(closed)), "exit")
                 record_closed_trades(closed)
 
@@ -420,7 +435,6 @@ def make_bot(token: str) -> RallyBot:
             await _send_alert(discord.Embed.from_dict(_positions_embed(open_pos)), "positions")
 
             # Auto-execute on Alpaca if enabled — only add positions after fill
-            from integrations.alpaca.executor import is_enabled as alpaca_enabled
             if alpaca_enabled():
                 from db.events import log_order
                 from trading.positions import add_signal_positions, process_signal_queue
@@ -464,9 +478,11 @@ def make_bot(token: str) -> RallyBot:
 
                         # Add only filled signals to DB
                         if ok:
+                            size_map = {r.ticker: r.actual_size for r in ok if r.actual_size is not None}
                             filled_tickers = {r.ticker for r in ok}
                             filled_signals = [
-                                s for s in signals if s["ticker"] in filled_tickers
+                                {**s, "size": size_map.get(s["ticker"], s["size"])}
+                                for s in signals if s["ticker"] in filled_tickers
                             ]
                             fresh_positions = load_positions()
                             add_signal_positions(fresh_positions, filled_signals)
@@ -488,7 +504,25 @@ def make_bot(token: str) -> RallyBot:
                                       r.order_id, "filled" if r.success else "failed",
                                       r.fill_price, r.error)
 
+                        # Commit exits to DB only after the broker confirms the close.
+                        # Positions that failed stay in system_positions so they remain
+                        # managed (stops, targets, time stop) on subsequent scans.
                         if ok:
+                            from db.positions import (
+                                delete_position_meta as _del_meta,
+                                record_closed_position as _rec_closed,
+                            )
+                            ok_tickers = {r.ticker for r in ok}
+                            confirmed_closed = [
+                                p for p in closed if p["ticker"] in ok_tickers
+                            ]
+                            for pos in confirmed_closed:
+                                _del_meta(pos["ticker"])
+                                _rec_closed(pos)
+                            await _send_alert(
+                                discord.Embed.from_dict(_exit_embed(confirmed_closed)), "exit"
+                            )
+                            record_closed_trades(confirmed_closed)
                             await _send_alert(
                                 discord.Embed.from_dict(_order_embed(ok, equity)), "order"
                             )
@@ -504,8 +538,12 @@ def make_bot(token: str) -> RallyBot:
                         q_results = await execute_entries(queued, equity=equity)
                         q_ok = [r for r in q_results if r.success]
                         if q_ok:
+                            q_size_map = {r.ticker: r.actual_size for r in q_ok if r.actual_size is not None}
                             filled_tickers = {r.ticker for r in q_ok}
-                            filled_queued = [s for s in queued if s["ticker"] in filled_tickers]
+                            filled_queued = [
+                                {**s, "size": q_size_map.get(s["ticker"], s["size"])}
+                                for s in queued if s["ticker"] in filled_tickers
+                            ]
                             add_signal_positions(load_positions(), filled_queued)
                             await _store_order_ids(q_results)
                             await _send_alert(

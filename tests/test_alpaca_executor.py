@@ -355,6 +355,8 @@ async def test_execute_entries_partial_sizing():
     assert results[0].success is True
     # qty = 100000 * 0.05 / 150 = 33 (scaled to 5% available)
     assert results[0].qty == 33
+    # actual_size must reflect the reduced allocation, not the original 10%
+    assert results[0].actual_size == pytest.approx(0.05)
 
 
 @pytest.mark.asyncio

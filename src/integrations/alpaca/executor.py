@@ -47,6 +47,7 @@ class OrderResult(BaseModel):
     error: str | None = None
     already_closed: bool = False
     skipped: bool = False  # intentional non-execution (risk cap, non-tradable, etc.)
+    actual_size: float | None = None  # actual allocated fraction (may differ from signal size after partial sizing)
 
 
 def is_enabled() -> bool:
@@ -328,6 +329,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                 ticker=ticker, side="buy", qty=qty, success=True,
                 order_id=str(order.id),
                 fill_price=fill_price,
+                actual_size=size,
             ))
             current_exposure += size
         except Exception as e:
@@ -362,22 +364,28 @@ async def cancel_order(order_id: str) -> bool:
 
 def _execute_exit_sync(
     client, ticker: str, trail_order_id: str | None = None,
+    target_order_id: str | None = None,
 ) -> OrderResult:
     """Execute a single exit using an existing client (synchronous)."""
     import time
 
-    # Cancel the associated trailing stop before closing
-    if trail_order_id:
-        try:
-            client.cancel_order_by_id(trail_order_id)
-            logger.info("Cancelled trailing stop %s for %s", trail_order_id, ticker)
-            # Wait for Alpaca to release the held shares
-            time.sleep(0.5)
-        except Exception as e:
-            logger.warning(
-                "Could not cancel trailing stop %s for %s: %s",
-                trail_order_id, ticker, e,
-            )
+    # Cancel OCO exit orders before closing. OCO orders hold shares until cancelled —
+    # skipping this causes close_position() to fail with error 40310000 (shares held).
+    # Cancelling one OCO leg auto-cancels the other on Alpaca, but we cancel both
+    # explicitly for robustness. target_order_id is the limit-sell (parent); cancelling
+    # it also releases the stop leg even if trail_order_id is stale or missing.
+    order_ids_to_cancel = {
+        oid for oid in (trail_order_id, target_order_id) if oid
+    }
+    if order_ids_to_cancel:
+        for oid in order_ids_to_cancel:
+            try:
+                client.cancel_order_by_id(oid)
+                logger.info("Cancelled OCO order %s for %s", oid, ticker)
+            except Exception as e:
+                logger.warning("Could not cancel order %s for %s: %s", oid, ticker, e)
+        # Wait for Alpaca to release the held shares after cancellation
+        time.sleep(0.5)
 
     # Retry close in case cancel hasn't fully released held shares
     last_err = None
@@ -439,9 +447,11 @@ async def execute_exits(closed: list[dict]) -> list[OrderResult]:
     for pos in equity_closed:
         ticker = pos["ticker"]
         trail_oid = pos.get("trail_order_id")
+        target_oid = pos.get("target_order_id")
         try:
             result = await asyncio.to_thread(
-                _execute_exit_sync, client, ticker, trail_order_id=trail_oid,
+                _execute_exit_sync, client, ticker,
+                trail_order_id=trail_oid, target_order_id=target_oid,
             )
             results.append(result)
         except Exception as e:
