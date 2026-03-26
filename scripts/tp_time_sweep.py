@@ -61,6 +61,7 @@ def _run_grid(
     profit_atrs: list[float],
     time_stops: list[int],
     close_only: bool,
+    limit_sell: bool = False,
 ) -> list[dict]:
     total = len(profit_atrs) * len(time_stops)
     done = 0
@@ -83,7 +84,11 @@ def _run_grid(
             all_trades = []
             for preds in cached.values():
                 signal = generate_signals_fast(preds, cfg, require_trend=True)
-                trades = simulate_trades_fast(preds, signal, cfg, close_only_tp=close_only)
+                trades = simulate_trades_fast(
+                    preds, signal, cfg,
+                    close_only_tp=close_only,
+                    limit_sell_on_tp=limit_sell,
+                )
                 if not trades.empty:
                     all_trades.append(trades)
 
@@ -175,12 +180,19 @@ def _print_ranked(results: list[dict]) -> None:
         )
 
 
-def _section(title: str, close_only: bool, cached, base_cfg, profit_atrs, time_stops) -> None:
-    mode = "CLOSE-only TP (production)" if close_only else "Intraday-HIGH TP (backtest)"
+def _section(title: str, close_only: bool, cached, base_cfg, profit_atrs, time_stops,
+             limit_sell: bool = False) -> None:
+    if limit_sell:
+        mode = "Limit sell on TP touch (deferred exit)"
+    elif close_only:
+        mode = "CLOSE-only TP (production)"
+    else:
+        mode = "Intraday-HIGH TP (backtest)"
     print(f"\n{'='*110}")
     print(f"  {title} — {mode}")
     print(f"{'='*110}")
-    results = _run_grid(cached, base_cfg, profit_atrs, time_stops, close_only)
+    results = _run_grid(cached, base_cfg, profit_atrs, time_stops, close_only,
+                        limit_sell=limit_sell)
     _print_grid(results, "sharpe", "SHARPE", profit_atrs, time_stops)
     _print_grid(results, "cagr",   "CAGR",   profit_atrs, time_stops)
     print("\n  ALL COMBOS RANKED BY SHARPE:")
@@ -199,6 +211,8 @@ def main() -> None:
                         help="Only run close-only TP mode (skip intraday-high)")
     parser.add_argument("--high-only", action="store_true",
                         help="Only run intraday-high TP mode (skip close-only)")
+    parser.add_argument("--limit-sell", action="store_true",
+                        help="Also run limit-sell-on-TP mode (place limit order once TP touched)")
     args = parser.parse_args()
 
     base_cfg = CONFIGS_BY_NAME.get(args.config.lower().replace(" ", "_"))
@@ -212,7 +226,8 @@ def main() -> None:
     print(f"  Base config : {base_cfg.name}")
     print(f"  Profit ATRs : {args.profit_atrs}")
     print(f"  Time stops  : {args.time_stops}")
-    print(f"  Combos      : {n_combos} × 2 modes = {n_combos * 2} runs")
+    n_modes = 2 + (1 if args.limit_sell else 0)
+    print(f"  Combos      : {n_combos} × {n_modes} modes = {n_combos * n_modes} runs")
     print("=" * 110)
 
     cached = _load_cache()
@@ -222,6 +237,10 @@ def main() -> None:
 
     if not args.high_only:
         _section("PRODUCTION", True, cached, base_cfg, args.profit_atrs, args.time_stops)
+
+    if args.limit_sell:
+        _section("LIMIT SELL ON TP", False, cached, base_cfg, args.profit_atrs, args.time_stops,
+                 limit_sell=True)
 
     print()
 

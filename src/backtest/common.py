@@ -33,6 +33,7 @@ def simulate_trades_fast(
     gap_filter: bool = False,
     require_volume: bool = False,
     spy_trend: pd.Series | None = None,
+    limit_sell_on_tp: bool = False,
 ) -> pd.DataFrame:
     """Simulate trades with config-specific parameters.
 
@@ -50,6 +51,11 @@ def simulate_trades_fast(
         require_volume: Only enter if p_VOL > 0.5 (above-median volume) on signal bar.
         spy_trend: Date-indexed boolean Series; if provided, skip signals where
             SPY is below its 200-day MA on the signal date.
+        limit_sell_on_tp: If True, once the profit target level is first touched
+            (high >= tp_level), a limit sell order is placed at that price rather
+            than exiting on the same bar.  The order fills on subsequent bars at
+            open (if open >= limit price) or at the limit price (if high reaches
+            it).  Stops and other exits still fire normally while the limit is live.
     """
     p = PARAMS
     n = len(preds)
@@ -73,6 +79,9 @@ def simulate_trades_fast(
     size = 0.0
     bars_held = 0
     highest_close = 0.0
+    limit_sell_active = False  # TP level touched; limit order is live
+    limit_sell_price = 0.0
+    profit_lock_triggered = False
 
     for i in range(n):
         # Enter at this bar's open if a signal fired on the previous bar
@@ -95,6 +104,8 @@ def simulate_trades_fast(
                     bars_held = 0
                     highest_close = entry_price
                     trailing_stop = entry_price - p.trailing_stop_atr_mult * atr[signal_idx]
+                    limit_sell_active = False
+                    profit_lock_triggered = False
                 pending_entry = False
 
         if in_trade:
@@ -104,24 +115,51 @@ def simulate_trades_fast(
                 new_trail = highest_close - p.trailing_stop_atr_mult * atr[signal_idx]
                 trailing_stop = max(trailing_stop, new_trail)
 
+            # Profit lock: raise hard stop floor once intraday high reaches lock level
+            if p.profit_lock_pct > 0 and not profit_lock_triggered:
+                lock_price = entry_price * (1 + p.profit_lock_pct)
+                if high[i] >= lock_price:
+                    stop_price = max(stop_price, lock_price)
+                    profit_lock_triggered = True
+
             exit_reason = None
             exit_price = close[i]
 
             tp_level = entry_price + cfg.profit_atr * atr[signal_idx]
-            tp_check = close[i] >= tp_level if close_only_tp else high[i] >= tp_level
 
-            if low[i] <= stop_price:
-                exit_price = stop_price
-                exit_reason = "stop"
-            elif tp_check:
-                exit_price = tp_level if not close_only_tp else close[i]
-                exit_reason = "profit_target"
-            elif bars_held >= 2 and close[i] < trailing_stop:
-                exit_reason = "trail_stop"
-            elif bars_held >= cfg.time_stop:
-                exit_reason = "time_stop"
-            elif rv_pct[i] > 0.80 and close[i] < close[i - 1]:
-                exit_reason = "vol_exhaustion"
+            # Fill a pending limit sell order before checking new TP touches
+            if limit_sell_active:
+                if open_[i] >= limit_sell_price:
+                    # Gapped up above limit — fill at open (better than limit)
+                    exit_price = open_[i]
+                    exit_reason = "limit_sell"
+                elif high[i] >= limit_sell_price:
+                    exit_price = limit_sell_price
+                    exit_reason = "limit_sell"
+
+            if exit_reason is None:
+                tp_check = close[i] >= tp_level if close_only_tp else high[i] >= tp_level
+
+                if low[i] <= stop_price:
+                    exit_price = stop_price
+                    exit_reason = "stop"
+                    limit_sell_active = False
+                elif limit_sell_on_tp and not limit_sell_active and high[i] >= tp_level:
+                    # TP level first touched — place limit order, don't exit yet
+                    limit_sell_active = True
+                    limit_sell_price = tp_level
+                elif tp_check and not limit_sell_on_tp:
+                    exit_price = tp_level if not close_only_tp else close[i]
+                    exit_reason = "profit_target"
+                elif bars_held >= 2 and close[i] < trailing_stop:
+                    exit_reason = "trail_stop"
+                    limit_sell_active = False
+                elif bars_held >= cfg.time_stop:
+                    exit_reason = "time_stop"
+                    limit_sell_active = False
+                elif rv_pct[i] > 0.80 and close[i] < close[i - 1]:
+                    exit_reason = "vol_exhaustion"
+                    limit_sell_active = False
 
             if exit_reason:
                 pnl_pct = exit_price / entry_price - 1
@@ -135,6 +173,8 @@ def simulate_trades_fast(
                     "exit_reason": exit_reason,
                 })
                 in_trade = False
+                limit_sell_active = False
+                profit_lock_triggered = False
 
         if not in_trade and not pending_entry and signal.iloc[i]:
             # Optional gates at signal bar

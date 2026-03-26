@@ -203,6 +203,14 @@ def update_existing_positions(
             new_trail = current["close"] - p.trailing_stop_atr_mult * atr_val
             pos["trailing_stop"] = max(pos.get("trailing_stop", 0), new_trail)
 
+        # Profit lock: raise hard stop floor once close reaches lock level (idempotent)
+        if p.profit_lock_pct > 0:
+            lock_price = pos["entry_price"] * (1 + p.profit_lock_pct)
+            if current["close"] >= lock_price:
+                new_stop = max(pos.get("stop_price", 0), lock_price)
+                if new_stop > pos.get("stop_price", 0):
+                    pos["stop_price"] = round(new_stop, 4)
+
         # Check exit conditions
         exit_reason = None
         if current["close"] <= pos["stop_price"]:

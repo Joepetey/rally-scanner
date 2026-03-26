@@ -23,7 +23,7 @@ from discord.ext import commands, tasks
 
 from config import PARAMS
 from core.persistence import load_manifest
-from db.positions import load_positions
+from db.positions import load_positions, save_position_meta
 from trading.positions import get_merged_positions
 
 from db.conversations import get_conversation_history, save_conversation_history
@@ -768,8 +768,17 @@ def make_bot(token: str) -> RallyBot:
                 stop = pos.get("stop_price", 0)
                 target = pos.get("target_price", 0)
                 trailing = pos.get("trailing_stop", 0)
-                effective_stop = max(stop, trailing)
                 pnl_pct = round((price / entry - 1) * 100, 2) if entry else 0
+
+                # Profit lock: raise hard stop floor intraday once lock level is touched
+                if PARAMS.profit_lock_pct > 0 and entry:
+                    lock_price = round(entry * (1 + PARAMS.profit_lock_pct), 4)
+                    if price >= lock_price and stop < lock_price:
+                        pos["stop_price"] = lock_price
+                        stop = lock_price
+                        await asyncio.to_thread(save_position_meta, pos)
+
+                effective_stop = max(stop, trailing)
 
                 # Check stop breach
                 if effective_stop > 0 and price <= effective_stop:

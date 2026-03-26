@@ -43,6 +43,7 @@ class Params(BaseModel):
     rv_exit_pct: float = 0.80          # RV percentile for exhaustion exit
     trailing_stop_atr_mult: float = 1.5  # trailing stop distance in ATR multiples
     fallback_stop_pct: float = 0.03      # fallback hard stop (3% below entry)
+    profit_lock_pct: float = 0.02        # raise hard stop to +2% once that profit level is touched
     default_atr_pct: float = 0.02        # fallback ATR % when real ATR unavailable
 
     # --- Portfolio-level risk ---
