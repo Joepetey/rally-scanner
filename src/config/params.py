@@ -73,6 +73,7 @@ class Params(BaseModel):
     sgov_min_idle_fraction: float = 0.02  # don't park if idle < 2% of equity
 
     # --- Adaptive scan frequency (Phase 3) ---
+    morning_scan_enabled: bool = True
     midday_scans_enabled: bool = True
     adaptive_alerts_enabled: bool = True
     fast_alert_interval: int = 5         # minutes between alerts in fast mode

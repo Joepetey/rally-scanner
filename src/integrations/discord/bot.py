@@ -1081,8 +1081,29 @@ def make_bot(token: str) -> RallyBot:
                 logger.exception("Price alert check failed")
                 await _send_error_alert("Price Alerts", e)
 
-        # Daily scan: 4:30 PM ET (21:30 UTC)
-        @tasks.loop(time=time(hour=21, minute=30))
+        # Morning scan: 9:00 AM ET — signals ready before market open
+        # Alpaca DAY orders submitted pre-market queue and fill at 9:30 AM open.
+        @tasks.loop(time=time(hour=9, minute=0, tzinfo=_ET))
+        async def scheduled_morning_scan() -> None:
+            nonlocal _watchlist_tickers
+            weekday = datetime.utcnow().weekday()
+            if weekday >= 5:  # skip weekends
+                return
+            if not PARAMS.morning_scan_enabled:
+                return
+            try:
+                await _run_scan()
+
+                from core.persistence import load_manifest
+                manifest = load_manifest()
+                if manifest:
+                    _watchlist_tickers = sorted(manifest.keys())
+            except Exception as e:
+                logger.exception("Morning scan failed")
+                await _send_error_alert("Morning Scan", e)
+
+        # Daily scan: 4:30 PM ET
+        @tasks.loop(time=time(hour=16, minute=30, tzinfo=_ET))
         async def scheduled_scan() -> None:
             nonlocal _watchlist_tickers
             weekday = datetime.utcnow().weekday()
@@ -1112,8 +1133,8 @@ def make_bot(token: str) -> RallyBot:
                 logger.exception("Regime check failed")
                 await _send_error_alert("Regime Check", e)
 
-        # Mid-day scans: 11 AM and 1 PM ET (16:00, 18:00 UTC)
-        @tasks.loop(time=[time(hour=16, minute=0), time(hour=18, minute=0)])
+        # Mid-day scans: 11 AM and 1 PM ET
+        @tasks.loop(time=[time(hour=11, minute=0, tzinfo=_ET), time(hour=13, minute=0, tzinfo=_ET)])
         async def scheduled_midday_scan() -> None:
             weekday = datetime.utcnow().weekday()
             if weekday >= 5:
@@ -1134,9 +1155,9 @@ def make_bot(token: str) -> RallyBot:
                 logger.exception("Reconciliation failed")
                 await _send_error_alert("Reconciliation", e)
 
-        # Weekly retrain: Sunday 6 PM ET (23:00 UTC), followed by a scan so
+        # Weekly retrain: Sunday 6 PM ET, followed by a scan so
         # Monday signals are ready before market open.
-        @tasks.loop(time=time(hour=23, minute=0))
+        @tasks.loop(time=time(hour=18, minute=0, tzinfo=_ET))
         async def scheduled_retrain() -> None:
             if datetime.utcnow().weekday() != 6:  # Sunday only
                 return
@@ -1156,9 +1177,12 @@ def make_bot(token: str) -> RallyBot:
                     name="rally signals",
                 )
             )
+            if not scheduled_morning_scan.is_running():
+                scheduled_morning_scan.start()
+                logger.info("Scheduler: morning scan armed (9:00 AM ET)")
             if not scheduled_scan.is_running():
                 scheduled_scan.start()
-                logger.info("Scheduler: daily scan armed (21:30 UTC / 4:30 PM ET)")
+                logger.info("Scheduler: daily scan armed (4:30 PM ET)")
             if not scheduled_retrain.is_running():
                 scheduled_retrain.start()
                 logger.info("Scheduler: weekly retrain armed (Sun 23:00 UTC)")
@@ -1197,7 +1221,7 @@ def make_bot(token: str) -> RallyBot:
             if _is_market_open():
                 logger.info(
                     "Market is open — skipping startup scan "
-                    "(next scheduled scan at 4:30 PM ET)"
+                    "(next scheduled scan at 4:30 PM ET; morning scan runs at 9:00 AM ET)"
                 )
 
     return bot
