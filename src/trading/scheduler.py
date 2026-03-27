@@ -513,7 +513,7 @@ class TradingScheduler:
 
                 # Update adaptive interval
                 if PARAMS.adaptive_alerts_enabled:
-                    fast = await self._should_use_fast_alerts(positions)
+                    fast = await self._should_use_fast_alerts(positions, quotes)
                     self._current_alert_interval = (
                         PARAMS.fast_alert_interval if fast else PARAMS.base_alert_interval
                     )
@@ -671,10 +671,11 @@ class TradingScheduler:
             async with self._exit_lock:
                 self._exiting_tickers.discard(ticker)
 
-    async def _should_use_fast_alerts(self, positions: list[dict]) -> bool:
+    async def _should_use_fast_alerts(self, positions: list[dict], quotes: dict[str, dict]) -> bool:
         """True if any position is near its stop or portfolio is drawing down."""
         for pos in positions:
-            price = pos.get("current_price", 0)
+            ticker = pos["ticker"]
+            price = quotes.get(ticker, {}).get("price", 0)
             stop = max(pos.get("stop_price", 0), pos.get("trailing_stop", 0))
             if stop > 0 and price > 0:
                 distance_pct = (price / stop - 1) * 100
