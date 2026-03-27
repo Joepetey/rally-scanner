@@ -49,6 +49,8 @@ from trading.engine import (
     RetrainResult,
     RiskActionEvent,
     ScanResult,
+    StreamDegradedEvent,
+    StreamRecoveredEvent,
     WatchlistEvent,
 )
 from trading.positions import (
@@ -70,7 +72,8 @@ logger = logging.getLogger(__name__)
 # All event types the scheduler can emit
 TradingEvent = (
     AlertEvent | ExitResult | HousekeepingResult |
-    ScanResult | WatchlistEvent | RegimeEvent | RetrainResult | RiskActionEvent
+    ScanResult | WatchlistEvent | RegimeEvent | RetrainResult | RiskActionEvent |
+    StreamDegradedEvent | StreamRecoveredEvent
 )
 
 
@@ -113,6 +116,10 @@ class TradingScheduler:
 
         # Housekeeping cycle counter for IEX coverage fallback (every 2 cycles ≈ 2 min)
         self._housekeeping_cycles: int = 0
+
+        # Stream health monitoring: consecutive market-hours cycles where stream is disconnected
+        self._stream_degraded_cycles: int = 0
+        self._stream_alert_sent: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -472,6 +479,32 @@ class TradingScheduler:
                                         )
                         except Exception:
                             logger.exception("IEX fallback evaluation failed")
+
+                # Stream degradation monitoring: alert after 5 consecutive disconnected cycles (~5 min)
+                _DEGRADE_THRESHOLD = 5
+                if self._stream:
+                    if not self._stream.is_connected:
+                        self._stream_degraded_cycles += 1
+                        if self._stream_degraded_cycles >= _DEGRADE_THRESHOLD and not self._stream_alert_sent:
+                            self._stream_alert_sent = True
+                            logger.warning(
+                                "Stream has been disconnected for %d min — emitting degradation alert",
+                                self._stream_degraded_cycles,
+                            )
+                            await self._on_event(StreamDegradedEvent(
+                                disconnected_minutes=self._stream_degraded_cycles,
+                            ))
+                    else:
+                        if self._stream_alert_sent:
+                            logger.info(
+                                "Stream reconnected after %d min — emitting recovery alert",
+                                self._stream_degraded_cycles,
+                            )
+                            await self._on_event(StreamRecoveredEvent(
+                                downtime_minutes=self._stream_degraded_cycles,
+                            ))
+                            self._stream_alert_sent = False
+                        self._stream_degraded_cycles = 0
 
             except Exception:
                 logger.exception("Housekeeping loop error")

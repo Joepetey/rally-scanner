@@ -395,3 +395,28 @@ def _error_embed(title: str, details: str) -> dict:
         "description": details[:4096],  # Discord limit
     }
 
+
+def _stream_degraded_embed(disconnected_minutes: int) -> dict:
+    """Build a Discord embed for stream degradation (polling-only fallback)."""
+    return {
+        "title": "Stream Degraded — Polling-Only Mode",
+        "color": 0xFF8C00,
+        "description": (
+            f"The Alpaca WebSocket stream has been disconnected for **{disconnected_minutes} min**.\n"
+            "Price alert latency has degraded from seconds to ~15 minutes.\n"
+            "Reconnect attempts are ongoing — check Railway logs for details."
+        ),
+    }
+
+
+def _stream_recovered_embed(downtime_minutes: int) -> dict:
+    """Build a Discord embed for stream recovery after a degradation period."""
+    return {
+        "title": "Stream Recovered",
+        "color": 0x00FF00,
+        "description": (
+            f"The Alpaca WebSocket stream has reconnected after **{downtime_minutes} min** of downtime.\n"
+            "Real-time price alerts are active again."
+        ),
+    }
+

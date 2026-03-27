@@ -459,6 +459,134 @@ class TestTradingSchedulerIntegration:
 # ===========================================================================
 
 
+class TestStreamHealthMonitoring:
+    """Verify degradation + recovery alerts are emitted at the right thresholds."""
+
+    @pytest.mark.asyncio
+    async def test_degradation_alert_fires_after_threshold(self):
+        """StreamDegradedEvent is emitted once stream has been down >= 5 cycles."""
+        from trading.scheduler import TradingScheduler
+        from trading.engine import StreamDegradedEvent
+
+        received = []
+        scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
+
+        mock_stream = MagicMock()
+        mock_stream.is_connected = False
+        mock_stream.get_stale_tickers.return_value = []
+        scheduler._stream = mock_stream
+
+        with patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
+                          return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
+             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # Run 5 cycles (threshold), then cancel
+            mock_sleep.side_effect = [None] * 5 + [asyncio.CancelledError()]
+            try:
+                await scheduler._housekeeping_loop()
+            except asyncio.CancelledError:
+                pass
+
+        degraded = [e for e in received if isinstance(e, StreamDegradedEvent)]
+        assert len(degraded) == 1
+        assert degraded[0].disconnected_minutes == 5
+
+    @pytest.mark.asyncio
+    async def test_degradation_alert_fires_only_once(self):
+        """StreamDegradedEvent is not re-emitted on subsequent disconnected cycles."""
+        from trading.scheduler import TradingScheduler
+        from trading.engine import StreamDegradedEvent
+
+        received = []
+        scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
+
+        mock_stream = MagicMock()
+        mock_stream.is_connected = False
+        mock_stream.get_stale_tickers.return_value = []
+        scheduler._stream = mock_stream
+
+        with patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
+                          return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
+             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # Run 10 cycles (well past threshold)
+            mock_sleep.side_effect = [None] * 10 + [asyncio.CancelledError()]
+            try:
+                await scheduler._housekeeping_loop()
+            except asyncio.CancelledError:
+                pass
+
+        degraded = [e for e in received if isinstance(e, StreamDegradedEvent)]
+        assert len(degraded) == 1
+
+    @pytest.mark.asyncio
+    async def test_recovery_alert_fires_after_degradation(self):
+        """StreamRecoveredEvent is emitted when stream reconnects after degradation alert."""
+        from trading.scheduler import TradingScheduler
+        from trading.engine import StreamDegradedEvent, StreamRecoveredEvent
+
+        received = []
+        scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
+
+        mock_stream = MagicMock()
+        scheduler._stream = mock_stream
+
+        # Pre-condition: degradation alert was already sent
+        scheduler._stream_degraded_cycles = 7
+        scheduler._stream_alert_sent = True
+
+        # Stream is now connected (recovered)
+        mock_stream.is_connected = True
+        mock_stream.get_stale_tickers.return_value = []
+
+        with patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
+                          return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
+             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await scheduler._housekeeping_loop()
+            except asyncio.CancelledError:
+                pass
+
+        recovered = [e for e in received if isinstance(e, StreamRecoveredEvent)]
+        assert len(recovered) == 1
+        assert recovered[0].downtime_minutes == 7
+        assert scheduler._stream_degraded_cycles == 0
+        assert scheduler._stream_alert_sent is False
+
+    @pytest.mark.asyncio
+    async def test_no_alert_before_threshold(self):
+        """No StreamDegradedEvent before 5 disconnected cycles."""
+        from trading.scheduler import TradingScheduler
+        from trading.engine import StreamDegradedEvent
+
+        received = []
+        scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
+
+        mock_stream = MagicMock()
+        mock_stream.is_connected = False
+        mock_stream.get_stale_tickers.return_value = []
+        scheduler._stream = mock_stream
+
+        with patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
+                          return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
+             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_sleep.side_effect = [None] * 4 + [asyncio.CancelledError()]
+            try:
+                await scheduler._housekeeping_loop()
+            except asyncio.CancelledError:
+                pass
+
+        degraded = [e for e in received if isinstance(e, StreamDegradedEvent)]
+        assert len(degraded) == 0
+
+
 class TestStreamFallback:
     """Verify polling loop skips when stream connected, resumes on disconnect."""
 
@@ -615,6 +743,27 @@ class TestBotNotification:
 
         embed_data = _signal_embed(event.signals)
         assert "NVDA" in str(embed_data)
+
+    @pytest.mark.asyncio
+    async def test_stream_degraded_embed(self):
+        from trading.engine import StreamDegradedEvent
+        from integrations.discord.notify import _stream_degraded_embed
+
+        event = StreamDegradedEvent(disconnected_minutes=7)
+        embed_data = _stream_degraded_embed(event.disconnected_minutes)
+        assert embed_data["color"] == 0xFF8C00
+        assert "7" in embed_data["description"]
+        assert "15 minutes" in embed_data["description"]
+
+    @pytest.mark.asyncio
+    async def test_stream_recovered_embed(self):
+        from trading.engine import StreamRecoveredEvent
+        from integrations.discord.notify import _stream_recovered_embed
+
+        event = StreamRecoveredEvent(downtime_minutes=12)
+        embed_data = _stream_recovered_embed(event.downtime_minutes)
+        assert embed_data["color"] == 0x00FF00
+        assert "12" in embed_data["description"]
 
     @pytest.mark.asyncio
     async def test_housekeeping_fill_notification(self):

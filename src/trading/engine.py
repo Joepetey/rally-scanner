@@ -69,6 +69,14 @@ class RiskActionEvent(BaseModel):
     actions: list[dict]
 
 
+class StreamDegradedEvent(BaseModel):
+    disconnected_minutes: int  # consecutive market-hours minutes stream has been down
+
+
+class StreamRecoveredEvent(BaseModel):
+    downtime_minutes: int  # how long stream was down before recovery
+
+
 # ---------------------------------------------------------------------------
 # Typed event models
 # ---------------------------------------------------------------------------

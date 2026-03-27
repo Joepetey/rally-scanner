@@ -32,6 +32,8 @@ from trading.engine import (
     RetrainResult,
     RiskActionEvent,
     ScanResult,
+    StreamDegradedEvent,
+    StreamRecoveredEvent,
     WatchlistEvent,
 )
 from trading.positions import get_merged_positions
@@ -51,6 +53,8 @@ from .notify import (
     _retrain_embed,
     _risk_action_embed,
     _signal_embed,
+    _stream_degraded_embed,
+    _stream_recovered_embed,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,6 +341,22 @@ def make_bot(token: str) -> RallyBot:
                         await _send_alert(
                             discord.Embed.from_dict(_risk_action_embed(event.actions)),
                             "risk_action",
+                        )
+
+                    case StreamDegradedEvent():
+                        await _send_alert(
+                            discord.Embed.from_dict(
+                                _stream_degraded_embed(event.disconnected_minutes)
+                            ),
+                            "stream_degraded",
+                        )
+
+                    case StreamRecoveredEvent():
+                        await _send_alert(
+                            discord.Embed.from_dict(
+                                _stream_recovered_embed(event.downtime_minutes)
+                            ),
+                            "stream_recovered",
                         )
 
             except Exception as e:
