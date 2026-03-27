@@ -14,6 +14,7 @@ import os
 import queue
 import time as _time
 import traceback
+from collections.abc import Awaitable, Callable
 
 import discord
 from aiohttp import web
@@ -37,7 +38,6 @@ from trading.engine import (
     WatchlistEvent,
 )
 from trading.positions import get_merged_positions
-from trading.scheduler import TradingScheduler
 
 from .agent import process_message
 from .notify import (
@@ -139,6 +139,154 @@ class RallyBot(commands.Bot):
         asyncio.create_task(start_api_server())
 
 
+def make_discord_event_handler(
+    bot: RallyBot,
+) -> Callable[..., Awaitable[None]]:
+    """Return an async handler that sends TradingScheduler events to Discord."""
+    alert_channel_id = os.environ.get("DISCORD_CHANNEL_ID", "")
+
+    async def _send_alert(embed: discord.Embed, msg_type: str = "other") -> None:
+        if not alert_channel_id:
+            return
+        channel = bot.get_channel(int(alert_channel_id))
+        if channel:
+            await channel.send(embed=embed)
+        log_discord_message(msg_type, embed.title, (embed.description or "")[:500] or None)
+
+    async def _send_error_alert(task_name: str, error: Exception) -> None:
+        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        details = f"```\n{tb[-3500:]}\n```"
+        embed = discord.Embed.from_dict(_error_embed(f"{task_name} Failed", details))
+        await _send_alert(embed, "error")
+
+    async def _handle_trading_event(event) -> None:
+        """Convert a typed TradingScheduler event to Discord embeds."""
+        try:
+            match event:
+                case AlertEvent(alert_type="stop_breached" | "target_breached"):
+                    embed = discord.Embed.from_dict(_price_alert_embed([event.model_dump()]))
+                    await _send_alert(embed, "price_alert")
+
+                case AlertEvent(alert_type="near_stop" | "near_target"):
+                    embed = discord.Embed.from_dict(_approaching_alert_embed([event.model_dump()]))
+                    await _send_alert(embed, "price_alert")
+
+                case ExitResult():
+                    embed = discord.Embed.from_dict(_exit_embed([event.model_dump()]))
+                    await _send_alert(embed, "exit")
+
+                case HousekeepingResult() if event.fills_confirmed:
+                    fills = [f.model_dump() for f in event.fills_confirmed]
+                    embed = discord.Embed.from_dict(_fill_confirmation_embed(fills))
+                    await _send_alert(embed, "order")
+
+                case ScanResult() if event.error:
+                    embed = discord.Embed(
+                        title="⚠️ Daily Scan Skipped — No Trained Models",
+                        description=(
+                            "No trained models were found on the volume.\n"
+                            "Run retrain before the next scan: ask me to **retrain** or trigger it manually."
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    await _send_alert(embed, "scan_error")
+
+                case ScanResult():
+                    if event.signals:
+                        sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
+                        if event.scan_type not in ("daily", "morning", "cascade", "post_retrain"):
+                            sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
+                            sig_embed.set_footer(text="From watchlist mid-day scan")
+                        await _send_alert(sig_embed, "signal")
+
+                    pos = event.positions_summary.get("positions", [])
+                    await _send_alert(discord.Embed.from_dict(_positions_embed(pos)), "positions")
+
+                    if event.exits:
+                        await _send_alert(discord.Embed.from_dict(_exit_embed(event.exits)), "exit")
+
+                    entry_ok = [o for o in event.orders
+                                if o.get("side") == "buy" and o.get("success")]
+                    entry_fail = [o for o in event.orders
+                                  if o.get("side") == "buy" and not o.get("success") and not o.get("skipped")]
+                    exit_ok = [o for o in event.orders
+                               if o.get("side") == "sell" and o.get("success")]
+
+                    if entry_ok and event.equity:
+                        await _send_alert(
+                            discord.Embed.from_dict(_order_embed(entry_ok, event.equity)), "order"
+                        )
+                    if entry_fail:
+                        await _send_alert(
+                            discord.Embed.from_dict(_order_failure_embed(entry_fail)), "order_failure"
+                        )
+                    if exit_ok and event.equity:
+                        await _send_alert(
+                            discord.Embed.from_dict(_order_embed(exit_ok, event.equity)), "order"
+                        )
+
+                case WatchlistEvent() if event.signals:
+                    sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
+                    sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
+                    sig_embed.set_footer(text="From watchlist mid-day scan")
+                    await _send_alert(sig_embed, "signal")
+
+                case RegimeEvent():
+                    await _send_alert(
+                        discord.Embed.from_dict(_regime_shift_embed(event.transitions)),
+                        "regime_shift",
+                    )
+                    if event.cascade_triggered:
+                        await _send_alert(discord.Embed(
+                            title="Regime Cascade — Early Scan Triggered",
+                            description=(
+                                f"{len(event.transitions)} regime shifts detected simultaneously.\n"
+                                f"Tickers: {', '.join(t['ticker'] for t in event.transitions)}\n"
+                                "Running full scan now..."
+                            ),
+                            color=0xFF4500,
+                        ), "regime_shift")
+
+                case RetrainResult():
+                    health = {
+                        "total_count": event.manifest_size,
+                        "fresh_count": event.manifest_size,
+                        "stale_count": 0,
+                    }
+                    await _send_alert(
+                        discord.Embed.from_dict(_retrain_embed(health, event.duration_seconds)),
+                        "retrain",
+                    )
+
+                case RiskActionEvent():
+                    await _send_alert(
+                        discord.Embed.from_dict(_risk_action_embed(event.actions)),
+                        "risk_action",
+                    )
+
+                case StreamDegradedEvent():
+                    await _send_alert(
+                        discord.Embed.from_dict(
+                            _stream_degraded_embed(event.disconnected_minutes)
+                        ),
+                        "stream_degraded",
+                    )
+
+                case StreamRecoveredEvent():
+                    await _send_alert(
+                        discord.Embed.from_dict(
+                            _stream_recovered_embed(event.downtime_minutes)
+                        ),
+                        "stream_recovered",
+                    )
+
+        except Exception as e:
+            logger.exception("Event handler error for %s", type(event).__name__)
+            await _send_error_alert(f"Event Handler ({type(event).__name__})", e)
+
+    return _handle_trading_event
+
+
 def make_bot(token: str) -> RallyBot:
     """Create and configure the agentic Discord bot."""
     bot = RallyBot()
@@ -215,177 +363,6 @@ def make_bot(token: str) -> RallyBot:
         except Exception as e:
             logger.exception("Retrain task failed")
             await channel.send(f"❌ **Retraining failed:** {str(e)}")
-
-    # ------------------------------------------------------------------
-    # Scheduler (only when ENABLE_SCHEDULER=1)
-    # ------------------------------------------------------------------
-    if os.environ.get("ENABLE_SCHEDULER", "").strip() in ("1", "true", "yes"):
-        alert_channel_id = os.environ.get("DISCORD_CHANNEL_ID", "")
-
-        async def _send_alert(embed: discord.Embed, msg_type: str = "other") -> None:
-            """Send an embed to the alerts channel and log to DB."""
-            if not alert_channel_id:
-                return
-            channel = bot.get_channel(int(alert_channel_id))
-            if channel:
-                await channel.send(embed=embed)
-            log_discord_message(msg_type, embed.title, (embed.description or "")[:500] or None)
-
-        async def _send_error_alert(task_name: str, error: Exception) -> None:
-            """Send an error embed to the alerts channel."""
-            tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-            details = f"```\n{tb[-3500:]}\n```"
-            embed = discord.Embed.from_dict(_error_embed(f"{task_name} Failed", details))
-            await _send_alert(embed, "error")
-
-        async def _handle_trading_event(event) -> None:
-            """Convert a typed TradingScheduler event to Discord embeds."""
-            try:
-                match event:
-                    case AlertEvent(alert_type="stop_breached" | "target_breached"):
-                        embed = discord.Embed.from_dict(_price_alert_embed([event.model_dump()]))
-                        await _send_alert(embed, "price_alert")
-
-                    case AlertEvent(alert_type="near_stop" | "near_target"):
-                        embed = discord.Embed.from_dict(_approaching_alert_embed([event.model_dump()]))
-                        await _send_alert(embed, "price_alert")
-
-                    case ExitResult():
-                        embed = discord.Embed.from_dict(_exit_embed([event.model_dump()]))
-                        await _send_alert(embed, "exit")
-
-                    case HousekeepingResult() if event.fills_confirmed:
-                        fills = [f.model_dump() for f in event.fills_confirmed]
-                        embed = discord.Embed.from_dict(_fill_confirmation_embed(fills))
-                        await _send_alert(embed, "order")
-
-                    case ScanResult() if event.error:
-                        embed = discord.Embed(
-                            title="⚠️ Daily Scan Skipped — No Trained Models",
-                            description=(
-                                "No trained models were found on the volume.\n"
-                                "Run retrain before the next scan: ask me to **retrain** or trigger it manually."
-                            ),
-                            color=discord.Color.orange(),
-                        )
-                        await _send_alert(embed, "scan_error")
-
-                    case ScanResult():
-                        if event.signals:
-                            sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
-                            if event.scan_type not in ("daily", "morning", "cascade", "post_retrain"):
-                                sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
-                                sig_embed.set_footer(text="From watchlist mid-day scan")
-                            await _send_alert(sig_embed, "signal")
-
-                        pos = event.positions_summary.get("positions", [])
-                        await _send_alert(discord.Embed.from_dict(_positions_embed(pos)), "positions")
-
-                        if event.exits:
-                            await _send_alert(discord.Embed.from_dict(_exit_embed(event.exits)), "exit")
-
-                        entry_ok = [o for o in event.orders
-                                    if o.get("side") == "buy" and o.get("success")]
-                        entry_fail = [o for o in event.orders
-                                      if o.get("side") == "buy" and not o.get("success") and not o.get("skipped")]
-                        exit_ok = [o for o in event.orders
-                                   if o.get("side") == "sell" and o.get("success")]
-
-                        if entry_ok and event.equity:
-                            await _send_alert(
-                                discord.Embed.from_dict(_order_embed(entry_ok, event.equity)), "order"
-                            )
-                        if entry_fail:
-                            await _send_alert(
-                                discord.Embed.from_dict(_order_failure_embed(entry_fail)), "order_failure"
-                            )
-                        if exit_ok and event.equity:
-                            await _send_alert(
-                                discord.Embed.from_dict(_order_embed(exit_ok, event.equity)), "order"
-                            )
-
-                    case WatchlistEvent() if event.signals:
-                        sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
-                        sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
-                        sig_embed.set_footer(text="From watchlist mid-day scan")
-                        await _send_alert(sig_embed, "signal")
-
-                    case RegimeEvent():
-                        await _send_alert(
-                            discord.Embed.from_dict(_regime_shift_embed(event.transitions)),
-                            "regime_shift",
-                        )
-                        if event.cascade_triggered:
-                            await _send_alert(discord.Embed(
-                                title="Regime Cascade — Early Scan Triggered",
-                                description=(
-                                    f"{len(event.transitions)} regime shifts detected simultaneously.\n"
-                                    f"Tickers: {', '.join(t['ticker'] for t in event.transitions)}\n"
-                                    "Running full scan now..."
-                                ),
-                                color=0xFF4500,
-                            ), "regime_shift")
-
-                    case RetrainResult():
-                        health = {
-                            "total_count": event.manifest_size,
-                            "fresh_count": event.manifest_size,
-                            "stale_count": 0,
-                        }
-                        await _send_alert(
-                            discord.Embed.from_dict(_retrain_embed(health, event.duration_seconds)),
-                            "retrain",
-                        )
-
-                    case RiskActionEvent():
-                        await _send_alert(
-                            discord.Embed.from_dict(_risk_action_embed(event.actions)),
-                            "risk_action",
-                        )
-
-                    case StreamDegradedEvent():
-                        await _send_alert(
-                            discord.Embed.from_dict(
-                                _stream_degraded_embed(event.disconnected_minutes)
-                            ),
-                            "stream_degraded",
-                        )
-
-                    case StreamRecoveredEvent():
-                        await _send_alert(
-                            discord.Embed.from_dict(
-                                _stream_recovered_embed(event.downtime_minutes)
-                            ),
-                            "stream_recovered",
-                        )
-
-            except Exception as e:
-                logger.exception("Event handler error for %s", type(event).__name__)
-                await _send_error_alert(f"Event Handler ({type(event).__name__})", e)
-
-        _scheduler = TradingScheduler(on_event=_handle_trading_event)
-
-        @bot.event
-        async def on_ready() -> None:
-            logger.info("Bot connected as %s (ID: %s)", bot.user, bot.user.id)
-            await bot.change_presence(
-                activity=discord.Activity(
-                    type=discord.ActivityType.watching,
-                    name="rally signals",
-                )
-            )
-            asyncio.create_task(start_api_server())
-            try:
-                await _scheduler.start()
-                logger.info("TradingScheduler started")
-            except Exception as e:
-                logger.exception("Failed to start TradingScheduler")
-                await _send_error_alert("TradingScheduler Startup", e)
-
-        async def _bot_close() -> None:
-            await _scheduler.stop()
-
-        bot._scheduler_stop = _bot_close
 
     # ------------------------------------------------------------------
     # Message handler for natural language interaction via Claude
