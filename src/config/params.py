@@ -73,6 +73,13 @@ class Params(BaseModel):
     # --- Cash parking (SGOV) ---
     sgov_min_idle_fraction: float = 0.02  # don't park if idle < 2% of equity
 
+    # --- Real-time streaming ---
+    # Override via env vars: ALPACA_STREAM_ENABLED=0, ALPACA_DATA_FEED=sip,
+    # STREAM_EVAL_THROTTLE_SECONDS=5
+    stream_enabled: bool = True
+    stream_eval_throttle_seconds: float = 10.0
+    stream_data_feed: str = "iex"  # "iex" (free) or "sip" (paid consolidated)
+
     # --- Adaptive scan frequency (Phase 3) ---
     morning_scan_enabled: bool = True
     midday_scans_enabled: bool = True
