@@ -114,6 +114,10 @@ class TradingScheduler:
         self._exiting_tickers: set[str] = set()
         self._exit_lock = asyncio.Lock()
 
+        # Snapshot fetch guard: prevent housekeeping IEX fallback and polling
+        # from calling get_snapshots concurrently when is_connected flips state
+        self._snapshot_lock = asyncio.Lock()
+
         # Housekeeping cycle counter for IEX coverage fallback (every 2 cycles ≈ 2 min)
         self._housekeeping_cycles: int = 0
 
@@ -490,7 +494,8 @@ class TradingScheduler:
                     # IEX fallback: evaluate stale tickers via REST snapshot
                     if stale and alpaca_enabled():
                         try:
-                            snapshots = await get_snapshots(stale)
+                            async with self._snapshot_lock:
+                                snapshots = await get_snapshots(stale)
                             fresh_state = self._load_cached_positions()
                             fresh_positions = fresh_state.get("positions", [])
                             events = await self._engine.check_prices(
@@ -562,10 +567,11 @@ class TradingScheduler:
                     continue
 
                 tickers = [p["ticker"] for p in positions]
-                quotes = (
-                    await get_snapshots(tickers) if alpaca_enabled()
-                    else await asyncio.to_thread(fetch_quotes, tickers)
-                )
+                if alpaca_enabled():
+                    async with self._snapshot_lock:
+                        quotes = await get_snapshots(tickers)
+                else:
+                    quotes = await asyncio.to_thread(fetch_quotes, tickers)
 
                 events = await self._engine.check_prices(positions, quotes)
                 for event in events:

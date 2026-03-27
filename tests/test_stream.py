@@ -686,6 +686,35 @@ class TestStreamFallback:
 
         mock_check.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_snapshot_lock_serializes_concurrent_calls(self):
+        """Housekeeping IEX fallback and polling loop must not call get_snapshots concurrently."""
+        from trading.scheduler import TradingScheduler
+
+        scheduler = TradingScheduler(on_event=AsyncMock())
+
+        call_order = []
+
+        async def fake_snapshots(tickers):
+            call_order.append("start")
+            await asyncio.sleep(0)
+            call_order.append("end")
+            return {}
+
+        # Run two coroutines that both try to acquire the lock and call get_snapshots
+        async def caller_a():
+            async with scheduler._snapshot_lock:
+                await fake_snapshots(["AAPL"])
+
+        async def caller_b():
+            async with scheduler._snapshot_lock:
+                await fake_snapshots(["MSFT"])
+
+        await asyncio.gather(caller_a(), caller_b())
+
+        # Each call should fully complete before the next starts — no interleaving
+        assert call_order == ["start", "end", "start", "end"]
+
 
 # ===========================================================================
 # 5. Bot notification test
