@@ -9,13 +9,23 @@ import logging
 import os
 import signal
 
-from db.pool import init_pool
-from db.schema import init_schema
-from api import start_api_server
-from integrations.discord.bot import make_bot, make_discord_event_handler
-from log import setup_logging
+import sentry_sdk
+
 from monitoring import init_sentry
-from trading.scheduler import TradingScheduler
+
+# Initialize Sentry before any other application imports so startup errors are captured
+init_sentry()
+
+try:
+    from db.pool import init_pool
+    from db.schema import init_schema
+    from api import start_api_server
+    from integrations.discord.bot import make_bot, make_discord_event_handler
+    from log import setup_logging
+    from trading.scheduler import TradingScheduler
+except Exception:
+    sentry_sdk.capture_exception()
+    raise
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +82,6 @@ async def main() -> None:
 
 
 def main_sync() -> int:
-    init_sentry()
     setup_logging(name="rally_app")
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:

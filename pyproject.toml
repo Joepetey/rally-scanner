@@ -33,7 +33,7 @@ rally-scanner = "app:main_sync"
 "" = "src"
 
 [tool.setuptools]
-py-modules = ["app"]
+py-modules = ["app", "api", "log", "monitoring"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
