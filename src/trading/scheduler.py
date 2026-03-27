@@ -629,7 +629,7 @@ class TradingScheduler:
                 logger.exception("Regime loop error")
 
     async def _scan_loop(self) -> None:
-        """Time-based: morning scan (9 AM), daily scan (4:30 PM), midday scans (11 AM, 1 PM) ET weekdays."""
+        """Time-based: morning scan (9:30 AM), daily scan (4:30 PM), midday scans (11 AM, 1 PM) ET weekdays."""
         while True:
             await asyncio.sleep(30)
             now = datetime.now(_ET)
@@ -637,7 +637,11 @@ class TradingScheduler:
                 continue
             today = now.date().isoformat()
             try:
-                if PARAMS.morning_scan_enabled and now.hour == 9 and now.minute < 5:
+                # 9:30 AM ET — at market open so scan_all receives opening-print prices
+                # rather than pre-market prices. execute_entries submits market orders
+                # which fill at or near the open regardless, but sizing and stop/target
+                # calculations are more accurate with real opening prices.
+                if PARAMS.morning_scan_enabled and now.hour == 9 and 30 <= now.minute < 35:
                     if self._ran_morning_scan != today:
                         self._ran_morning_scan = today
                         await self.run_daily_scan("morning")
