@@ -235,9 +235,10 @@ class TestAlpacaStreamManager:
         # MSFT: simulate last trade was 400s ago
         mgr._last_trade_time["MSFT"] = time.monotonic() - 400
 
-        stale = mgr.get_stale_tickers(stale_seconds=300.0)
-        assert "MSFT" in stale
-        assert "AAPL" in stale  # never had a trade → stale too
+        new_stale, known_stale = mgr.get_stale_tickers(stale_seconds=300.0)
+        assert "MSFT" in new_stale
+        assert "AAPL" in new_stale  # never had a trade → stale too
+        assert known_stale == []
 
     @pytest.mark.asyncio
     async def test_recently_seen_ticker_not_stale(self):
@@ -245,8 +246,42 @@ class TestAlpacaStreamManager:
         mgr._symbols = {"AAPL"}
         mgr._last_trade_time["AAPL"] = time.monotonic() - 10  # 10s ago
 
-        stale = mgr.get_stale_tickers(stale_seconds=300.0)
-        assert "AAPL" not in stale
+        new_stale, known_stale = mgr.get_stale_tickers(stale_seconds=300.0)
+        assert "AAPL" not in new_stale
+        assert "AAPL" not in known_stale
+
+    @pytest.mark.asyncio
+    async def test_stale_ticker_demoted_to_known_on_second_call(self):
+        """Second call for same stale ticker returns it in known_stale, not new_stale."""
+        mgr = AlpacaStreamManager(on_trade=MagicMock())
+        mgr._symbols = {"AAPL"}
+        # AAPL has never had a trade → stale
+
+        new_stale, known_stale = mgr.get_stale_tickers(stale_seconds=300.0)
+        assert "AAPL" in new_stale
+        assert "AAPL" not in known_stale
+
+        # Second call: still stale, should be known now
+        new_stale2, known_stale2 = mgr.get_stale_tickers(stale_seconds=300.0)
+        assert "AAPL" not in new_stale2
+        assert "AAPL" in known_stale2
+
+    @pytest.mark.asyncio
+    async def test_fresh_trade_clears_known_stale(self):
+        """A trade event removes ticker from _known_stale so next stale check warns again."""
+        on_trade = MagicMock()
+        mgr = AlpacaStreamManager(on_trade=on_trade)
+        mgr._symbols = {"AAPL"}
+        mgr._known_stale.add("AAPL")  # pre-seed as known stale
+
+        # Simulate a fresh trade arriving
+        await mgr._handle_trade(type("Trade", (), {"symbol": "AAPL", "price": 150.0})())
+        assert "AAPL" not in mgr._known_stale
+
+        # Next stale call should put it back in new_stale (stale again immediately
+        # because _last_fired throttle just set _last_trade_time to now,
+        # so it won't be stale — just verify it's cleared)
+        assert "AAPL" not in mgr._known_stale
 
     # ----------------------------------------------------------------
     # is_stream_enabled
@@ -473,7 +508,7 @@ class TestStreamHealthMonitoring:
 
         mock_stream = MagicMock()
         mock_stream.is_connected = False
-        mock_stream.get_stale_tickers.return_value = []
+        mock_stream.get_stale_tickers.return_value = ([], [])
         scheduler._stream = mock_stream
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
@@ -503,7 +538,7 @@ class TestStreamHealthMonitoring:
 
         mock_stream = MagicMock()
         mock_stream.is_connected = False
-        mock_stream.get_stale_tickers.return_value = []
+        mock_stream.get_stale_tickers.return_value = ([], [])
         scheduler._stream = mock_stream
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
@@ -539,7 +574,7 @@ class TestStreamHealthMonitoring:
 
         # Stream is now connected (recovered)
         mock_stream.is_connected = True
-        mock_stream.get_stale_tickers.return_value = []
+        mock_stream.get_stale_tickers.return_value = ([], [])
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
@@ -569,7 +604,7 @@ class TestStreamHealthMonitoring:
 
         mock_stream = MagicMock()
         mock_stream.is_connected = False
-        mock_stream.get_stale_tickers.return_value = []
+        mock_stream.get_stale_tickers.return_value = ([], [])
         scheduler._stream = mock_stream
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \

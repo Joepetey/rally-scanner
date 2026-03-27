@@ -474,12 +474,18 @@ class TradingScheduler:
 
                 # Stale price check + IEX REST fallback every 2 housekeeping cycles
                 if self._stream and self._stream.is_connected and self._housekeeping_cycles % 2 == 0:
-                    stale = self._stream.get_stale_tickers(stale_seconds=300.0)
-                    if stale:
+                    new_stale, known_stale = self._stream.get_stale_tickers(stale_seconds=300.0)
+                    stale = new_stale + known_stale
+                    if new_stale:
                         logger.warning(
                             "No stream trade in 5 min for %d ticker(s): %s — "
                             "possible low-volume or subscription issue",
-                            len(stale), sorted(stale),
+                            len(new_stale), sorted(new_stale),
+                        )
+                    if known_stale:
+                        logger.debug(
+                            "Still stale (IEX low-volume expected): %s",
+                            sorted(known_stale),
                         )
                     # IEX fallback: evaluate stale tickers via REST snapshot
                     if stale and alpaca_enabled():

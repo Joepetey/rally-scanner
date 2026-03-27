@@ -74,6 +74,9 @@ class AlpacaStreamManager:
         # Track last trade event time per ticker for stale detection
         self._last_trade_time: dict[str, float] = {}
 
+        # Tickers already warned as stale; suppresses repeat WARNINGs until a fresh trade arrives
+        self._known_stale: set[str] = set()
+
     @property
     def is_connected(self) -> bool:
         return self._connected.is_set()
@@ -143,17 +146,29 @@ class AlpacaStreamManager:
                 except Exception as e:
                     logger.warning("Failed to unsubscribe from %s: %s", to_remove, e)
 
-    def get_stale_tickers(self, stale_seconds: float = 300.0) -> list[str]:
-        """Return equity tickers with no trade event for stale_seconds during market hours."""
+    def get_stale_tickers(self, stale_seconds: float = 300.0) -> tuple[list[str], list[str]]:
+        """Return (new_stale, known_stale) for tickers with no trade event in stale_seconds.
+
+        new_stale  — first occurrence since last fresh trade; callers should log WARNING.
+        known_stale — already reported and still stale; callers should log DEBUG only.
+
+        Side effect: new_stale tickers are added to the internal _known_stale set so
+        subsequent calls demote them to known_stale until a fresh trade clears them.
+        """
         now = time.monotonic()
         with self._lock:
             symbols = set(self._symbols)
-        stale = []
+        new_stale: list[str] = []
+        known_stale: list[str] = []
         for ticker in symbols:
             last = self._last_trade_time.get(ticker)
             if last is None or (now - last) > stale_seconds:
-                stale.append(ticker)
-        return stale
+                if ticker in self._known_stale:
+                    known_stale.append(ticker)
+                else:
+                    new_stale.append(ticker)
+                    self._known_stale.add(ticker)
+        return new_stale, known_stale
 
     # ------------------------------------------------------------------
     # Internal
@@ -182,6 +197,7 @@ class AlpacaStreamManager:
 
         self._last_fired[ticker] = now
         self._last_trade_time[ticker] = now
+        self._known_stale.discard(ticker)
         self._connected.set()
 
         try:
