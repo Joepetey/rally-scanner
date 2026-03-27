@@ -154,6 +154,8 @@ class TradingScheduler:
             asyncio.create_task(self._scan_loop(), name="scan"),
             asyncio.create_task(self._retrain_loop(), name="retrain"),
         ]
+        for task in self._tasks:
+            task.add_done_callback(self._task_sentinel)
         logger.info(
             "TradingScheduler started (%d loops, stream=%s)",
             len(self._tasks),
@@ -643,6 +645,25 @@ class TradingScheduler:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _task_sentinel(self, task: asyncio.Task) -> None:
+        """done_callback: log critical if a background task dies unexpectedly.
+
+        Each loop has an inner except Exception that should catch everything
+        normal, but a BaseException (e.g. SystemExit, KeyboardInterrupt) or an
+        upstream bug can escape and kill the task silently. This fires once,
+        after the task is done, and makes the failure visible in logs + Sentry.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        logger.critical(
+            "Background task '%s' died unexpectedly — scheduler loop is no longer running: %s",
+            task.get_name(), exc,
+            exc_info=exc,
+        )
 
     async def _execute_breach_guarded(
         self, ticker: str, pos: dict, price: float, alert_type: str,
