@@ -36,6 +36,39 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Scan / regime / retrain event types (MIC-26)
+# ---------------------------------------------------------------------------
+
+class ScanResult(BaseModel):
+    signals: list[dict]
+    exits: list[dict]
+    orders: list[dict]
+    positions_summary: dict
+    scan_type: str = "daily"  # "daily", "morning", "midday", "cascade", "post_retrain"
+    error: str | None = None
+
+
+class WatchlistEvent(BaseModel):
+    signals: list[dict]
+    scan_type: str = "midday"
+
+
+class RegimeEvent(BaseModel):
+    transitions: list[dict]
+    cascade_triggered: bool
+
+
+class RetrainResult(BaseModel):
+    tickers_retrained: list[str]
+    duration_seconds: float
+    manifest_size: int
+
+
+class RiskActionEvent(BaseModel):
+    actions: list[dict]
+
+
+# ---------------------------------------------------------------------------
 # Typed event models
 # ---------------------------------------------------------------------------
 
