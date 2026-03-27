@@ -347,9 +347,10 @@ def _positions_embed(positions: list[dict]) -> dict:
         pnl = p.get("unrealized_pnl_pct", 0)
         sign = "+" if pnl >= 0 else ""
         size = p.get("size", 0)
+        current = p.get("current_price", p.get("entry_price", 0))
         lines.append(
             f"`{p['ticker']:<6s}` "
-            f"${p['current_price']:>7.2f}  "
+            f"${current:>7.2f}  "
             f"**{sign}{pnl:.2f}%**  "
             f"Stop ${p['stop_price']:.2f}  "
             f"Target ${p['target_price']:.2f}  "
