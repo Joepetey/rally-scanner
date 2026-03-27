@@ -314,8 +314,8 @@ def scan_all(
     else:
         print("  (none)")
 
-    # --- FULL PROBABILITY RANKING ---
-    if ok_results:
+    # --- FULL PROBABILITY RANKING --- (debug only — 800+ lines floods Railway logs)
+    if ok_results and logger.isEnabledFor(logging.DEBUG):
         print(f"\n  {'='*86}")
         print(f"  RALLY PROBABILITY RANKING — all {len(ok_results)} assets")
         print(f"  {'='*86}")
