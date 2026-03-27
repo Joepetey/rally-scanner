@@ -198,13 +198,13 @@ def _order_embed(results: list, equity: float) -> dict:
     """Build a Discord embed for successful Alpaca order executions."""
     fields = []
     for r in results:
-        parts = [f"Side: **{r.side.upper()}**", f"Qty: {r.qty}"]
-        if r.fill_price:
-            parts.append(f"Fill: ${r.fill_price:.2f}")
-        if r.order_id:
-            parts.append(f"Order: `{r.order_id[:8]}`")
+        parts = [f"Side: **{r['side'].upper()}**", f"Qty: {r['qty']}"]
+        if r.get("fill_price"):
+            parts.append(f"Fill: ${r['fill_price']:.2f}")
+        if r.get("order_id"):
+            parts.append(f"Order: `{r['order_id'][:8]}`")
         fields.append({
-            "name": r.ticker,
+            "name": r["ticker"],
             "value": "\n".join(parts),
             "inline": True,
         })
@@ -245,8 +245,8 @@ def _order_failure_embed(results: list) -> dict:
     fields = []
     for r in results:
         fields.append({
-            "name": r.ticker,
-            "value": f"Side: {r.side.upper()}\nError: {r.error}",
+            "name": r["ticker"],
+            "value": f"Side: {r['side'].upper()}\nError: {r.get('error', '?')}",
             "inline": True,
         })
     return {

@@ -260,6 +260,10 @@ class TradingScheduler:
         open_tickers = {p["ticker"] for p in positions.get("positions", [])}
         signals = [s for s in all_signals if s["ticker"] not in open_tickers]
 
+        # Snapshot positions BEFORE entries so the embed reflects existing
+        # open positions only — new entries are shown in the orders/signals section.
+        positions_for_embed = list(positions.get("positions", []))
+
         orders: list[dict] = []
         confirmed_exits: list[dict] = list(closed) if not alpaca_enabled() else []
         scan_equity: float = 0.0
@@ -358,7 +362,7 @@ class TradingScheduler:
             signals=signals,
             exits=confirmed_exits,
             orders=orders,
-            positions_summary={"positions": self._load_cached_positions().get("positions", [])},
+            positions_summary={"positions": positions_for_embed},
             scan_type=scan_type,
             equity=scan_equity,
         ))

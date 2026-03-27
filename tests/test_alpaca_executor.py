@@ -85,11 +85,12 @@ def test_order_result_with_trail():
 
 
 def test_order_embed():
+    # Orders arrive as model_dump() dicts (matching scheduler's orders.extend([r.model_dump() ...]))
     results = [
         OrderResult(ticker="AAPL", side="buy", qty=10, success=True,
-                    order_id="abc12345", fill_price=150.25),
+                    order_id="abc12345", fill_price=150.25).model_dump(),
         OrderResult(ticker="MSFT", side="sell", qty=5, success=True,
-                    order_id="def67890"),
+                    order_id="def67890").model_dump(),
     ]
     embed = _order_embed(results, equity=100_000.0)
     assert embed["title"] == "Alpaca Orders (2)"
@@ -102,7 +103,7 @@ def test_order_embed():
 def test_order_failure_embed():
     results = [
         OrderResult(ticker="TSLA", side="buy", qty=5, success=False,
-                    error="Insufficient buying power"),
+                    error="Insufficient buying power").model_dump(),
     ]
     embed = _order_failure_embed(results)
     assert embed["title"] == "Alpaca Order Failures (1)"

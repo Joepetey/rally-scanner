@@ -634,8 +634,10 @@ def _run_scan(config: str = "conservative") -> dict:
         # New signals: from scan results directly (not just entered positions)
         new_signals = [r for r in results if r.get("signal") and r["ticker"] not in open_tickers]
 
-        # Count closed positions
-        closed_today = state.get("closed_today", [])
+        # Re-query DB for current open positions (scheduler may have modified state since scan started)
+        current_state = get_merged_positions_sync()
+        current_positions = current_state.get("positions", [])
+        closed_today = current_state.get("closed_today", [])
 
         scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -645,7 +647,9 @@ def _run_scan(config: str = "conservative") -> dict:
             "config": config,
             "tickers_scanned": len(results),
             "new_signals": len(new_signals),
-            "total_open": len(positions),
+            "existing_open_before_scan": len(positions),
+            "total_open_now": len(current_positions),
+            "open_positions": [p["ticker"] for p in current_positions],
             "closed_today": len(closed_today),
             "signals": [
                 {
