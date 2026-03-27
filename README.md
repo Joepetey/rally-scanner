@@ -364,7 +364,6 @@ The bot includes a built-in scheduler so you don't need cron. One process handle
    DISCORD_BOT_TOKEN=your-token
    DISCORD_CHANNEL_ID=your-channel-id
    ANTHROPIC_API_KEY=sk-ant-your-key
-   ENABLE_SCHEDULER=1
    ```
 4. Railway auto-detects the `Procfile` and deploys
 
@@ -372,7 +371,7 @@ The scheduler runs:
 - **Daily scan**: Mon-Fri at 4:30 PM ET (21:30 UTC)
 - **Weekly retrain**: Sunday at 6:00 PM ET (23:00 UTC)
 
-Set `ENABLE_SCHEDULER=1` to activate. When disabled (default), the bot only responds to slash commands.
+The scheduler runs automatically — no flag needed. `DISCORD_BOT_TOKEN` controls Discord connectivity.
 
 Railway provides a persistent volume for `models/` and the SQLite database. Add it in the Railway dashboard under your service's Settings > Volumes, mounted at `/app/models`.
 

@@ -201,19 +201,8 @@ def main() -> int:
         )
         env_vars["ALPACA_AUTO_EXECUTE"] = auto_exec or "0"
 
-    # Scheduler
-    print_header("4. Scheduler Configuration")
-    print_info("Enable scheduler for automated scans and retraining")
-    print("  - Daily scans: Mon-Fri at 4:30 PM ET (21:30 UTC)")
-    print("  - Weekly retrain: Sunday at 6:00 PM ET (23:00 UTC)")
-    print("  - Set to 1 for Railway/cloud deployment")
-    print("  - Set to 0 for local testing\n")
-
-    scheduler = get_input("Enable Scheduler? (0 or 1)", default="0", required=False)
-    env_vars["ENABLE_SCHEDULER"] = scheduler or "0"
-
     # Railway API (local → Railway bridge)
-    print_header("5. Railway API (optional)")
+    print_header("4. Railway API (optional)")
     print_info("Connect local tools to your Railway deployment")
     print("  - Set RALLY_API_URL to your Railway domain")
     print("  - Set RALLY_API_KEY to a shared secret (same on Railway)")
@@ -230,7 +219,7 @@ def main() -> int:
         )
 
     # Write .env file
-    print_header("6. Writing Configuration")
+    print_header("5. Writing Configuration")
 
     try:
         with open(env_path, "w") as f:
@@ -257,10 +246,6 @@ def main() -> int:
                 ]:
                     if key in env_vars:
                         f.write(f"{key}={env_vars[key]}\n")
-
-            f.write("\n# --- Scheduler ---\n")
-            if "ENABLE_SCHEDULER" in env_vars:
-                f.write(f"ENABLE_SCHEDULER={env_vars['ENABLE_SCHEDULER']}\n")
 
             if any(k.startswith("RALLY_API") for k in env_vars):
                 f.write("\n# --- Railway API ---\n")
