@@ -25,9 +25,11 @@ load_dotenv()
 from integrations.discord.bot import make_bot
 from db import init_pool, init_schema
 from log import setup_logging
+from monitoring import init_sentry
 
 
 def main() -> int:
+    init_sentry()
     setup_logging(name="discord_bot")
 
     token = os.environ.get("DISCORD_BOT_TOKEN")

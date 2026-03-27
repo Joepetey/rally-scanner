@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from log import setup_logging
+from monitoring import init_sentry
 from pipeline.scanner import scan_all
 from pipeline.retrain import retrain_all
 from trading.positions import get_merged_positions_sync
@@ -211,6 +212,7 @@ def main() -> int:
     sub.add_parser("health", help="Print model health report")
 
     args = parser.parse_args()
+    init_sentry()
     setup_logging(name="orchestrator")
 
     commands = {
