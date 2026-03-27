@@ -669,7 +669,12 @@ def _run_scan(config: str = "conservative") -> dict:
 
 def _get_watchlist() -> dict:
     """Return tickers near signal threshold from the last scan."""
-    return load_watchlist()
+    result = load_watchlist()
+    # Cap to top 20 to avoid bloating conversation history with full-universe dumps
+    if isinstance(result.get("tickers"), list) and len(result["tickers"]) > 20:
+        result["tickers"] = result["tickers"][:20]
+        result["count"] = 20
+    return result
 
 
 def _get_price(tickers: list[str]) -> dict:
@@ -813,13 +818,22 @@ Key conventions:
     model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
     max_tokens = int(os.environ.get("CLAUDE_MAX_TOKENS", "2048"))
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system_prompt,
-        messages=conversation_history,
-        tools=TOOLS,
-    )
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=conversation_history,
+            tools=TOOLS,
+        )
+    except anthropic.RateLimitError:
+        logger.warning("Rate limit hit for user %s", discord_username)
+        conversation_history.pop()  # remove the user message we just added
+        return (
+            "Rate limit reached — too many tokens in flight. Try again in a moment, or type `/clear` to reset your conversation history.",
+            conversation_history,
+            [],
+        )
 
     # Handle tool use loop
     while response.stop_reason == "tool_use":
@@ -858,13 +872,21 @@ Key conventions:
         })
 
         # Continue conversation
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=conversation_history,
-            tools=TOOLS,
-        )
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=conversation_history,
+                tools=TOOLS,
+            )
+        except anthropic.RateLimitError:
+            logger.warning("Rate limit hit mid-turn for user %s", discord_username)
+            return (
+                "Rate limit reached mid-response. Try again in a moment, or type `/clear` to reset your conversation history.",
+                conversation_history,
+                async_tasks,
+            )
 
     # Extract final text response
     response_text = ""

@@ -7,7 +7,7 @@ from db.pool import get_conn
 
 def get_conversation_history(
     discord_id: int,
-    limit_messages: int = 20,
+    limit_messages: int = 10,
 ) -> list[dict]:
     """Get recent conversation history for a user.
 
