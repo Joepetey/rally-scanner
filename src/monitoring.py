@@ -16,7 +16,7 @@ def init_sentry() -> None:
     def _before_send(event: dict, hint: dict) -> dict | None:
         if "exc_info" in hint:
             exc_value = str(hint["exc_info"][1])
-            if "42210000" in exc_value:  # Alpaca "not tradable"
+            if "42210000" in exc_value:  # Alpaca "order already filled" — benign
                 return None
         return event
 
@@ -25,7 +25,9 @@ def init_sentry() -> None:
         environment=os.environ.get("RAILWAY_ENVIRONMENT", "development"),
         release=os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown"),
         integrations=[
-            LoggingIntegration(level=logging.ERROR, event_level=logging.ERROR),
+            # level: capture warnings as breadcrumbs (context alongside errors)
+            # event_level: only create Sentry issues for ERROR+
+            LoggingIntegration(level=logging.WARNING, event_level=logging.ERROR),
         ],
         before_send=_before_send,
         traces_sample_rate=0.0,

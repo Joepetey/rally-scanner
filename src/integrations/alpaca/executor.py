@@ -527,11 +527,12 @@ async def place_exit_orders(
                         )
                         return target_oid, stop_oid
                 except Exception as recover_err:
-                    logger.warning(
+                    logger.error(
                         "Could not recover OCO IDs for %s after 40310000: %s",
                         ticker, recover_err,
                     )
-            logger.warning("Failed to place OCO exit for %s: %s", ticker, e)
+            else:
+                logger.error("Failed to place OCO exit for %s: %s", ticker, e)
             return None, None
 
     return await asyncio.to_thread(_sync)
