@@ -81,6 +81,7 @@ class AlertEvent(BaseModel):
     level_name: str
     entry_price: float
     pnl_pct: float
+    distance_pct: float = 0.0
 
 
 class ExitResult(BaseModel):
@@ -177,7 +178,23 @@ class AlertEngine:
                         level_name=level_name,
                         entry_price=entry,
                         pnl_pct=pnl_pct,
+                        distance_pct=round(distance, 2),
                     )
+            # Not near stop — still check near_target
+            if target > 0:
+                distance = (target / price - 1) * 100
+                if 0 < distance <= self._proximity_pct:
+                    if log_price_alert(today, ticker, "near_target", price, target, entry, pnl_pct):
+                        return AlertEvent(
+                            ticker=ticker,
+                            alert_type="near_target",
+                            current_price=price,
+                            level_price=target,
+                            level_name="Target",
+                            entry_price=entry,
+                            pnl_pct=pnl_pct,
+                            distance_pct=round(distance, 2),
+                        )
 
         elif self._proximity_pct > 0 and target > 0:
             distance = (target / price - 1) * 100
@@ -191,6 +208,7 @@ class AlertEngine:
                         level_name="Target",
                         entry_price=entry,
                         pnl_pct=pnl_pct,
+                        distance_pct=round(distance, 2),
                     )
 
         return None
