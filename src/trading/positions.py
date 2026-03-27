@@ -8,8 +8,6 @@ Broker source of truth is Alpaca API.
 import asyncio
 import json
 import logging
-import os
-import urllib.request
 from datetime import datetime
 
 from config import PARAMS, TICKER_TO_GROUP
@@ -62,52 +60,9 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 async def get_merged_positions() -> dict:
-    """Merge Alpaca broker positions with DB metadata.
-
-    Alpaca is the source of truth for WHICH positions are open.
-    DB provides stop/target/trailing/bars_held metadata.
-    Returns same shape as load_positions().
-    """
-    broker = await get_all_positions()
-    meta_map = {p["ticker"]: p for p in load_all_position_meta()}
-
-    merged = []
-    for bp in broker:
-        meta = meta_map.get(bp["ticker"], {})
-        qty = bp["qty"]
-        entry = bp["avg_entry_price"]
-        current = bp["market_value"] / qty if qty else 0
-        pnl_pct = (
-            round(bp["unrealized_pl"] / (entry * qty) * 100, 2)
-            if qty and entry else 0
-        )
-        merged.append({
-            # From Alpaca (source of truth)
-            "ticker": bp["ticker"],
-            "qty": qty,
-            "entry_price": entry,
-            "current_price": round(current, 4),
-            "unrealized_pnl_pct": pnl_pct,
-            # From DB metadata
-            "stop_price": meta.get("stop_price", 0),
-            "target_price": meta.get("target_price", 0),
-            "trailing_stop": meta.get("trailing_stop", 0),
-            "highest_close": meta.get("highest_close", entry),
-            "atr": meta.get("atr", 0),
-            "bars_held": meta.get("bars_held", 0),
-            "size": meta.get("size", 0),
-            "entry_date": meta.get("entry_date") or datetime.now().strftime("%Y-%m-%d"),
-            "order_id": meta.get("order_id"),
-            "trail_order_id": meta.get("trail_order_id"),
-            "target_order_id": meta.get("target_order_id"),
-            "status": "open",
-        })
-
-    return {
-        "positions": merged,
-        "closed_today": get_closed_today(),
-        "last_updated": datetime.now().isoformat(),
-    }
+    """Sync with Alpaca broker state then return DB positions."""
+    await sync_positions_from_alpaca()
+    return load_positions()
 
 
 async def sync_positions_from_alpaca() -> dict:
@@ -194,47 +149,8 @@ async def sync_positions_from_alpaca() -> dict:
 
 
 def get_merged_positions_sync() -> dict:
-    """Sync wrapper for get_merged_positions().
-
-    Priority:
-    1. RALLY_API_URL set → fetch from Railway API (local dev)
-    2. Alpaca keys set   → query Alpaca + local DB
-    3. Fallback          → DB-only via load_positions()
-    """
-    api_url = os.environ.get("RALLY_API_URL")
-    if api_url:
-        return _fetch_remote_positions(api_url)
-    if not _has_alpaca_keys():
-        return load_positions()
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(get_merged_positions())
-    # Already in async context — can't nest asyncio.run, fall back to DB
+    """DB-only read; sync is handled proactively by the scheduler."""
     return load_positions()
-
-
-def _fetch_remote_positions(api_url: str) -> dict:
-    """Fetch positions from the Railway API endpoint."""
-    url = f"{api_url.rstrip('/')}/api/positions"
-    req = urllib.request.Request(url)
-    api_key = os.environ.get("RALLY_API_KEY")
-    if api_key:
-        req.add_header("Authorization", f"Bearer {api_key}")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read())
-    except Exception:
-        logger.warning("Failed to fetch positions from %s, falling back to local", url)
-        return load_positions()
-
-
-def _has_alpaca_keys() -> bool:
-    """Check if Alpaca API keys are configured."""
-    return bool(
-        os.environ.get("ALPACA_API_KEY")
-        and os.environ.get("ALPACA_SECRET_KEY")
-    )
 
 
 # ---------------------------------------------------------------------------

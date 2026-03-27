@@ -218,10 +218,12 @@ class TradingScheduler:
 
         orders: list[dict] = []
         confirmed_exits: list[dict] = list(closed) if not alpaca_enabled() else []
+        scan_equity: float = 0.0
 
         if alpaca_enabled():
             try:
                 equity = await get_account_equity()
+                scan_equity = equity
 
                 # Sell SGOV to cover capital gap for new entries
                 if sgov_enabled() and signals:
@@ -309,6 +311,7 @@ class TradingScheduler:
             orders=orders,
             positions_summary={"positions": load_positions().get("positions", [])},
             scan_type=scan_type,
+            equity=scan_equity,
         ))
 
         # Post-scan risk evaluation picks up any regime changes

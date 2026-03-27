@@ -45,6 +45,7 @@ class ScanResult(BaseModel):
     orders: list[dict]
     positions_summary: dict
     scan_type: str = "daily"  # "daily", "morning", "midday", "cascade", "post_retrain"
+    equity: float = 0.0  # account equity at scan time (for order embed dollar amounts)
     error: str | None = None
 
 
