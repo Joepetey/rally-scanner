@@ -136,7 +136,6 @@ class RallyBot(commands.Bot):
                 name="rally signals",
             )
         )
-        asyncio.create_task(start_api_server())
 
 
 def make_discord_event_handler(
