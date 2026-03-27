@@ -98,19 +98,19 @@ def _exit_embed(closed: list[dict]) -> dict:
     """Build a Discord embed for position exits."""
     fields = []
     for c in closed:
-        pnl = c.get("realized_pnl_pct", 0)
+        pnl = c.get("realized_pnl_pct") or 0
         sign = "+" if pnl >= 0 else ""
         fields.append({
             "name": c.get("ticker", "?"),
             "value": (
                 f"Reason: {c.get('exit_reason', '?')}\n"
                 f"PnL: **{sign}{pnl:.2f}%**\n"
-                f"Bars held: {c.get('bars_held', 0)}"
+                f"Bars held: {c.get('bars_held') or 0}"
             ),
             "inline": True,
         })
     # Use red if any loss, green if all wins
-    any_loss = any(c.get("realized_pnl_pct", 0) < 0 for c in closed)
+    any_loss = any((c.get("realized_pnl_pct") or 0) < 0 for c in closed)
     return {
         "title": f"Position Exits ({len(closed)})",
         "color": 0xFF0000 if any_loss else 0x00FF00,

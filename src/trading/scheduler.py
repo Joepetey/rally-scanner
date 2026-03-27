@@ -623,6 +623,8 @@ class TradingScheduler:
                             ticker=ticker,
                             exit_reason=exit_reason,
                             fill_price=fill_price,
+                            realized_pnl_pct=pos.get("realized_pnl_pct"),
+                            bars_held=pos.get("bars_held"),
                         ))
                         if self._stream:
                             all_pos = self._load_cached_positions().get("positions", [])

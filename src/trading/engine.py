@@ -97,6 +97,8 @@ class ExitResult(BaseModel):
     exit_reason: str
     fill_price: float | None = None
     order_id: str | None = None
+    realized_pnl_pct: float | None = None
+    bars_held: int | None = None
 
 
 class FillNotification(BaseModel):
@@ -258,7 +260,7 @@ class AlertEngine:
         try:
             result = await execute_exit(ticker)
             fill = result.fill_price or price
-            await async_close_position(ticker, fill, reason)
+            closed = await async_close_position(ticker, fill, reason)
             log_order(
                 ticker, "sell", "market", result.qty,
                 f"exit_{reason}", result.order_id,
@@ -270,6 +272,8 @@ class AlertEngine:
                 exit_reason=reason,
                 fill_price=result.fill_price,
                 order_id=result.order_id,
+                realized_pnl_pct=closed.get("realized_pnl_pct") if closed else None,
+                bars_held=closed.get("bars_held") if closed else None,
             )
         except Exception:
             logger.exception("Alpaca exit failed for %s", ticker)
