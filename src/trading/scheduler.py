@@ -112,11 +112,11 @@ class TradingScheduler:
 
         # Concurrent exit guard: prevent double-exit for the same ticker
         self._exiting_tickers: set[str] = set()
-        self._exit_lock = asyncio.Lock()
+        self._exit_lock: asyncio.Lock  # assigned in start()
 
         # Snapshot fetch guard: prevent housekeeping IEX fallback and polling
         # from calling get_snapshots concurrently when is_connected flips state
-        self._snapshot_lock = asyncio.Lock()
+        self._snapshot_lock: asyncio.Lock  # assigned in start()
 
         # Housekeeping cycle counter for IEX coverage fallback (every 2 cycles ≈ 2 min)
         self._housekeeping_cycles: int = 0
@@ -149,6 +149,11 @@ class TradingScheduler:
     async def start(self) -> None:
         """Start stream (if enabled) and all housekeeping loops."""
         self._loop = asyncio.get_event_loop()
+        # Locks must be created after the event loop is running to avoid
+        # cross-loop errors if the scheduler is instantiated in a different
+        # async context than where it's used (e.g. per-test event loops).
+        self._exit_lock = asyncio.Lock()
+        self._snapshot_lock = asyncio.Lock()
 
         # Start stream if Alpaca + streaming both enabled
         if alpaca_enabled() and is_stream_enabled():

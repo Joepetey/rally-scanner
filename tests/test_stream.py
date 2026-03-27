@@ -471,6 +471,7 @@ class TestTradingSchedulerIntegration:
 
         from trading.scheduler import TradingScheduler
         scheduler = TradingScheduler(on_event=on_event)
+        scheduler._exit_lock = asyncio.Lock()
 
         async def slow_breach(ticker, pos, price, reason):
             exit_calls.append(ticker)
@@ -692,6 +693,7 @@ class TestStreamFallback:
         from trading.scheduler import TradingScheduler
 
         scheduler = TradingScheduler(on_event=AsyncMock())
+        scheduler._snapshot_lock = asyncio.Lock()
 
         call_order = []
 
