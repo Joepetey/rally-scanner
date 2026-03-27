@@ -332,7 +332,11 @@ async def cancel_order(order_id: str) -> bool:
         logger.info("Cancelled order %s", order_id)
         return True
     except Exception as e:
-        logger.warning("Failed to cancel order %s: %s", order_id, e)
+        # 42210000: order already filled — benign, the exit we wanted happened
+        if "42210000" in str(e):
+            logger.debug("Order %s already filled, cancel skipped", order_id)
+        else:
+            logger.warning("Failed to cancel order %s: %s", order_id, e)
         return False
 
 
@@ -355,7 +359,10 @@ def _execute_exit_sync(
                 client.cancel_order_by_id(oid)
                 logger.info("Cancelled OCO order %s for %s", oid, ticker)
             except Exception as e:
-                logger.warning("Could not cancel order %s for %s: %s", oid, ticker, e)
+                if "42210000" in str(e):
+                    logger.debug("Order %s for %s already filled, cancel skipped", oid, ticker)
+                else:
+                    logger.warning("Could not cancel order %s for %s: %s", oid, ticker, e)
         # Wait for Alpaca to release the held shares after cancellation
         time.sleep(0.5)
 
@@ -496,6 +503,34 @@ async def place_exit_orders(
             )
             return target_oid, stop_oid
         except Exception as e:
+            err_str = str(e)
+            # 40310000: shares already held for an existing OCO order.
+            # Parse the related_orders from the error body and recover those IDs
+            # so we stop retrying placement and treat the existing order as ours.
+            if "40310000" in err_str:
+                import json as _json
+                try:
+                    # Error body is the JSON dict portion of the exception string
+                    body_start = err_str.find("{")
+                    body = _json.loads(err_str[body_start:]) if body_start >= 0 else {}
+                    related = body.get("related_orders", [])
+                    if related:
+                        parent_oid = str(related[0])
+                        order = client.get_order_by_id(parent_oid)
+                        legs = order.legs or []
+                        target_oid = str(order.id)
+                        stop_oid = str(legs[0].id) if legs else target_oid
+                        logger.info(
+                            "Recovered existing OCO for %s from held-shares error: "
+                            "target_order=%s stop_order=%s",
+                            ticker, target_oid, stop_oid,
+                        )
+                        return target_oid, stop_oid
+                except Exception as recover_err:
+                    logger.warning(
+                        "Could not recover OCO IDs for %s after 40310000: %s",
+                        ticker, recover_err,
+                    )
             logger.warning("Failed to place OCO exit for %s: %s", ticker, e)
             return None, None
 

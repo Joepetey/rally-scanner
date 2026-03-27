@@ -321,9 +321,9 @@ class AlertEngine:
                         pos["ticker"], pos["qty"],
                         pos["target_price"], effective_stop,
                     )
-                    pos["target_order_id"] = t_oid
-                    pos["trail_order_id"] = s_oid
                     if t_oid or s_oid:
+                        pos["target_order_id"] = t_oid
+                        pos["trail_order_id"] = s_oid
                         if t_oid:
                             log_order(pos["ticker"], "sell", "limit",
                                       pos["qty"], "exit_target", t_oid, "pending")
@@ -339,7 +339,8 @@ class AlertEngine:
                             "target_order_id": t_oid,
                             "stop_order_id": s_oid,
                         })
-            await async_save_positions(fresh_state)
+            if orders_placed:
+                await async_save_positions(fresh_state)
 
         return HousekeepingResult(
             fills_confirmed=fills_confirmed,
