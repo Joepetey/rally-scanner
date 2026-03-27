@@ -2,13 +2,9 @@
 
 Thin notification sink: all trading logic lives in TradingScheduler.
 Receives typed events, converts them to Discord embeds, and sends them.
-
-Also exposes an HTTP API on $PORT (default 8080) for local tools to query
-positions from the Railway deployment.
 """
 
 import asyncio
-import json as _json
 import logging
 import os
 import queue
@@ -17,7 +13,6 @@ import traceback
 from collections.abc import Awaitable, Callable
 
 import discord
-from aiohttp import web
 from discord.ext import commands
 
 from core.persistence import load_manifest
@@ -37,8 +32,6 @@ from trading.engine import (
     StreamRecoveredEvent,
     WatchlistEvent,
 )
-from trading.positions import get_merged_positions
-
 from .agent import process_message
 from .notify import (
     _approaching_alert_embed,
@@ -65,41 +58,6 @@ RED = 0xFF0000
 BLUE = 0x0099FF
 GOLD = 0xFFD700
 GRAY = 0x95A5A6
-
-
-# ---------------------------------------------------------------------------
-# HTTP API server (runs alongside the Discord bot)
-# ---------------------------------------------------------------------------
-
-async def _handle_positions(request: web.Request) -> web.Response:
-    """Return merged Alpaca + DB positions as JSON."""
-    api_key = os.environ.get("RALLY_API_KEY")
-    if api_key:
-        auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {api_key}":
-            return web.json_response({"error": "unauthorized"}, status=401)
-    state = await get_merged_positions()
-    return web.Response(
-        text=_json.dumps(state), content_type="application/json",
-    )
-
-
-async def _handle_health(request: web.Request) -> web.Response:
-    """Simple health check."""
-    return web.json_response({"status": "ok"})
-
-
-async def start_api_server() -> None:
-    """Start the aiohttp API server alongside the Discord bot."""
-    app = web.Application()
-    app.router.add_get("/api/positions", _handle_positions)
-    app.router.add_get("/health", _handle_health)
-    port = int(os.environ.get("PORT", 8080))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("API server listening on port %d", port)
 
 
 # ---------------------------------------------------------------------------

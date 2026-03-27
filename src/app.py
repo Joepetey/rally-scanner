@@ -11,7 +11,8 @@ import signal
 
 from db.pool import init_pool
 from db.schema import init_schema
-from integrations.discord.bot import make_bot, make_discord_event_handler, start_api_server
+from api import start_api_server
+from integrations.discord.bot import make_bot, make_discord_event_handler
 from log import setup_logging
 from monitoring import init_sentry
 from trading.scheduler import TradingScheduler
