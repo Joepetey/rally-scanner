@@ -107,6 +107,13 @@ class TradingScheduler:
         self._ran_midday_2: str = ""
         self._ran_retrain: str = ""
 
+        # Concurrent exit guard: prevent double-exit for the same ticker
+        self._exiting_tickers: set[str] = set()
+        self._exit_lock = asyncio.Lock()
+
+        # Housekeeping cycle counter for IEX coverage fallback (every 2 cycles ≈ 2 min)
+        self._housekeeping_cycles: int = 0
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -410,19 +417,60 @@ class TradingScheduler:
     # ------------------------------------------------------------------
 
     async def _housekeeping_loop(self) -> None:
-        """1-minute timer: fill checks, OCO placement, position sync."""
+        """1-minute timer: fill checks, OCO placement, position sync.
+
+        Also handles stale-price warnings and IEX coverage fallback every
+        2 cycles (~2 min) when the stream is connected but a ticker has had
+        no trade event.
+        """
         while True:
             await asyncio.sleep(60)
             if not self._engine.is_market_open():
                 continue
             try:
+                self._housekeeping_cycles += 1
                 state = load_positions()
-                result = await self._engine.run_housekeeping(state.get("positions", []))
+                positions = state.get("positions", [])
+                result = await self._engine.run_housekeeping(positions)
                 if result.fills_confirmed or result.orders_placed:
                     await self._on_event(result)
                     if self._stream:
                         all_pos = load_positions().get("positions", [])
                         self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+
+                # Stale price check + IEX REST fallback every 2 housekeeping cycles
+                if self._stream and self._stream.is_connected and self._housekeeping_cycles % 2 == 0:
+                    stale = self._stream.get_stale_tickers(stale_seconds=300.0)
+                    if stale:
+                        logger.warning(
+                            "No stream trade in 5 min for %d ticker(s): %s — "
+                            "possible low-volume or subscription issue",
+                            len(stale), sorted(stale),
+                        )
+                    # IEX fallback: evaluate stale tickers via REST snapshot
+                    if stale and alpaca_enabled():
+                        try:
+                            snapshots = await get_snapshots(stale)
+                            fresh_state = load_positions()
+                            fresh_positions = fresh_state.get("positions", [])
+                            events = await self._engine.check_prices(
+                                [p for p in fresh_positions if p["ticker"] in snapshots],
+                                snapshots,
+                            )
+                            for event in events:
+                                await self._on_event(event)
+                                if event.alert_type in ("stop_breached", "target_breached"):
+                                    pos = next(
+                                        (p for p in fresh_positions if p["ticker"] == event.ticker),
+                                        None,
+                                    )
+                                    if pos:
+                                        await self._execute_breach_guarded(
+                                            event.ticker, pos, event.current_price, event.alert_type,
+                                        )
+                        except Exception:
+                            logger.exception("IEX fallback evaluation failed")
+
             except Exception:
                 logger.exception("Housekeeping loop error")
 
@@ -459,16 +507,9 @@ class TradingScheduler:
                     if event.alert_type in ("stop_breached", "target_breached") and alpaca_enabled():
                         pos = next((p for p in positions if p["ticker"] == event.ticker), None)
                         if pos:
-                            exit_result = await self._engine.execute_breach(
-                                event.ticker, pos, event.current_price,
-                                event.alert_type.replace("_breached", ""),
+                            await self._execute_breach_guarded(
+                                event.ticker, pos, event.current_price, event.alert_type,
                             )
-                            if exit_result:
-                                await self._on_event(exit_result)
-                                await self.run_risk_evaluation()
-                                if self._stream:
-                                    all_pos = load_positions().get("positions", [])
-                                    self._stream.update_subscriptions({p["ticker"] for p in all_pos})
 
                 # Update adaptive interval
                 if PARAMS.adaptive_alerts_enabled:
@@ -597,18 +638,38 @@ class TradingScheduler:
         await self._on_event(event)
 
         if event.alert_type in ("stop_breached", "target_breached") and alpaca_enabled():
-            reason = event.alert_type.replace("_breached", "")
-            exit_result = await self._engine.execute_breach(event.ticker, pos, price, reason)
+            await self._execute_breach_guarded(event.ticker, pos, price, event.alert_type)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _execute_breach_guarded(
+        self, ticker: str, pos: dict, price: float, alert_type: str,
+    ) -> None:
+        """Execute a breach exit with concurrent-exit guard.
+
+        Prevents race between stream-triggered exit and reconciliation-triggered
+        exit for the same ticker running simultaneously.
+        """
+        async with self._exit_lock:
+            if ticker in self._exiting_tickers:
+                logger.info("Exit already in progress for %s — skipping duplicate", ticker)
+                return
+            self._exiting_tickers.add(ticker)
+
+        try:
+            reason = alert_type.replace("_breached", "")
+            exit_result = await self._engine.execute_breach(ticker, pos, price, reason)
             if exit_result:
                 await self._on_event(exit_result)
                 await self.run_risk_evaluation()
                 if self._stream:
                     all_pos = load_positions().get("positions", [])
                     self._stream.update_subscriptions({p["ticker"] for p in all_pos})
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+        finally:
+            async with self._exit_lock:
+                self._exiting_tickers.discard(ticker)
 
     async def _should_use_fast_alerts(self, positions: list[dict]) -> bool:
         """True if any position is near its stop or portfolio is drawing down."""

@@ -203,42 +203,54 @@ class AlpacaStreamManager:
 
         stream = StockDataStream(api_key, secret_key, feed=self._get_feed())
         stream.subscribe_trades(self._handle_trade, *symbols)
+        logger.info(
+            "Stream: subscribing to %d symbols (feed=%s): %s",
+            len(symbols), self._feed_name, sorted(symbols),
+        )
 
         with self._lock:
             self._stream = stream
 
-        logger.info("Stream: connecting (feed=%s, symbols=%s)", self._feed_name, sorted(symbols))
+        logger.info("Stream: connecting (feed=%s)", self._feed_name)
 
         try:
             stream.run()  # blocks; creates its own event loop
+            logger.info("Stream: disconnected cleanly")
         finally:
             with self._lock:
                 self._stream = None
             self._connected.clear()
+            logger.info("Stream: connection closed")
 
     def _supervisor_loop(self) -> None:
         """Restart the stream on unexpected exit with exponential backoff."""
         backoff = 1.0
         max_backoff = 60.0
+        attempt = 0
 
         while not self._stop_event.is_set():
+            attempt += 1
             try:
                 self._run_stream()
                 if self._stop_event.is_set():
                     break
-                # Unexpected exit — log and restart
+                # Unexpected exit (not via stop()) — schedule restart
                 logger.warning(
-                    "Stream exited unexpectedly, restarting in %.0fs", backoff,
+                    "Stream exited unexpectedly (attempt %d), restarting in %.0fs",
+                    attempt, backoff,
                 )
             except Exception as e:
-                logger.warning("Stream error: %s — restarting in %.0fs", e, backoff)
+                logger.warning(
+                    "Stream error (attempt %d): %s — restarting in %.0fs",
+                    attempt, e, backoff,
+                )
 
             self._connected.clear()
 
-            # Sleep with interruptible wait so stop() takes effect quickly
-            logger.info("Stream: reconnect attempt in %.0fs", backoff)
+            logger.info("Stream: reconnect attempt %d in %.0fs", attempt + 1, backoff)
             self._stop_event.wait(timeout=backoff)
             if self._stop_event.is_set():
                 break
 
             backoff = min(backoff * 2, max_backoff)
+            logger.info("Stream: reconnect attempt %d starting", attempt + 1)
