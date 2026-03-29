@@ -403,7 +403,10 @@ def _execute_exit_sync(
         # Wait for Alpaca to release the held shares after cancellation
         time.sleep(0.5)
 
-    alpaca_sym = _alpaca_symbol(ticker)
+    # close_position puts the symbol in the URL path — slashes cause a 404 because
+    # the SDK doesn't URL-encode them. Alpaca stores crypto positions as "BTCUSD"
+    # (no slash), so strip "/" for the close call. Equity symbols are unaffected.
+    alpaca_sym = _alpaca_symbol(ticker).replace("/", "")
 
     # Retry close in case cancel hasn't fully released held shares
     last_err = None
