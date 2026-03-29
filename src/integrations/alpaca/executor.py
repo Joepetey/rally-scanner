@@ -32,6 +32,7 @@ except ImportError:
 
 # local
 import config
+from core.data import fetch_quotes
 from db.positions import (
     enqueue_signal,
     load_all_position_meta,
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 class OrderResult(BaseModel):
     ticker: str
     side: str
-    qty: int
+    qty: float
     success: bool
     order_id: str | None = None
     fill_price: float | None = None
@@ -69,6 +70,12 @@ def has_alpaca_keys() -> bool:
     return bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
 
 
+def _alpaca_symbol(ticker: str) -> str:
+    """Convert internal ticker key to Alpaca symbol format (e.g. BTC → BTC/USD)."""
+    if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
+        return config.ASSETS[ticker].ticker.replace("-", "/")
+    return ticker
+
 
 async def get_account_equity() -> float:
     def _sync():
@@ -80,36 +87,58 @@ async def get_account_equity() -> float:
 
 
 async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
-    # Filter to equity tickers only
     equity_tickers = [
         t for t in tickers
         if t in config.ASSETS and config.ASSETS[t].asset_class == "equity"
     ]
-    if not equity_tickers:
-        return {}
+    crypto_tickers = [
+        t for t in tickers
+        if t in config.ASSETS and config.ASSETS[t].asset_class == "crypto"
+    ]
 
-    def _sync():
-        client = _data_client()
-        snapshots = client.get_stock_snapshot(
-            StockSnapshotRequest(symbol_or_symbols=equity_tickers)
-        )
-        result: dict[str, dict] = {}
-        for ticker in equity_tickers:
-            snap = snapshots.get(ticker)
-            if not snap:
-                continue
-            trade = snap.latest_trade
-            quote = snap.latest_quote
-            result[ticker] = {
-                "price": float(trade.price) if trade else 0,
-                "bid": float(quote.bid_price) if quote else 0,
-                "ask": float(quote.ask_price) if quote else 0,
-                "bid_size": float(quote.bid_size) if quote else 0,
-                "ask_size": float(quote.ask_size) if quote else 0,
-            }
-        return result
+    result: dict[str, dict] = {}
 
-    return await asyncio.to_thread(_sync)
+    if equity_tickers:
+        def _sync():
+            client = _data_client()
+            snapshots = client.get_stock_snapshot(
+                StockSnapshotRequest(symbol_or_symbols=equity_tickers)
+            )
+            equity_result: dict[str, dict] = {}
+            for ticker in equity_tickers:
+                snap = snapshots.get(ticker)
+                if not snap:
+                    continue
+                trade = snap.latest_trade
+                quote = snap.latest_quote
+                equity_result[ticker] = {
+                    "price": float(trade.price) if trade else 0,
+                    "bid": float(quote.bid_price) if quote else 0,
+                    "ask": float(quote.ask_price) if quote else 0,
+                    "bid_size": float(quote.bid_size) if quote else 0,
+                    "ask_size": float(quote.ask_size) if quote else 0,
+                }
+            return equity_result
+
+        result.update(await asyncio.to_thread(_sync))
+
+    if crypto_tickers:
+        # Use yfinance for crypto (BTC-USD format)
+        yf_tickers = [config.ASSETS[t].ticker for t in crypto_tickers]
+        yf_data = await asyncio.to_thread(fetch_quotes, yf_tickers)
+        for t in crypto_tickers:
+            yf_ticker = config.ASSETS[t].ticker.upper()
+            data = yf_data.get(yf_ticker)
+            if data and "error" not in data:
+                result[t] = {
+                    "price": data["price"],
+                    "bid": 0,
+                    "ask": 0,
+                    "bid_size": 0,
+                    "ask_size": 0,
+                }
+
+    return result
 
 
 
@@ -230,10 +259,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             logger.info("Skipping %s: already in open positions", ticker)
             continue
 
-        # Skip crypto
-        if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
-            continue
-
+        is_crypto = ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto"
         price = sig.get("entry_price") or sig["close"]
         size = sig["size"]
         available = max_exposure - current_exposure
@@ -273,23 +299,34 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             results.append(group_skip)
             continue
 
-        qty = int(equity * size / price)
-        if qty < 1:
-            results.append(OrderResult(
-                ticker=ticker, side="buy", qty=0, success=False,
-                error="Insufficient equity for 1 share",
-            ))
-            continue
+        # Crypto supports fractional shares; equity requires whole shares
+        if is_crypto:
+            qty = round(equity * size / price, 8)
+            if qty <= 0:
+                results.append(OrderResult(
+                    ticker=ticker, side="buy", qty=0, success=False,
+                    error="Insufficient equity for fractional crypto order",
+                ))
+                continue
+        else:
+            qty = int(equity * size / price)
+            if qty < 1:
+                results.append(OrderResult(
+                    ticker=ticker, side="buy", qty=0, success=False,
+                    error="Insufficient equity for 1 share",
+                ))
+                continue
 
         try:
             # Place market buy entry
             order = await asyncio.to_thread(
                 client.submit_order,
                 MarketOrderRequest(
-                    symbol=ticker,
+                    symbol=_alpaca_symbol(ticker),
                     qty=qty,
                     side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY,
+                    # Crypto trades 24/7 — use GTC; equities use DAY
+                    time_in_force=TimeInForce.GTC if is_crypto else TimeInForce.DAY,
                 ),
             )
             fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
@@ -366,11 +403,13 @@ def _execute_exit_sync(
         # Wait for Alpaca to release the held shares after cancellation
         time.sleep(0.5)
 
+    alpaca_sym = _alpaca_symbol(ticker)
+
     # Retry close in case cancel hasn't fully released held shares
     last_err = None
     for attempt in range(3):
         try:
-            order = client.close_position(symbol_or_asset_id=ticker)
+            order = client.close_position(symbol_or_asset_id=alpaca_sym)
             fill_price = (
                 float(order.filled_avg_price) if order.filled_avg_price else None
             )
@@ -414,16 +453,11 @@ async def execute_exit(ticker: str, trail_order_id: str | None = None) -> OrderR
 async def execute_exits(closed: list[dict]) -> list[OrderResult]:
     """Execute multiple exits sharing a single client."""
     results: list[OrderResult] = []
-    equity_closed = [
-        pos for pos in closed
-        if not (pos["ticker"] in config.ASSETS
-                and config.ASSETS[pos["ticker"]].asset_class == "crypto")
-    ]
-    if not equity_closed:
+    if not closed:
         return results
 
     client = _trading_client()
-    for pos in equity_closed:
+    for pos in closed:
         ticker = pos["ticker"]
         trail_oid = pos.get("trail_order_id")
         target_oid = pos.get("target_order_id")
@@ -442,13 +476,13 @@ async def execute_exits(closed: list[dict]) -> list[OrderResult]:
 
 
 async def place_trailing_stop(
-    ticker: str, qty: int, trail_pct: float,
+    ticker: str, qty: float, trail_pct: float,
 ) -> str | None:
     """Place a standalone trailing stop order. Returns trail_order_id or None."""
     def _sync():
         client = _trading_client()
         order = client.submit_order(TrailingStopOrderRequest(
-            symbol=ticker,
+            symbol=_alpaca_symbol(ticker),
             qty=qty,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.GTC,
@@ -469,7 +503,7 @@ async def place_trailing_stop(
 
 
 async def place_exit_orders(
-    ticker: str, qty: int, target_price: float, stop_price: float,
+    ticker: str, qty: float, target_price: float, stop_price: float,
 ) -> tuple[str | None, str | None]:
     """Place an OCO exit: GTC limit sell at target + stop sell at stop_price.
 
@@ -483,7 +517,7 @@ async def place_exit_orders(
         client = _trading_client()
         try:
             parent = client.submit_order(OrderRequest(
-                symbol=ticker,
+                symbol=_alpaca_symbol(ticker),
                 qty=qty,
                 side=OrderSide.SELL,
                 type=OrderType.LIMIT,
@@ -664,7 +698,9 @@ async def get_recent_sell_fills(tickers: list[str]) -> dict[str, float]:
                 continue
             if order.side != OrderSide.SELL:
                 continue
-            sym = str(order.symbol)
+            raw_sym = str(order.symbol)
+            # Normalize Alpaca crypto symbols (BTC/USD → BTC)
+            sym = raw_sym.split("/")[0] if "/" in raw_sym else raw_sym
             if sym in tickers_set and order.filled_avg_price:
                 fills[sym] = float(order.filled_avg_price)
         return fills

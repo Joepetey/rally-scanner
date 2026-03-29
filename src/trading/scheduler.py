@@ -109,6 +109,8 @@ class TradingScheduler:
         self._ran_midday_1: str = ""
         self._ran_midday_2: str = ""
         self._ran_retrain: str = ""
+        # Weekend crypto scan dedup: "{date}_{6h_slot}" (slot 0=midnight,1=6am,2=noon,3=6pm)
+        self._ran_weekend_scan: str = ""
 
         # Concurrent exit guard: prevent double-exit for the same ticker
         self._exiting_tickers: set[str] = set()
@@ -209,8 +211,15 @@ class TradingScheduler:
     # Public actions (callable from slash commands / agent)
     # ------------------------------------------------------------------
 
-    async def run_daily_scan(self, scan_type: str = "daily") -> None:
-        """Run the full scan pipeline and emit a ScanResult event."""
+    async def run_daily_scan(
+        self, scan_type: str = "daily", tickers: list[str] | None = None,
+    ) -> None:
+        """Run the full scan pipeline and emit a ScanResult event.
+
+        Args:
+            scan_type: label for the scan (daily, morning, weekend_crypto, etc.)
+            tickers: optional list of tickers to restrict the scan to; None = all.
+        """
         logger.info("Scheduler: starting %s scan", scan_type)
         _event_id = log_scheduler_event("scan")
         t0 = _time.time()
@@ -226,7 +235,7 @@ class TradingScheduler:
             ))
             return
 
-        results = await asyncio.to_thread(scan_all, None, False, "conservative")
+        results = await asyncio.to_thread(scan_all, tickers, False, "conservative")
         if not results:
             finish_scheduler_event(_event_id, "success", n_signals=0, n_exits=0,
                                    duration_s=round(_time.time() - t0, 1))
@@ -471,7 +480,7 @@ class TradingScheduler:
         """
         while True:
             await asyncio.sleep(60)
-            if not self._engine.is_market_open():
+            if not self._engine.is_market_open() and not self._has_open_crypto_positions():
                 continue
             try:
                 self._housekeeping_cycles += 1
@@ -558,7 +567,7 @@ class TradingScheduler:
         """Price alert polling — active when stream is disconnected or disabled."""
         while True:
             await asyncio.sleep(60)
-            if not self._engine.is_market_open():
+            if not self._engine.is_market_open() and not self._has_open_crypto_positions():
                 continue
             # Skip polling while stream is connected
             if self._stream and self._stream.is_connected:
@@ -646,13 +655,25 @@ class TradingScheduler:
                 logger.exception("Regime loop error")
 
     async def _scan_loop(self) -> None:
-        """Time-based: morning scan (9:30 AM), daily scan (4:30 PM), midday scans (11 AM, 1 PM) ET weekdays."""
+        """Time-based scan loop.
+
+        Weekdays: morning (9:30 AM), daily (4:30 PM), midday (11 AM, 1 PM) ET.
+        Weekends: crypto-only scan every 6 hours (0, 6, 12, 18 ET).
+        """
         while True:
             await asyncio.sleep(30)
             now = datetime.now(_ET)
-            if now.weekday() >= 5:
-                continue
             today = now.date().isoformat()
+
+            if now.weekday() >= 5:
+                # Weekend: crypto-only scan every 6 hours
+                try:
+                    await self._maybe_run_weekend_crypto_scan(now, today)
+                except Exception:
+                    logger.exception("Weekend crypto scan error")
+                continue
+
+            # Weekday scans
             try:
                 # 9:30 AM ET — at market open so scan_all receives opening-print prices
                 # rather than pre-market prices. execute_entries submits market orders
@@ -676,6 +697,35 @@ class TradingScheduler:
                         await self.run_midday_scan()
             except Exception:
                 logger.exception("Scan loop error")
+
+    async def _maybe_run_weekend_crypto_scan(self, now: datetime, today: str) -> None:
+        """Run a crypto-only scan every 6 hours on weekends."""
+        from config import ASSETS
+
+        # Fire at hours 0, 6, 12, 18 ET within a 5-minute window
+        if now.hour % 6 != 0 or now.minute >= 5:
+            return
+
+        run_key = f"{today}_{now.hour}"
+        if self._ran_weekend_scan == run_key:
+            return
+
+        crypto_tickers = [t for t, cfg in ASSETS.items() if cfg.asset_class == "crypto"]
+        if not crypto_tickers:
+            return
+
+        # Only run if at least one crypto ticker has a trained model
+        manifest = load_manifest()
+        if not manifest or not any(t in manifest for t in crypto_tickers):
+            logger.debug("Weekend crypto scan: no trained crypto models found, skipping")
+            return
+
+        self._ran_weekend_scan = run_key
+        logger.info(
+            "Weekend crypto scan: %s (tickers=%s)",
+            run_key, sorted(crypto_tickers),
+        )
+        await self.run_daily_scan("weekend_crypto", tickers=crypto_tickers)
 
     async def _retrain_loop(self) -> None:
         """Time-based: weekly retrain Sunday 6 PM ET."""
@@ -812,6 +862,15 @@ class TradingScheduler:
                         break
         await async_save_positions(state)
         self._invalidate_positions_cache()
+
+    def _has_open_crypto_positions(self) -> bool:
+        """True if any open position is a crypto asset."""
+        from config import ASSETS
+        positions = self._load_cached_positions().get("positions", [])
+        return any(
+            ASSETS.get(p["ticker"]) and ASSETS[p["ticker"]].asset_class == "crypto"
+            for p in positions
+        )
 
     def _save_watchlist(self, results: list, positions: dict) -> None:
         """Persist scan results as watchlist for agent queries."""

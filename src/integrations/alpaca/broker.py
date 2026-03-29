@@ -28,9 +28,16 @@ def _data_client() -> "StockHistoricalDataClient":
     )
 
 
-def _safe_qty(raw) -> int:
-    """Convert Alpaca's qty field (may be str, float, or Decimal) to int."""
-    return int(float(str(raw)))
+def _safe_qty(raw) -> float:
+    """Convert Alpaca's qty field (may be str, float, or Decimal) to float."""
+    return float(str(raw))
+
+
+def _normalize_alpaca_symbol(symbol: str) -> str:
+    """Convert Alpaca symbol to internal ticker key (e.g. BTC/USD → BTC)."""
+    if "/" in symbol:
+        return symbol.split("/")[0]
+    return symbol
 
 
 async def get_all_positions() -> list[dict]:
@@ -40,7 +47,7 @@ async def get_all_positions() -> list[dict]:
         positions = client.get_all_positions()
         return [
             {
-                "ticker": str(p.symbol),
+                "ticker": _normalize_alpaca_symbol(str(p.symbol)),
                 "qty": _safe_qty(p.qty),
                 "avg_entry_price": float(str(p.avg_entry_price)),
                 "market_value": float(str(p.market_value)),

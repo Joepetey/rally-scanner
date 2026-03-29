@@ -104,7 +104,7 @@ class ExitResult(BaseModel):
 class FillNotification(BaseModel):
     ticker: str
     fill_price: float
-    qty: int | None = None
+    qty: float | None = None
     stop_price: float = 0.0
     target_price: float = 0.0
 

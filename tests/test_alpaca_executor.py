@@ -239,13 +239,17 @@ def _apply_noop_patches(patches):
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_skips_crypto():
-    """Crypto tickers should be skipped."""
+async def test_execute_entries_crypto_uses_slash_symbol():
+    """Crypto entries use BTC/USD Alpaca symbol format and fractional qty."""
     signals = [
         {"ticker": "BTC", "entry_price": 50000.0, "size": 0.10},
     ]
 
+    mock_order = MagicMock()
+    mock_order.id = "crypto-order-id"
+    mock_order.filled_avg_price = 50000.0
     mock_client = MagicMock()
+    mock_client.submit_order.return_value = mock_order
     _empty = {"positions": [], "closed_today": [], "last_updated": ""}
     with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
          patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0), \
@@ -258,8 +262,15 @@ async def test_execute_entries_skips_crypto():
          patch("integrations.alpaca.executor.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
-    assert len(results) == 0
-    mock_client.submit_order.assert_not_called()
+    assert len(results) == 1
+    result = results[0]
+    assert result.success
+    # qty should be fractional: 100_000 * 0.10 / 50_000 = 0.2
+    import pytest as _pytest
+    assert result.qty == _pytest.approx(0.2, rel=1e-6)
+    # Alpaca symbol must use slash format
+    submitted = mock_client.submit_order.call_args[0][0]
+    assert submitted.symbol == "BTC/USD"
 
 
 @pytest.mark.asyncio
@@ -772,10 +783,27 @@ async def test_get_snapshots():
 
 
 @pytest.mark.asyncio
-async def test_get_snapshots_filters_crypto():
-    """Crypto tickers should be filtered out — only equity tickers sent."""
-    result = await get_snapshots(["BTC", "ETH"])
-    assert result == {}
+async def test_get_snapshots_returns_crypto_via_yfinance():
+    """Crypto tickers are fetched via yfinance and returned alongside equity."""
+    from unittest.mock import patch as _patch
+
+    mock_yf_data = {
+        "BTC-USD": {"price": 95000.0, "bid": 0, "ask": 0, "error": None},
+    }
+    # fetch_quotes is called with the yfinance-format ticker ("BTC-USD")
+    # and keyed by uppercase symbol
+    mock_yf_quotes = {
+        "BTC-USD": {"price": 95000.0, "prev_close": 94000.0,
+                    "change": 1000.0, "change_pct": 1.06,
+                    "open": 94500.0, "day_high": 96000.0, "day_low": 94000.0,
+                    "volume": 10000, "market_cap": None, "currency": "USD"},
+    }
+    with _patch("integrations.alpaca.executor.fetch_quotes", return_value=mock_yf_quotes):
+        result = await get_snapshots(["BTC"])
+
+    assert "BTC" in result
+    assert result["BTC"]["price"] == 95000.0
+    assert result["BTC"]["bid"] == 0
 
 
 # ---------------------------------------------------------------------------
