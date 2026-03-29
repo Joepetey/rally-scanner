@@ -783,6 +783,10 @@ class TradingScheduler:
 
         if event.alert_type in ("stop_breached", "target_breached") and alpaca_enabled():
             await self._execute_breach_guarded(event.ticker, pos, price, event.alert_type)
+            # run_risk_evaluation inside _execute_breach_guarded can mutate DB
+            # (tighten stops, close positions) after re-populating the cache —
+            # invalidate here so the next read reflects the final persisted state.
+            self._invalidate_positions_cache()
 
     # ------------------------------------------------------------------
     # Helpers
