@@ -20,6 +20,7 @@ from integrations.alpaca.executor import (
     cancel_exit_orders,
     check_pending_fills,
     execute_exit,
+    get_recent_sell_fills,
     is_enabled as alpaca_enabled,
     place_exit_orders,
 )
@@ -253,18 +254,25 @@ class AlertEngine:
         await cancel_exit_orders(pos.get("target_order_id"), pos.get("trail_order_id"))
         try:
             result = await execute_exit(ticker)
-            fill = result.fill_price or price
+            if result.already_closed:
+                # OCO/trailing stop already filled on the broker — fetch the actual fill
+                # price so DB closes with the real execution price, not the current quote.
+                broker_fills = await get_recent_sell_fills([ticker])
+                fill = broker_fills.get(ticker) or price
+                reason = "oco_fill"
+            else:
+                fill = result.fill_price or price
             closed = await async_close_position(ticker, fill, reason)
             log_order(
                 ticker, "sell", "market", result.qty,
                 f"exit_{reason}", result.order_id,
                 "filled" if result.success else "failed",
-                result.fill_price, result.error,
+                fill, result.error,
             )
             return ExitResult(
                 ticker=ticker,
                 exit_reason=reason,
-                fill_price=result.fill_price,
+                fill_price=fill,
                 order_id=result.order_id,
                 realized_pnl_pct=closed.get("realized_pnl_pct") if closed else None,
                 bars_held=closed.get("bars_held") if closed else None,
