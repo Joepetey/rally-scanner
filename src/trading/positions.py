@@ -377,14 +377,10 @@ async def update_fill_prices(fills: dict[str, float]) -> int:
                 pos["entry_price"] = fill_price
                 pos["order_id"] = None
 
-                # Recalibrate stops to fill price so they're relative to actual entry, not signal close.
-                # Only touch stop_price if it's off by >0.1% of fill (avoids clobbering range_low stops
-                # that happened to be set correctly).
+                # Recalibrate trailing_stop and highest_close to fill price.
+                # stop_price is left alone — it's set to range_low (ML support level) and is
+                # still valid regardless of fill slippage.
                 p = PARAMS
-                expected_stop = fill_price * (1 - p.fallback_stop_pct)
-                if abs(pos.get("stop_price", 0) - expected_stop) / fill_price > 0.001:
-                    pos["stop_price"] = round(expected_stop, 4)
-
                 atr_val = pos.get("atr", fill_price * p.default_atr_pct)
                 pos["trailing_stop"] = round(fill_price - p.trailing_stop_atr_mult * atr_val, 4)
                 pos["highest_close"] = fill_price
