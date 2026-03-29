@@ -81,6 +81,8 @@ class RallyBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
+        # Set by app.py after TradingScheduler.start() so !simulate can reach the stream
+        self.scheduler = None
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
@@ -320,6 +322,73 @@ def make_bot(token: str) -> RallyBot:
         except Exception as e:
             logger.exception("Retrain task failed")
             await channel.send(f"❌ **Retraining failed:** {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Simulation command — !simulate <scenario> [equity]
+    # ------------------------------------------------------------------
+    @bot.command(name="simulate")
+    async def simulate_command(ctx: commands.Context, scenario: str = "", *, rest: str = "") -> None:
+        """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""
+        from simulation.runner import SimulationRunner
+
+        # Parse optional equity override from remaining args
+        equity_override: float = 0.0
+        if rest.strip():
+            try:
+                equity_override = float(rest.strip())
+            except ValueError:
+                await ctx.send(f"⚠️ Invalid equity value: `{rest.strip()}` — must be a number.")
+                return
+
+        if not scenario:
+            await ctx.send(
+                "Usage: `!simulate <scenario> [equity]`\n"
+                "Scenarios: `target` `stop` `trail` `time`"
+            )
+            return
+
+        scheduler = ctx.bot.scheduler
+        if scheduler is None:
+            await ctx.send("⚠️ Scheduler not initialised — cannot run simulation.")
+            return
+
+        # Resolve equity: use override if provided, else fetch from Alpaca
+        if equity_override > 0:
+            equity = equity_override
+        else:
+            try:
+                from integrations.alpaca.executor import get_account_equity
+                equity = await get_account_equity()
+            except Exception as e:
+                await ctx.send(f"⚠️ Could not fetch account equity: {e}")
+                return
+
+        inject_fn = scheduler._stream.inject_trade if scheduler._stream else None
+
+        async def send_embed(embed_dict: dict) -> None:
+            await ctx.send(embed=discord.Embed.from_dict(embed_dict))
+
+        runner = SimulationRunner(
+            inject_fn=inject_fn,
+            invalidate_cache_fn=scheduler._invalidate_positions_cache,
+        )
+
+        await ctx.send(
+            f"▶️ **Simulation starting** — scenario: `{scenario}` | equity: `${equity:,.0f}`\n"
+            f"BTC paper order will be placed. Results follow..."
+        )
+        result = await runner.run(scenario, equity, send_embed)
+
+        if result.success:
+            pnl = result.realized_pnl_pct or 0.0
+            sign = "+" if pnl >= 0 else ""
+            await ctx.send(
+                f"✅ **Simulation complete** — `{scenario}`\n"
+                f"Entry: `${result.entry_price:,.2f}` → Exit: `${result.exit_price:,.2f}`\n"
+                f"Reason: `{result.exit_reason}` | PnL: `{sign}{pnl:.2f}%`"
+            )
+        else:
+            await ctx.send(f"❌ **Simulation failed** — `{scenario}`\n{result.error}")
 
     # ------------------------------------------------------------------
     # Message handler for natural language interaction via Claude

@@ -12,7 +12,7 @@ import zoneinfo
 from collections.abc import Awaitable, Callable
 from datetime import date as _date, datetime
 
-from config import PARAMS
+from config import ASSETS, PARAMS
 from core.data import fetch_quotes
 from core.persistence import load_manifest
 from db.events import finish_scheduler_event, log_order, log_scheduler_event
@@ -755,7 +755,10 @@ class TradingScheduler:
         Evaluates the ticker synchronously then dispatches async work
         back to the main event loop via run_coroutine_threadsafe.
         """
-        if not self._loop or not self._engine.is_market_open():
+        if not self._loop:
+            return
+        is_crypto = bool(ASSETS.get(ticker) and ASSETS[ticker].asset_class == "crypto")
+        if not is_crypto and not self._engine.is_market_open():
             return
 
         state = self._load_cached_positions()

@@ -49,6 +49,10 @@ async def main() -> None:
     scheduler = TradingScheduler(on_event=on_event)
     await scheduler.start()
 
+    # Give the bot access to the scheduler so !simulate can reach the stream
+    if bot:
+        bot.scheduler = scheduler
+
     # API server always starts
     await start_api_server()
 

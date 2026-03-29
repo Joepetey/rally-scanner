@@ -66,6 +66,17 @@ class TestAlpacaStreamManager:
         assert AlpacaStreamManager._is_equity("BTC-USD") is False
         assert AlpacaStreamManager._is_equity("ETH-USD") is False
 
+    def test_is_crypto_internal_key(self):
+        mgr, _ = self._make_mgr()
+        assert mgr._is_crypto("BTC") is True
+        assert mgr._is_crypto("ETH") is True
+        assert mgr._is_crypto("AAPL") is False
+        assert mgr._is_crypto("UNKNOWN") is False
+
+    def test_to_alpaca_crypto_symbol(self):
+        assert AlpacaStreamManager._to_alpaca_crypto_symbol("BTC") == "BTC/USD"
+        assert AlpacaStreamManager._to_alpaca_crypto_symbol("ETH") == "ETH/USD"
+
     # ----------------------------------------------------------------
     # start / stop lifecycle
     # ----------------------------------------------------------------
@@ -74,6 +85,7 @@ class TestAlpacaStreamManager:
         mgr, _ = self._make_mgr()
         # Prevent real stream connection
         monkeypatch.setattr(mgr, "_run_stream", lambda: time.sleep(10))
+        monkeypatch.setattr(mgr, "_run_crypto_stream", lambda: time.sleep(10))
         monkeypatch.setenv("ALPACA_API_KEY", "fake")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "fake")
 
@@ -85,20 +97,23 @@ class TestAlpacaStreamManager:
         mgr.stop()
         mgr._thread.join(timeout=1)
 
-    def test_start_filters_crypto(self, monkeypatch):
+    def test_start_splits_equity_and_crypto(self, monkeypatch):
         mgr, _ = self._make_mgr()
         monkeypatch.setattr(mgr, "_run_stream", lambda: time.sleep(10))
+        monkeypatch.setattr(mgr, "_run_crypto_stream", lambda: time.sleep(10))
         monkeypatch.setenv("ALPACA_API_KEY", "fake")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "fake")
 
-        mgr.start({"AAPL", "BTC-USD", "ETH-USD"})
+        mgr.start({"AAPL", "BTC", "ETH"})
         time.sleep(0.05)
         assert mgr._symbols == {"AAPL"}
+        assert mgr._crypto_symbols == {"BTC", "ETH"}
         mgr.stop()
 
     def test_stop_sets_stop_event(self, monkeypatch):
         mgr, _ = self._make_mgr()
         monkeypatch.setattr(mgr, "_run_stream", lambda: time.sleep(10))
+        monkeypatch.setattr(mgr, "_run_crypto_stream", lambda: time.sleep(10))
         monkeypatch.setenv("ALPACA_API_KEY", "fake")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "fake")
 
@@ -113,6 +128,7 @@ class TestAlpacaStreamManager:
         def fake_run():
             time.sleep(5)
         monkeypatch.setattr(mgr, "_run_stream", fake_run)
+        monkeypatch.setattr(mgr, "_run_crypto_stream", fake_run)
         monkeypatch.setenv("ALPACA_API_KEY", "fake")
         monkeypatch.setenv("ALPACA_SECRET_KEY", "fake")
 
@@ -123,6 +139,35 @@ class TestAlpacaStreamManager:
         # Second start should not replace the thread — same object
         assert mgr._thread is first_thread
         mgr.stop()
+
+    def test_is_connected_true_when_crypto_connected(self):
+        mgr, _ = self._make_mgr()
+        assert not mgr.is_connected
+        mgr._crypto_connected.set()
+        assert mgr.is_connected
+
+    def test_is_connected_true_when_equity_connected(self):
+        mgr, _ = self._make_mgr()
+        mgr._connected.set()
+        assert mgr.is_connected
+
+    # ----------------------------------------------------------------
+    # inject_trade
+    # ----------------------------------------------------------------
+
+    def test_inject_trade_calls_on_trade(self):
+        fired = []
+        mgr, _ = self._make_mgr(on_trade=lambda t, p: fired.append((t, p)))
+        mgr.inject_trade("BTC", 95000.0)
+        assert fired == [("BTC", 95000.0)]
+
+    def test_inject_trade_bypasses_throttle(self):
+        fired = []
+        mgr, _ = self._make_mgr(on_trade=lambda t, p: fired.append((t, p)))
+        mgr._throttle = 60.0  # very long throttle
+        mgr.inject_trade("BTC", 95000.0)
+        mgr.inject_trade("BTC", 96000.0)
+        assert len(fired) == 2  # both fire, no throttle applied
 
     # ----------------------------------------------------------------
     # Per-ticker throttle
@@ -212,16 +257,24 @@ class TestAlpacaStreamManager:
         mock_stream.subscribe_trades.assert_not_called()
         mock_stream.unsubscribe_trades.assert_not_called()
 
-    def test_update_subscriptions_filters_crypto(self):
+    def test_update_subscriptions_routes_crypto_to_crypto_stream(self):
         mgr, _ = self._make_mgr()
         mgr._symbols = {"AAPL"}
+        mgr._crypto_symbols = set()
         mgr._connected.set()
-        mock_stream = MagicMock()
-        mgr._stream = mock_stream
+        mgr._crypto_connected.set()
 
-        mgr.update_subscriptions({"AAPL", "BTC-USD"})
-        # BTC-USD filtered; no change to AAPL
-        mock_stream.subscribe_trades.assert_not_called()
+        mock_equity = MagicMock()
+        mock_crypto = MagicMock()
+        mgr._stream = mock_equity
+        mgr._crypto_stream = mock_crypto
+
+        mgr.update_subscriptions({"AAPL", "BTC"})
+        # Equity stream unchanged, crypto stream gets BTC/USD
+        mock_equity.subscribe_trades.assert_not_called()
+        mock_crypto.subscribe_trades.assert_called_once_with(
+            mgr._handle_crypto_trade, "BTC/USD"
+        )
 
     # ----------------------------------------------------------------
     # Stale tickers
@@ -282,6 +335,65 @@ class TestAlpacaStreamManager:
         # because _last_fired throttle just set _last_trade_time to now,
         # so it won't be stale — just verify it's cleared)
         assert "AAPL" not in mgr._known_stale
+
+    # ----------------------------------------------------------------
+    # Crypto trade handler
+    # ----------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_handle_crypto_trade_normalizes_symbol(self):
+        fired = []
+        mgr, _ = self._make_mgr(on_trade=lambda t, p: fired.append((t, p)))
+        mgr._throttle = 0.0
+
+        trade = MagicMock()
+        trade.symbol = "BTC/USD"
+        trade.price = 95000.0
+
+        await mgr._handle_crypto_trade(trade)
+        assert fired == [("BTC", 95000.0)]
+
+    @pytest.mark.asyncio
+    async def test_handle_crypto_trade_sets_crypto_connected(self):
+        mgr, _ = self._make_mgr()
+        mgr._throttle = 0.0
+        assert not mgr._crypto_connected.is_set()
+
+        trade = MagicMock()
+        trade.symbol = "BTC/USD"
+        trade.price = 95000.0
+
+        await mgr._handle_crypto_trade(trade)
+        assert mgr._crypto_connected.is_set()
+
+    @pytest.mark.asyncio
+    async def test_handle_crypto_trade_throttle_applies(self):
+        fired = []
+        mgr, _ = self._make_mgr(on_trade=lambda t, p: fired.append(t))
+        mgr._throttle = 60.0
+
+        trade = MagicMock()
+        trade.symbol = "ETH/USD"
+        trade.price = 3000.0
+
+        await mgr._handle_crypto_trade(trade)
+        await mgr._handle_crypto_trade(trade)
+        assert len(fired) == 1
+
+    # ----------------------------------------------------------------
+    # get_stale_tickers includes crypto
+    # ----------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_stale_tickers_includes_crypto_symbols(self):
+        mgr = AlpacaStreamManager(on_trade=MagicMock())
+        mgr._symbols = {"AAPL"}
+        mgr._crypto_symbols = {"BTC"}
+        # Neither has had a trade
+
+        new_stale, _ = mgr.get_stale_tickers(stale_seconds=300.0)
+        assert "AAPL" in new_stale
+        assert "BTC" in new_stale
 
     # ----------------------------------------------------------------
     # is_stream_enabled
@@ -460,6 +572,30 @@ class TestTradingSchedulerIntegration:
             await asyncio.sleep(0.05)
 
         assert received == []
+
+    @pytest.mark.asyncio
+    async def test_crypto_stream_fires_outside_market_hours(self):
+        """BTC trades should pass through _on_stream_trade even when market is closed."""
+        received = []
+
+        async def on_event(event):
+            received.append(event)
+
+        from trading.scheduler import TradingScheduler
+
+        scheduler = TradingScheduler(on_event=on_event)
+        scheduler._loop = asyncio.get_event_loop()
+
+        pos = _make_pos(ticker="BTC", entry=90000.0, stop=85000.0)
+
+        with patch("trading.scheduler.load_positions", return_value={"positions": [pos]}), \
+             patch("trading.engine.log_price_alert", return_value=True), \
+             patch.object(scheduler._engine, "is_market_open", return_value=False):
+            scheduler._on_stream_trade("BTC", 84000.0)
+            await asyncio.sleep(0.1)
+
+        assert len(received) >= 1
+        assert received[0].alert_type == "stop_breached"
 
     @pytest.mark.asyncio
     async def test_concurrent_exit_guard_prevents_double_exit(self):
