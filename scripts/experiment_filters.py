@@ -3,7 +3,9 @@
 
 Run from repo root:
     .venv/bin/python scripts/experiment_filters.py
+    .venv/bin/python scripts/experiment_filters.py --tickers BTC-USD
 """
+import argparse
 import pickle
 import sys
 from pathlib import Path
@@ -75,10 +77,22 @@ def build_spy_trend(cached: dict) -> pd.Series:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Win-rate filter experiments")
+    parser.add_argument("--tickers", nargs="+", metavar="T", default=None,
+                        help="Limit analysis to specific tickers (e.g. BTC-USD)")
+    args = parser.parse_args()
+
     print(f"\nLoading predictions cache: {CACHE}")
     with open(CACHE, "rb") as f:
         cached = pickle.load(f)
-    print(f"Loaded {len(cached)} assets\n")
+    print(f"Loaded {len(cached)} assets")
+    if args.tickers:
+        missing = [t for t in args.tickers if t not in cached]
+        if missing:
+            print(f"WARNING: tickers not in cache: {missing}")
+        cached = {t: cached[t] for t in args.tickers if t in cached}
+        print(f"Filtered to {len(cached)} tickers: {list(cached.keys())}")
+    print()
 
     header = f"  {'Config':<20s}  {'Variant':<18s}  {'Trades':>12s}  {'WinRate':>8s}  {'CAGR':>8s}  {'MaxDD':>7s}  {'Sharpe':>7s}  {'PF':>5s}"
     sep = "  " + "-" * (len(header) - 2)

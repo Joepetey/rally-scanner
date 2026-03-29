@@ -13,7 +13,7 @@ Logic:
 import numpy as np
 import pandas as pd
 
-from config import PARAMS, AssetConfig
+from config import PARAMS, ASSETS, AssetConfig
 
 R_UP_MULT = 0.80
 R_UP_MIN, R_UP_MAX = 0.015, 0.10
@@ -39,9 +39,13 @@ def calibrate_thresholds(df: pd.DataFrame, ticker: str) -> AssetConfig:
     r_up = float(np.clip(rv_h * R_UP_MULT, R_UP_MIN, R_UP_MAX))
     d_dn = float(np.clip(r_up / 2.0, D_DN_MIN, D_DN_MAX))
 
+    # Preserve asset_class from config if this ticker is a known asset
+    known = next((a for a in ASSETS.values() if a.ticker == ticker), None)
+    asset_class = known.asset_class if known else "equity"
+
     return AssetConfig(
         ticker=ticker,
-        asset_class="equity",
+        asset_class=asset_class,
         r_up=round(r_up, 4),
         d_dn=round(d_dn, 4),
     )

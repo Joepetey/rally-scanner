@@ -203,8 +203,8 @@ def fetch_daily_batch(
         today = pd.Timestamp.now().normalize()
 
         # Parse results
-        if len(tickers_to_fetch) == 1:
-            # Single ticker: flat columns
+        if len(tickers_to_fetch) == 1 and not isinstance(raw.columns, pd.MultiIndex):
+            # Single ticker: flat columns (older yfinance behavior)
             ticker = tickers_to_fetch[0]
             cols = [c for c in OHLCV_COLS if c in raw.columns]
             if cols:

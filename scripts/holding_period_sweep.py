@@ -152,6 +152,10 @@ def main() -> None:
         metavar="N",
         help=f"Holding periods to test in bars (default: {DEFAULT_TIME_STOPS})",
     )
+    parser.add_argument(
+        "--tickers", nargs="+", metavar="T", default=None,
+        help="Limit analysis to specific tickers (e.g. BTC-USD)",
+    )
     args = parser.parse_args()
 
     base_cfg = CONFIGS_BY_NAME.get(args.config.lower().replace(" ", "_"))
@@ -168,6 +172,12 @@ def main() -> None:
     print("=" * 100)
 
     cached = _load_cache()
+    if args.tickers:
+        missing = [t for t in args.tickers if t not in cached]
+        if missing:
+            print(f"WARNING: tickers not in cache: {missing}")
+        cached = {t: cached[t] for t in args.tickers if t in cached}
+        print(f"Filtered to {len(cached)} tickers: {list(cached.keys())}")
     results = _run_sweep(cached, base_cfg, args.time_stops)
 
     print("\n  RESULTS — intraday HIGH triggers TP (standard backtest, optimistic):")

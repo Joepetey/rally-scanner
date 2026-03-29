@@ -213,6 +213,8 @@ def main() -> None:
                         help="Only run intraday-high TP mode (skip close-only)")
     parser.add_argument("--limit-sell", action="store_true",
                         help="Also run limit-sell-on-TP mode (place limit order once TP touched)")
+    parser.add_argument("--tickers", nargs="+", metavar="T", default=None,
+                        help="Limit analysis to specific tickers (e.g. BTC-USD)")
     args = parser.parse_args()
 
     base_cfg = CONFIGS_BY_NAME.get(args.config.lower().replace(" ", "_"))
@@ -231,6 +233,12 @@ def main() -> None:
     print("=" * 110)
 
     cached = _load_cache()
+    if args.tickers:
+        missing = [t for t in args.tickers if t not in cached]
+        if missing:
+            print(f"WARNING: tickers not in cache: {missing}")
+        cached = {t: cached[t] for t in args.tickers if t in cached}
+        print(f"Filtered to {len(cached)} tickers: {list(cached.keys())}")
 
     if not args.close_only:
         _section("BACKTEST", False, cached, base_cfg, args.profit_atrs, args.time_stops)

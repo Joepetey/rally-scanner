@@ -106,6 +106,8 @@ def main() -> None:
                         help="Override time_stop bars (e.g. 3 to match PARAMS.time_stop_bars)")
     parser.add_argument("--lock-pcts", nargs="+", type=float, default=DEFAULT_LOCK_PCTS,
                         metavar="X")
+    parser.add_argument("--tickers", nargs="+", metavar="T", default=None,
+                        help="Limit analysis to specific tickers (e.g. BTC-USD)")
     args = parser.parse_args()
 
     from config import TradingConfig  # noqa: E402
@@ -134,6 +136,12 @@ def main() -> None:
     print("=" * 110)
 
     cached = _load_cache()
+    if args.tickers:
+        missing = [t for t in args.tickers if t not in cached]
+        if missing:
+            print(f"WARNING: tickers not in cache: {missing}")
+        cached = {t: cached[t] for t in args.tickers if t in cached}
+        print(f"Filtered to {len(cached)} tickers: {list(cached.keys())}")
 
     results = []
     for pct in args.lock_pcts:

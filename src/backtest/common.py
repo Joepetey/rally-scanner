@@ -309,6 +309,7 @@ def walk_forward_train(df: pd.DataFrame) -> list[FoldResult]:
     test_yrs = p.walk_forward_test_years
 
     target_col = "RALLY_ST"
+    feature_cols = ALL_FEATURE_COLS
 
     years = df.index.year.unique().sort_values()
     min_year = int(years.min())
