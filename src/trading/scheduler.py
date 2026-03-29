@@ -22,6 +22,7 @@ from db.positions import (
     load_positions,
     record_closed_position as _rec_closed,
     save_latest_scan as _save_latest_scan,
+    save_position_meta as _save_position_meta,
     save_watchlist as _db_save_watchlist,
 )
 from integrations.alpaca.cash_parking import (
@@ -61,6 +62,7 @@ from trading.positions import (
     process_signal_queue,
     sync_positions_from_alpaca,
     update_existing_positions,
+    update_position_for_price,
     update_skipped_outcomes,
 )
 from trading.regime_monitor import check_regime_shifts, get_regime_states, is_cascade
@@ -761,6 +763,10 @@ class TradingScheduler:
         pos = next((p for p in positions if p["ticker"] == ticker), None)
         if not pos:
             return
+
+        if update_position_for_price(pos, price):
+            _save_position_meta(pos)
+            self._invalidate_positions_cache()
 
         event = self._engine.evaluate_single_ticker(ticker, price, pos)
         if event:

@@ -14,7 +14,6 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from config import PARAMS
 from db.events import log_order, log_price_alert
 from db.positions import load_positions, save_position_meta
 from integrations.alpaca.executor import (
@@ -29,6 +28,7 @@ from trading.positions import (
     async_save_positions,
     sync_positions_from_alpaca,
     update_fill_prices,
+    update_position_for_price,
 )
 
 _ET = zoneinfo.ZoneInfo("America/New_York")
@@ -236,15 +236,9 @@ class AlertEngine:
                 continue
 
             price = quote["price"]
-            entry = pos["entry_price"]
-            stop = pos.get("stop_price", 0)
 
-            # Profit lock: raise hard stop floor intraday once lock level is touched
-            if PARAMS.profit_lock_pct > 0 and entry:
-                lock_price = round(entry * (1 + PARAMS.profit_lock_pct), 4)
-                if price >= lock_price and stop < lock_price:
-                    pos["stop_price"] = lock_price
-                    await asyncio.to_thread(save_position_meta, pos)
+            if update_position_for_price(pos, price):
+                await asyncio.to_thread(save_position_meta, pos)
 
             event = self.evaluate_single_ticker(ticker, price, pos)
             if event:

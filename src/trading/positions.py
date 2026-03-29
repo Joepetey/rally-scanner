@@ -38,6 +38,7 @@ __all__ = [
     "get_merged_positions",
     "get_merged_positions_sync",
     "update_existing_positions",
+    "update_position_for_price",
     "add_signal_positions",
     "update_positions",
     "close_position_intraday",
@@ -156,6 +157,34 @@ def get_merged_positions_sync() -> dict:
 # ---------------------------------------------------------------------------
 # Position update logic
 # ---------------------------------------------------------------------------
+
+def update_position_for_price(pos: dict, current_price: float) -> bool:
+    """Ratchet trailing stop and apply profit lock for a real-time price tick.
+
+    Mutates pos in-place. Returns True if any field changed so the caller
+    can decide whether to persist. ATR is taken from pos["atr"] (stored at
+    entry time); falls back to entry_price * default_atr_pct if absent.
+    """
+    p = PARAMS
+    changed = False
+
+    if current_price > pos.get("highest_close", pos["entry_price"]):
+        pos["highest_close"] = current_price
+        atr_val = pos.get("atr", current_price * p.default_atr_pct)
+        new_trail = current_price - p.trailing_stop_atr_mult * atr_val
+        if new_trail > pos.get("trailing_stop", 0):
+            pos["trailing_stop"] = round(new_trail, 4)
+        changed = True
+
+    if p.profit_lock_pct > 0:
+        entry = pos["entry_price"]
+        lock_price = round(entry * (1 + p.profit_lock_pct), 4)
+        if current_price >= lock_price and pos.get("stop_price", 0) < lock_price:
+            pos["stop_price"] = lock_price
+            changed = True
+
+    return changed
+
 
 def update_existing_positions(
     state: dict, all_results: list[dict], commit_exits: bool = True,
