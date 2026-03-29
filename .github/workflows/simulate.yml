@@ -1,0 +1,51 @@
+name: Simulate & Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  simulate:
+    name: Run paper trading simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: rally
+          POSTGRES_PASSWORD: rally
+          POSTGRES_DB: rally_sim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rally"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://rally:rally@localhost:5432/rally_sim
+      ALPACA_SIMULATION_API_KEY: ${{ secrets.ALPACA_SIMULATION_API_KEY }}
+      ALPACA_SIMULATION_SECRET_KEY: ${{ secrets.ALPACA_SIMULATION_SECRET_KEY }}
+      ALPACA_STREAM_ENABLED: "1"
+      ALPACA_PAPER_TRADE: "true"
+      PYTHONPATH: src
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install package
+        run: pip install --no-cache-dir .
+
+      - name: Run simulation
+        run: python scripts/simulate.py
