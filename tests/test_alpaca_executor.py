@@ -158,7 +158,8 @@ async def test_update_fill_prices(tmp_models_dir):
         "positions": [
             {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
              "current_price": 152.0, "order_id": "order-123",
-             "unrealized_pnl_pct": 1.33, "status": "open"},
+             "stop_price": 100.0, "trailing_stop": 145.0, "highest_close": 150.0,
+             "atr": 3.0, "unrealized_pnl_pct": 1.33, "status": "open"},
             {"ticker": "MSFT", "entry_price": 400.0, "entry_date": "2024-01-10",
              "current_price": 405.0, "status": "open"},
         ],
@@ -172,6 +173,35 @@ async def test_update_fill_prices(tmp_models_dir):
     aapl = [p for p in reloaded["positions"] if p["ticker"] == "AAPL"][0]
     assert aapl["entry_price"] == 149.50
     assert aapl["order_id"] is None
+    # Stops recalibrated to fill price (signal stop was far off)
+    from config import PARAMS
+    assert aapl["stop_price"] == round(149.50 * (1 - PARAMS.fallback_stop_pct), 4)
+    assert aapl["trailing_stop"] == round(149.50 - PARAMS.trailing_stop_atr_mult * 3.0, 4)
+    assert aapl["highest_close"] == 149.50
+
+
+@pytest.mark.asyncio
+async def test_update_fill_prices_stop_already_correct(tmp_models_dir):
+    """Stop within 0.1% of fill — must not be clobbered."""
+    from config import PARAMS
+    fill_price = 149.50
+    correct_stop = round(fill_price * (1 - PARAMS.fallback_stop_pct), 4)
+    save_positions({
+        "positions": [
+            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
+             "current_price": 152.0, "order_id": "order-456",
+             "stop_price": correct_stop, "trailing_stop": 147.0, "highest_close": 150.0,
+             "atr": 3.0, "unrealized_pnl_pct": 1.33, "status": "open"},
+        ],
+        "closed_today": [],
+    })
+
+    await update_fill_prices({"order-456": fill_price})
+
+    reloaded = load_positions()
+    aapl = [p for p in reloaded["positions"] if p["ticker"] == "AAPL"][0]
+    # stop_price should be unchanged (was already correct)
+    assert aapl["stop_price"] == correct_stop
 
 
 @pytest.mark.asyncio
