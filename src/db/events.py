@@ -81,6 +81,20 @@ def log_price_alert(
         return cur.rowcount > 0
 
 
+def clear_price_alerts(ticker: str, alert_date: str) -> None:
+    """Delete all price alert dedup records for a ticker on a given date.
+
+    Used by the simulation runner to reset the dedup between scenarios so
+    consecutive runs of the same alert type (e.g. stop_breached) on the same
+    day don't suppress each other.
+    """
+    with get_conn() as conn:
+        conn.cursor().execute(
+            "DELETE FROM price_alert_log WHERE ticker = %s AND alert_date = %s",
+            (ticker, alert_date),
+        )
+
+
 def log_scheduler_event(event_type: str) -> int:
     """Insert a running scheduler event. Returns the row id for later update."""
     with get_conn() as conn:

@@ -536,7 +536,20 @@ async def place_exit_orders(
 
     Returns (target_order_id, stop_order_id) where both IDs refer to the two
     legs of the OCO order. Either may be None on failure.
+
+    Note: Alpaca does not support OCO orders for crypto assets. Crypto positions
+    are managed entirely through the monitoring loop (stream price events →
+    stop/target breach detection → market close).
     """
+    is_crypto = ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto"
+    if is_crypto:
+        logger.info(
+            "Skipping OCO exit for %s: Alpaca does not support OCO for crypto "
+            "(monitoring loop handles exits)",
+            ticker,
+        )
+        return None, None
+
     def _sync():
         client = _trading_client()
         try:

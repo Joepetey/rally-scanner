@@ -381,6 +381,16 @@ class AlpacaStreamManager:
                 self._run_stream()
                 if self._stop_event.is_set():
                     break
+                # If there are no equity symbols, _run_stream returns immediately —
+                # that's expected, not a crash. Wait briefly and retry without
+                # incrementing backoff so the supervisor is ready when symbols appear.
+                with self._lock:
+                    has_symbols = bool(self._symbols)
+                if not has_symbols:
+                    logger.debug("Equity stream: no symbols, idle for 5s")
+                    attempt -= 1
+                    self._stop_event.wait(timeout=5.0)
+                    continue
                 logger.warning(
                     "Equity stream exited unexpectedly (attempt %d), restarting in %.0fs",
                     attempt, backoff,
@@ -413,6 +423,16 @@ class AlpacaStreamManager:
                 self._run_crypto_stream()
                 if self._stop_event.is_set():
                     break
+                # If there are no crypto symbols, _run_crypto_stream returns immediately —
+                # that's expected, not a crash. Wait briefly and retry without
+                # incrementing backoff so the supervisor is ready when symbols appear.
+                with self._lock:
+                    has_symbols = bool(self._crypto_symbols)
+                if not has_symbols:
+                    logger.debug("Crypto stream: no symbols, idle for 5s")
+                    attempt -= 1
+                    self._stop_event.wait(timeout=5.0)
+                    continue
                 logger.warning(
                     "Crypto stream exited unexpectedly (attempt %d), restarting in %.0fs",
                     attempt, backoff,

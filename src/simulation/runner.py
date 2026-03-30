@@ -23,6 +23,7 @@ scheduler's normal event path — the runner does not duplicate them.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -35,6 +36,7 @@ from integrations.alpaca.executor import (
     get_snapshots,
     place_exit_orders,
 )
+from db.events import clear_price_alerts
 from integrations.discord.notify import (
     _exit_embed,
     _fill_confirmation_embed,
@@ -125,6 +127,11 @@ class SimulationRunner:
     async def _run(
         self, scenario: str, equity: float, send_embed: SendEmbed,
     ) -> SimulationResult:
+        # Clear per-day alert dedup for the simulation ticker so consecutive
+        # scenarios (e.g. stop then trail) can each fire stop_breached.
+        today = datetime.now().strftime("%Y-%m-%d")
+        clear_price_alerts(TICKER, today)
+
         # 1. Live BTC price
         snapshots = await get_snapshots([TICKER])
         snap = snapshots.get(TICKER)

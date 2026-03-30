@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+import config
 from db.events import log_order, log_price_alert
 from db.positions import load_positions, save_position_meta
 from integrations.alpaca.executor import (
@@ -319,9 +320,17 @@ class AlertEngine:
                         ]
 
             # Place exit orders for newly filled entries (no order_id → fill confirmed)
+            # Crypto positions are excluded: Alpaca doesn't support OCO for crypto;
+            # their exits are handled entirely by the monitoring loop.
             fresh_state = load_positions()
             for pos in fresh_state.get("positions", []):
-                if (not pos.get("order_id")
+                ticker = pos["ticker"]
+                is_crypto = (
+                    ticker in config.ASSETS
+                    and config.ASSETS[ticker].asset_class == "crypto"
+                )
+                if (not is_crypto
+                        and not pos.get("order_id")
                         and not pos.get("target_order_id")
                         and not pos.get("trail_order_id")
                         and pos.get("target_price") and pos.get("stop_price")
