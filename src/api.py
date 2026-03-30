@@ -18,10 +18,11 @@ logger = logging.getLogger(__name__)
 async def _handle_positions(request: web.Request) -> web.Response:
     """Return merged Alpaca + DB positions as JSON."""
     api_key = os.environ.get("RALLY_API_KEY")
-    if api_key:
-        auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {api_key}":
-            return web.json_response({"error": "unauthorized"}, status=401)
+    if not api_key:
+        return web.json_response({"error": "RALLY_API_KEY not configured"}, status=503)
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {api_key}":
+        return web.json_response({"error": "unauthorized"}, status=401)
     state = await get_merged_positions()
     return web.Response(
         text=_json.dumps(state), content_type="application/json",
