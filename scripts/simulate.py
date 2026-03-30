@@ -112,10 +112,12 @@ async def _reset_sim_state() -> None:
     # Remove any open BTC position from the DB
     delete_position_meta(TICKER)
 
-    # Clear today's price_alert_log rows for BTC so dedup doesn't suppress breach events
+    # Clear ALL price_alert_log rows for BTC so dedup doesn't suppress breach events.
+    # Must not filter by CURRENT_DATE — engine logs alerts in ET while PG uses UTC,
+    # so late-night UTC runs (where ET date != UTC date) would miss stale records.
     with get_conn() as conn:
         conn.cursor().execute(
-            "DELETE FROM price_alert_log WHERE ticker = %s AND alert_date = CURRENT_DATE",
+            "DELETE FROM price_alert_log WHERE ticker = %s",
             (TICKER,),
         )
 
