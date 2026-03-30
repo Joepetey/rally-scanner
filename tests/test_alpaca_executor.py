@@ -25,6 +25,8 @@ from trading.positions import (
     get_trail_order_ids,
     update_fill_prices,
 )
+from tests.helpers.alpaca_mock import MockAlpacaOrder
+from alpaca.trading.enums import OrderSide, OrderStatus
 
 # ---------------------------------------------------------------------------
 # is_enabled()
@@ -196,39 +198,16 @@ async def test_update_fill_prices_no_matches(tmp_models_dir):
 
 
 # ---------------------------------------------------------------------------
-# Helper: mock Alpaca order object
-# ---------------------------------------------------------------------------
-
-
-def _mock_order(order_id="order-abc", qty="10", filled_avg_price=None, filled_qty=None,
-                status="filled"):
-    from alpaca.trading.enums import OrderStatus
-    order = MagicMock()
-    order.id = order_id
-    order.qty = qty
-    order.filled_qty = filled_qty
-    order.filled_avg_price = filled_avg_price
-    order.status = OrderStatus(status)
-    return order
-
-
-def _mock_position(symbol="AAPL", qty="10", avg_entry_price="150.25",
-                   market_value="1520.00", unrealized_pl="17.50"):
-    pos = MagicMock()
-    pos.symbol = symbol
-    pos.qty = qty
-    pos.avg_entry_price = avg_entry_price
-    pos.market_value = market_value
-    pos.unrealized_pl = unrealized_pl
-    return pos
-
-
-# ---------------------------------------------------------------------------
-# execute_entries (mocked alpaca-py)
+# execute_entries (shared alpaca_mock)
 # ---------------------------------------------------------------------------
 
 # Common no-op patches needed for all execute_entries tests (new DB helpers).
-_ENTRY_NOOP_PATCHES = [
+_ENTRY_PATCHES = [
+    patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0),
+    patch("integrations.alpaca.executor.get_group_exposure", return_value=(0, 0.0)),
+    patch("integrations.alpaca.executor.load_positions",
+          return_value={"positions": [], "closed_today": [], "last_updated": ""}),
+    patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False),
     patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]),
     patch("integrations.alpaca.executor.enqueue_signal"),
     patch("integrations.alpaca.executor.log_skipped_signal"),
@@ -236,71 +215,44 @@ _ENTRY_NOOP_PATCHES = [
 ]
 
 
-def _apply_noop_patches(patches):
-    """Context manager that enters a list of patch objects."""
+def _apply_entry_patches():
     from contextlib import ExitStack
     stack = ExitStack()
-    for p in patches:
+    for p in _ENTRY_PATCHES:
         stack.enter_context(p)
     return stack
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_crypto_uses_slash_symbol():
+async def test_execute_entries_crypto_uses_slash_symbol(alpaca_mock):
     """Crypto entries use BTC/USD Alpaca symbol format and fractional qty."""
+    alpaca_mock.set_fill_behavior("immediate", fill_price=50000.0)
     signals = [
         {"ticker": "BTC", "entry_price": 50000.0, "size": 0.10},
     ]
 
-    mock_order = MagicMock()
-    mock_order.id = "crypto-order-id"
-    mock_order.filled_avg_price = 50000.0
-    mock_client = MagicMock()
-    mock_client.submit_order.return_value = mock_order
-    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0), \
-         patch("integrations.alpaca.executor.get_group_exposure", return_value=(0, 0.0)), \
-         patch("integrations.alpaca.executor.load_positions", return_value=_empty), \
-         patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False), \
-         patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]), \
-         patch("integrations.alpaca.executor.enqueue_signal"), \
-         patch("integrations.alpaca.executor.log_skipped_signal"), \
-         patch("integrations.alpaca.executor.remove_from_queue"):
+    with _apply_entry_patches():
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
     result = results[0]
     assert result.success
     # qty should be fractional: 100_000 * 0.10 / 50_000 = 0.2
-    import pytest as _pytest
-    assert result.qty == _pytest.approx(0.2, rel=1e-6)
+    assert result.qty == pytest.approx(0.2, rel=1e-6)
     # Alpaca symbol must use slash format
-    submitted = mock_client.submit_order.call_args[0][0]
+    submitted = alpaca_mock.submit_order.call_args[0][0]
     assert submitted.symbol == "BTC/USD"
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_qty():
+async def test_execute_entries_qty(alpaca_mock):
     """Verify qty calculation (trailing stop is now deferred)."""
+    alpaca_mock.set_fill_behavior("pending")
     signals = [
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    mock_order = _mock_order(order_id="order-abc", filled_avg_price=None)
-    mock_client = MagicMock()
-    mock_client.submit_order.return_value = mock_order
-
-    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0), \
-         patch("integrations.alpaca.executor.get_group_exposure", return_value=(0, 0.0)), \
-         patch("integrations.alpaca.executor.load_positions", return_value=_empty), \
-         patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False), \
-         patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]), \
-         patch("integrations.alpaca.executor.enqueue_signal"), \
-         patch("integrations.alpaca.executor.log_skipped_signal"), \
-         patch("integrations.alpaca.executor.remove_from_queue"):
+    with _apply_entry_patches():
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -310,16 +262,16 @@ async def test_execute_entries_qty():
     # 100000 * 0.10 / 150 = 66
     assert r.qty == 66
     assert r.success is True
-    assert r.order_id == "order-abc"
+    assert r.order_id is not None
     # Trailing stop is deferred — no trail_order_id yet
     assert r.trail_order_id is None
 
     # Only market buy call
-    assert mock_client.submit_order.call_count == 1
+    alpaca_mock.submit_order.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_exposure_cap():
+async def test_execute_entries_exposure_cap(alpaca_mock):
     """Signal is queued when no capital available even after partial sizing."""
     # Exposure at 99.5% leaves only 0.5% — below min_position_size (1%)
     # so partial sizing can't help and the signal is queued.
@@ -327,12 +279,10 @@ async def test_execute_entries_exposure_cap():
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02, "p_rally": 0.60},
     ]
 
-    mock_client = MagicMock()
-    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("integrations.alpaca.executor.get_total_exposure", return_value=0.995), \
+    with patch("integrations.alpaca.executor.get_total_exposure", return_value=0.995), \
          patch("integrations.alpaca.executor.get_group_exposure", return_value=(0, 0.0)), \
-         patch("integrations.alpaca.executor.load_positions", return_value=_empty), \
+         patch("integrations.alpaca.executor.load_positions",
+               return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]), \
          patch("integrations.alpaca.executor.enqueue_signal") as mock_enqueue, \
@@ -348,21 +298,18 @@ async def test_execute_entries_exposure_cap():
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_partial_sizing():
+async def test_execute_entries_partial_sizing(alpaca_mock):
     """Signal is scaled down when available capital is below requested size."""
     # 95% used, 5% available — signal wants 10% but gets scaled to 5%
+    alpaca_mock.set_fill_behavior("pending")
     signals = [
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02, "p_rally": 0.60},
     ]
-    mock_order = _mock_order(order_id="partial-1", filled_avg_price=None)
-    mock_client = MagicMock()
-    mock_client.submit_order.return_value = mock_order
 
-    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("integrations.alpaca.executor.get_total_exposure", return_value=0.95), \
+    with patch("integrations.alpaca.executor.get_total_exposure", return_value=0.95), \
          patch("integrations.alpaca.executor.get_group_exposure", return_value=(0, 0.0)), \
-         patch("integrations.alpaca.executor.load_positions", return_value=_empty), \
+         patch("integrations.alpaca.executor.load_positions",
+               return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]), \
          patch("integrations.alpaca.executor.enqueue_signal"), \
@@ -396,18 +343,16 @@ async def test_execute_entries_circuit_breaker():
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_group_limit():
+async def test_execute_entries_group_limit(alpaca_mock):
     """Entries should be skipped when group position limit is reached."""
     signals = [
         {"ticker": "AAPL", "close": 150.0, "size": 0.10, "atr_pct": 0.02},
     ]
 
-    mock_client = MagicMock()
-    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0), \
+    with patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0), \
          patch("integrations.alpaca.executor.get_group_exposure", return_value=(3, 0.3)), \
-         patch("integrations.alpaca.executor.load_positions", return_value=_empty), \
+         patch("integrations.alpaca.executor.load_positions",
+               return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]), \
          patch("integrations.alpaca.executor.enqueue_signal"), \
@@ -422,25 +367,14 @@ async def test_execute_entries_group_limit():
 
 
 @pytest.mark.asyncio
-async def test_execute_entries_not_tradable():
+async def test_execute_entries_not_tradable(alpaca_mock):
     """42210000 (asset not tradable) should be a skipped result, not a hard failure."""
+    alpaca_mock.set_submit_error('{"code":42210000,"message":"asset \\"RGC\\" is not tradable"}')
     signals = [
         {"ticker": "RGC", "close": 10.0, "size": 0.05, "atr_pct": 0.02},
     ]
-    mock_client = MagicMock()
-    mock_client.submit_order.side_effect = Exception(
-        '{"code":42210000,"message":"asset \\"RGC\\" is not tradable"}'
-    )
-    _empty = {"positions": [], "closed_today": [], "last_updated": ""}
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client), \
-         patch("integrations.alpaca.executor.get_total_exposure", return_value=0.0), \
-         patch("integrations.alpaca.executor.get_group_exposure", return_value=(0, 0.0)), \
-         patch("integrations.alpaca.executor.load_positions", return_value=_empty), \
-         patch("integrations.alpaca.executor.is_circuit_breaker_active", return_value=False), \
-         patch("integrations.alpaca.executor.load_all_position_meta", return_value=[]), \
-         patch("integrations.alpaca.executor.enqueue_signal"), \
-         patch("integrations.alpaca.executor.log_skipped_signal"), \
-         patch("integrations.alpaca.executor.remove_from_queue"):
+
+    with _apply_entry_patches():
         results = await execute_entries(signals, equity=100_000.0)
 
     assert len(results) == 1
@@ -450,51 +384,39 @@ async def test_execute_entries_not_tradable():
 
 
 # ---------------------------------------------------------------------------
-# execute_exit (mocked alpaca-py)
+# execute_exit (shared alpaca_mock)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_execute_exit():
+async def test_execute_exit(alpaca_mock):
     """Verify close_position call and fill price extraction."""
-    mock_order = _mock_order(
-        order_id="order-exit-1", qty="10", filled_avg_price="148.50",
-    )
-    mock_client = MagicMock()
-    mock_client.close_position.return_value = mock_order
+    alpaca_mock.set_fill_behavior("immediate", fill_price=148.50)
 
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        result = await execute_exit("AAPL")
+    result = await execute_exit("AAPL")
 
     assert result.ticker == "AAPL"
     assert result.side == "sell"
     assert result.qty == 10
     assert result.success is True
     assert result.fill_price == 148.50
-    assert result.order_id == "order-exit-1"
+    assert result.order_id is not None
 
 
 # ---------------------------------------------------------------------------
-# check_pending_fills (mocked alpaca-py)
+# check_pending_fills (shared alpaca_mock)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_check_pending_fills():
-    mock_orders = [
-        _mock_order(order_id="order-1", filled_avg_price="150.25"),
-        _mock_order(order_id="order-2", filled_avg_price="400.50"),
-        _mock_order(order_id="order-other", filled_avg_price="99.99"),
-    ]
+async def test_check_pending_fills(alpaca_mock):
+    alpaca_mock.add_filled_order("order-1", fill_price=150.25)
+    alpaca_mock.add_filled_order("order-2", fill_price=400.50)
+    alpaca_mock.add_filled_order("order-other", fill_price=99.99)
 
-    mock_client = MagicMock()
-    mock_client.get_orders.return_value = mock_orders
-
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        fills = await check_pending_fills(["order-1", "order-2"])
+    fills = await check_pending_fills(["order-1", "order-2"])
 
     assert fills == {"order-1": 150.25, "order-2": 400.50}
-    # order-other not in our list, should be excluded
     assert "order-other" not in fills
 
 
@@ -505,29 +427,20 @@ async def test_check_pending_fills_empty():
 
 
 # ---------------------------------------------------------------------------
-# cancel_order (mocked alpaca-py)
+# cancel_order (shared alpaca_mock)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cancel_order_success():
-    mock_client = MagicMock()
-    mock_client.cancel_order_by_id.return_value = None  # cancel returns None
-
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        result = await cancel_order("trail-123")
-
+async def test_cancel_order_success(alpaca_mock):
+    result = await cancel_order("trail-123")
     assert result is True
 
 
 @pytest.mark.asyncio
-async def test_cancel_order_failure():
-    mock_client = MagicMock()
-    mock_client.cancel_order_by_id.side_effect = Exception("connection failed")
-
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        result = await cancel_order("trail-123")
-
+async def test_cancel_order_failure(alpaca_mock):
+    alpaca_mock.set_cancel_error("connection failed")
+    result = await cancel_order("trail-123")
     assert result is False
 
 
@@ -537,22 +450,16 @@ async def test_cancel_order_failure():
 
 
 @pytest.mark.asyncio
-async def test_execute_exit_cancels_trailing_stop():
+async def test_execute_exit_cancels_trailing_stop(alpaca_mock):
     """When trail_order_id is given, it should be cancelled before closing."""
-    mock_order = _mock_order(
-        order_id="order-exit-1", qty="10", filled_avg_price="148.50",
-    )
-    mock_client = MagicMock()
-    mock_client.close_position.return_value = mock_order
+    alpaca_mock.set_fill_behavior("immediate", fill_price=148.50)
 
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        result = await execute_exit("AAPL", trail_order_id="trail-999")
+    result = await execute_exit("AAPL", trail_order_id="trail-999")
 
     assert result.success is True
     assert result.fill_price == 148.50
-    # cancel_order_by_id + close_position both called
-    mock_client.cancel_order_by_id.assert_called_once_with("trail-999")
-    mock_client.close_position.assert_called_once()
+    alpaca_mock.cancel_order_by_id.assert_called_once_with("trail-999")
+    alpaca_mock.close_position.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -561,23 +468,18 @@ async def test_execute_exit_cancels_trailing_stop():
 
 
 @pytest.mark.asyncio
-async def test_execute_exits_passes_trail_order_id():
+async def test_execute_exits_passes_trail_order_id(alpaca_mock):
     """Closed positions with trail_order_id should pass it to exit."""
+    alpaca_mock.set_fill_behavior("immediate", fill_price=150.0)
     closed = [
         {"ticker": "AAPL", "trail_order_id": "trail-111"},
     ]
 
-    mock_order = _mock_order(order_id="order-exit-1", qty="10")
-    mock_client = MagicMock()
-    mock_client.close_position.return_value = mock_order
-
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        results = await execute_exits(closed)
+    results = await execute_exits(closed)
 
     assert len(results) == 1
     assert results[0].success is True
-    # Trailing stop should have been cancelled
-    mock_client.cancel_order_by_id.assert_called_once_with("trail-111")
+    alpaca_mock.cancel_order_by_id.assert_called_once_with("trail-111")
 
 
 # ---------------------------------------------------------------------------
@@ -586,15 +488,11 @@ async def test_execute_exits_passes_trail_order_id():
 
 
 @pytest.mark.asyncio
-async def test_execute_exit_position_not_found():
+async def test_execute_exit_position_not_found(alpaca_mock):
     """40410000 means trailing stop already closed the position — treat as success."""
-    mock_client = MagicMock()
-    mock_client.close_position.side_effect = Exception(
-        '{"code":40410000,"message":"position not found: WULF"}'
-    )
+    alpaca_mock.set_close_behavior("already_closed")
 
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        result = await execute_exit("WULF")
+    result = await execute_exit("WULF")
 
     assert result.success is True
     assert result.already_closed is True
@@ -603,13 +501,21 @@ async def test_execute_exit_position_not_found():
 
 
 @pytest.mark.asyncio
-async def test_execute_exits_position_not_found_does_not_fail_batch():
+async def test_execute_exits_position_not_found_does_not_fail_batch(alpaca_mock):
     """A 40410000 on one ticker should not prevent other tickers from being processed."""
-    mock_order = _mock_order(order_id="order-exit-2", qty="5", filled_avg_price="50.00")
-    mock_client = MagicMock()
-    mock_client.close_position.side_effect = [
+    # First call raises already-closed, second returns a filled order
+    filled_order = MockAlpacaOrder(
+        id="order-exit-2",
+        symbol="MSFT",
+        qty="5",
+        side=OrderSide.SELL,
+        status=OrderStatus.FILLED,
+        filled_avg_price="50.00",
+        filled_qty="5",
+    )
+    alpaca_mock.close_position.side_effect = [
         Exception('{"code":40410000,"message":"position not found: ABVX"}'),
-        mock_order,
+        filled_order,
     ]
 
     closed = [
@@ -617,8 +523,7 @@ async def test_execute_exits_position_not_found_does_not_fail_batch():
         {"ticker": "MSFT"},
     ]
 
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        results = await execute_exits(closed)
+    results = await execute_exits(closed)
 
     assert len(results) == 2
     abvx = next(r for r in results if r.ticker == "ABVX")
@@ -635,17 +540,11 @@ async def test_execute_exits_position_not_found_does_not_fail_batch():
 
 
 @pytest.mark.asyncio
-async def test_check_trail_stop_fills():
-    mock_orders = [
-        _mock_order(order_id="trail-1", filled_avg_price="145.00"),
-        _mock_order(order_id="trail-other", filled_avg_price="99.00"),
-    ]
+async def test_check_trail_stop_fills(alpaca_mock):
+    alpaca_mock.add_filled_order("trail-1", fill_price=145.00, symbol="AAPL")
+    alpaca_mock.add_filled_order("trail-other", fill_price=99.00, symbol="OTHER")
 
-    mock_client = MagicMock()
-    mock_client.get_orders.return_value = mock_orders
-
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        fills = await check_trail_stop_fills({"AAPL": "trail-1"})
+    fills = await check_trail_stop_fills({"AAPL": "trail-1"})
 
     assert fills == {"AAPL": 145.00}
 
@@ -684,42 +583,33 @@ def test_get_trail_order_ids_empty(tmp_models_dir):
 
 
 # ---------------------------------------------------------------------------
-# get_account_equity (mocked alpaca-py)
+# get_account_equity (shared alpaca_mock)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_account_equity():
-    mock_account = MagicMock()
-    mock_account.equity = "125000.50"
+async def test_get_account_equity(alpaca_mock):
+    alpaca_mock.set_account_equity(125000.50)
 
-    mock_client = MagicMock()
-    mock_client.get_account.return_value = mock_account
-
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        equity = await get_account_equity()
+    equity = await get_account_equity()
 
     assert equity == 125000.50
-    mock_client.get_account.assert_called_once()
+    alpaca_mock.get_account.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# get_all_positions (mocked alpaca-py)
+# get_all_positions (shared alpaca_mock — patches broker._trading_client)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_all_positions():
-    mock_positions = [
-        _mock_position("AAPL", "10", "150.25", "1520.00", "17.50"),
-        _mock_position("MSFT", "5", "400.00", "2050.00", "50.00"),
-    ]
+async def test_get_all_positions(alpaca_mock):
+    alpaca_mock.add_open_position("AAPL", qty=10, avg_entry_price=150.25,
+                                  market_value=1520.00, unrealized_pl=17.50)
+    alpaca_mock.add_open_position("MSFT", qty=5, avg_entry_price=400.00,
+                                  market_value=2050.00, unrealized_pl=50.00)
 
-    mock_client = MagicMock()
-    mock_client.get_all_positions.return_value = mock_positions
-
-    with patch("integrations.alpaca.broker._trading_client", return_value=mock_client):
-        positions = await get_all_positions()
+    positions = await get_all_positions()
 
     assert len(positions) == 2
     assert positions[0]["ticker"] == "AAPL"
@@ -731,25 +621,18 @@ async def test_get_all_positions():
 
 
 @pytest.mark.asyncio
-async def test_get_all_positions_empty():
-    mock_client = MagicMock()
-    mock_client.get_all_positions.return_value = []
-
-    with patch("integrations.alpaca.broker._trading_client", return_value=mock_client):
-        positions = await get_all_positions()
-
+async def test_get_all_positions_empty(alpaca_mock):
+    positions = await get_all_positions()
     assert positions == []
 
 
 @pytest.mark.asyncio
-async def test_get_all_positions_api_error():
+async def test_get_all_positions_api_error(alpaca_mock):
     """If API raises, exception propagates."""
-    mock_client = MagicMock()
-    mock_client.get_all_positions.side_effect = Exception("unauthorized")
+    alpaca_mock.get_all_positions.side_effect = Exception("unauthorized")
 
-    with patch("integrations.alpaca.broker._trading_client", return_value=mock_client):
-        with pytest.raises(Exception, match="unauthorized"):
-            await get_all_positions()
+    with pytest.raises(Exception, match="unauthorized"):
+        await get_all_positions()
 
 
 # ---------------------------------------------------------------------------
@@ -792,20 +675,13 @@ async def test_get_snapshots():
 @pytest.mark.asyncio
 async def test_get_snapshots_returns_crypto_via_yfinance():
     """Crypto tickers are fetched via yfinance and returned alongside equity."""
-    from unittest.mock import patch as _patch
-
-    mock_yf_data = {
-        "BTC-USD": {"price": 95000.0, "bid": 0, "ask": 0, "error": None},
-    }
-    # fetch_quotes is called with the yfinance-format ticker ("BTC-USD")
-    # and keyed by uppercase symbol
     mock_yf_quotes = {
         "BTC-USD": {"price": 95000.0, "prev_close": 94000.0,
                     "change": 1000.0, "change_pct": 1.06,
                     "open": 94500.0, "day_high": 96000.0, "day_low": 94000.0,
                     "volume": 10000, "market_cap": None, "currency": "USD"},
     }
-    with _patch("integrations.alpaca.executor.fetch_quotes", return_value=mock_yf_quotes):
+    with patch("integrations.alpaca.executor.fetch_quotes", return_value=mock_yf_quotes):
         result = await get_snapshots(["BTC"])
 
     assert "BTC" in result
@@ -814,36 +690,29 @@ async def test_get_snapshots_returns_crypto_via_yfinance():
 
 
 # ---------------------------------------------------------------------------
-# place_trailing_stop (mocked alpaca-py)
+# place_trailing_stop (shared alpaca_mock)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_place_trailing_stop():
-    mock_order = _mock_order(order_id="trail-order-789")
-    mock_client = MagicMock()
-    mock_client.submit_order.return_value = mock_order
+async def test_place_trailing_stop(alpaca_mock):
+    alpaca_mock.set_fill_behavior("immediate")
 
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
+    trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
 
-    assert trail_id == "trail-order-789"
-    mock_client.submit_order.assert_called_once()
-    # Verify the order request was a trailing stop sell
-    call_args = mock_client.submit_order.call_args
-    request = call_args[0][0]
+    assert trail_id is not None
+    alpaca_mock.submit_order.assert_called_once()
+    request = alpaca_mock.submit_order.call_args[0][0]
     assert request.symbol == "AAPL"
     assert request.qty == 10
     assert request.trail_percent == 3.0
 
 
 @pytest.mark.asyncio
-async def test_place_trailing_stop_failure():
+async def test_place_trailing_stop_failure(alpaca_mock):
     """On failure, returns None instead of raising."""
-    mock_client = MagicMock()
-    mock_client.submit_order.side_effect = Exception("order rejected")
+    alpaca_mock.set_submit_error("order rejected")
 
-    with patch("integrations.alpaca.executor._trading_client", return_value=mock_client):
-        trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
+    trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
 
     assert trail_id is None

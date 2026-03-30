@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.helpers.alpaca_mock import AlpacaMock
+
 
 @pytest.fixture
 def ohlcv_df():
@@ -93,6 +95,52 @@ def pg_db():
     _truncate()
     yield
     _truncate()
+
+
+# ---------------------------------------------------------------------------
+# Alpaca mock fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def alpaca_mock(monkeypatch):
+    """Shared in-memory Alpaca fake.
+
+    Patches _trading_client in both executor and broker modules so any call
+    to _trading_client() returns the mock without touching real Alpaca APIs.
+    """
+    mock = AlpacaMock()
+    monkeypatch.setattr("integrations.alpaca.executor._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.broker._trading_client", lambda: mock)
+    return mock
+
+
+@pytest.fixture
+def alpaca_immediate_fill(alpaca_mock):
+    """Market orders fill instantly at $150.00."""
+    alpaca_mock.set_fill_behavior("immediate", fill_price=150.0)
+    return alpaca_mock
+
+
+@pytest.fixture
+def alpaca_pending_fill(alpaca_mock):
+    """Orders are submitted but not yet filled (filled_avg_price=None)."""
+    alpaca_mock.set_fill_behavior("pending")
+    return alpaca_mock
+
+
+@pytest.fixture
+def alpaca_oco_locked(alpaca_mock):
+    """close_position raises 40310000 on first attempt, succeeds on retry."""
+    alpaca_mock.set_close_behavior("oco_locked", unlock_after=1)
+    return alpaca_mock
+
+
+@pytest.fixture
+def alpaca_phantom_position(alpaca_mock):
+    """Broker has an open AAPL position not tracked in our DB."""
+    alpaca_mock.add_open_position("AAPL", qty=10, avg_entry_price=150.0)
+    return alpaca_mock
 
 
 @pytest.fixture
