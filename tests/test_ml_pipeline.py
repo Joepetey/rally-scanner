@@ -2,15 +2,14 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from config import PARAMS
 from core.features import (
     FEATURE_COLS,
+    _rsi,
     build_features,
     compute_compression,
     compute_range,
-    _rsi,
 )
 from core.train import fit_model
 from trading.signals import compute_position_size, generate_signals
@@ -88,8 +87,6 @@ class TestFeatureCorrectness:
 
 def _prepare_training_df(ohlcv_with_vix: pd.DataFrame) -> pd.DataFrame:
     """Build features and attach a synthetic RALLY_ST label."""
-    from core.features import ALL_FEATURE_COLS
-
     df = build_features(ohlcv_with_vix, live=False)
 
     # Synthetic label: price rose > 2% within next 10 bars
@@ -234,7 +231,9 @@ class TestPipelineIntegration:
         from config import AssetConfig
 
         artifacts = {
-            "asset_config": AssetConfig(ticker="TEST", asset_class="equity", r_up=0.03, d_dn=0.02).model_dump(),
+            "asset_config": AssetConfig(
+                ticker="TEST", asset_class="equity", r_up=0.03, d_dn=0.02,
+            ).model_dump(),
             "lr_model": None,
             "lr_scaler": None,
             "iso_calibrator": None,
@@ -246,9 +245,9 @@ class TestPipelineIntegration:
 
     def test_pipeline_output_schema_is_stable(self, ohlcv_with_vix):
         """Train a model, run scan_single, verify output keys."""
+        from config import AssetConfig
         from core.features import ALL_FEATURE_COLS
         from pipeline.scanner import scan_single
-        from config import AssetConfig
 
         df = _prepare_training_df(ohlcv_with_vix)
         artifacts = fit_model(df, ALL_FEATURE_COLS, target_col="RALLY_ST")

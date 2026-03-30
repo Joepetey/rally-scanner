@@ -7,7 +7,6 @@ from alpaca.trading.enums import OrderSide
 
 from integrations.alpaca.executor import check_pending_fills, check_trail_stop_fills
 
-
 # ---------------------------------------------------------------------------
 # Stale fill rejection
 # ---------------------------------------------------------------------------
@@ -95,7 +94,6 @@ async def test_store_order_ids_does_not_overwrite_existing(alpaca_mock):
     We test this by calling the function's core logic through the scheduler method
     against real position state.
     """
-    from db.positions import load_positions, save_positions
     from integrations.alpaca.executor import OrderResult
 
     # Seed a position with an existing order_id

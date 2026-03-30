@@ -4,7 +4,6 @@ Data fetching — daily OHLCV via yfinance, with batch download and disk caching
 
 import logging
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd

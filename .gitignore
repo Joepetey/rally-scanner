@@ -37,3 +37,6 @@ positions.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Memory
+memory/

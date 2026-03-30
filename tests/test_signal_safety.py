@@ -8,7 +8,6 @@ from core.features import _rsi, build_features
 from core.persistence import load_model
 from trading.signals import compute_position_size, generate_signals
 
-
 # ---------------------------------------------------------------------------
 # Position sizing safety
 # ---------------------------------------------------------------------------

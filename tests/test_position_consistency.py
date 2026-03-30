@@ -1,11 +1,9 @@
 """Tests for model persistence atomicity and position state consistency."""
 
-import joblib
 import pytest
-from pathlib import Path
 
 from config import AssetConfig
-from core.persistence import save_model, load_model
+from core.persistence import load_model, save_model
 
 
 @pytest.fixture
