@@ -5,6 +5,7 @@ reconcile with empty positions, and housekeeping market-hours/crypto logic.
 """
 
 import asyncio
+import zoneinfo
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -344,3 +345,42 @@ async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
 
     # run_housekeeping MUST have been called — crypto keeps it alive
     scheduler._engine.run_housekeeping.assert_awaited_once()
+
+
+# ------------------------------------------------------------------
+# Retrain loop catch-up
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retrain_fires_after_window_on_sunday():
+    """Retrain must fire if scheduler starts after 18:05 ET on Sunday (catch-up)."""
+    from datetime import datetime as _dt
+    from unittest.mock import PropertyMock
+
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+
+    call_count = 0
+
+    async def _sleep_then_stop(seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise asyncio.CancelledError
+
+    # Simulate Sunday 20:30 ET — well past the old 18:00-18:04 window
+    fake_now = _dt(2026, 3, 29, 20, 30, tzinfo=zoneinfo.ZoneInfo("America/New_York"))
+    assert fake_now.weekday() == 6  # confirm Sunday
+
+    with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
+         patch("trading.scheduler.datetime") as mock_dt, \
+         patch.object(scheduler, "run_retrain", new_callable=AsyncMock) as mock_retrain:
+        mock_dt.now.return_value = fake_now
+        mock_dt.min = _dt.min
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._retrain_loop()
+
+    mock_retrain.assert_awaited_once()

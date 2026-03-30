@@ -828,20 +828,24 @@ class TradingScheduler:
             self._scan_in_progress["weekend_crypto"] = False
 
     async def _retrain_loop(self) -> None:
-        """Time-based: weekly retrain Sunday 6 PM ET."""
+        """Time-based: weekly retrain Sunday >= 6 PM ET.
+
+        Uses catch-up semantics: if the container restarts after 18:00,
+        the retrain fires on the first loop iteration instead of being
+        silently skipped until next week.
+        """
         while True:
             await asyncio.sleep(60)
             now = datetime.now(_ET)
             if now.weekday() != 6:  # Sunday only
                 continue
             today = now.date().isoformat()
-            if now.hour == 18 and now.minute < 5:
-                if self._ran_retrain != today:
-                    try:
-                        self._ran_retrain = today
-                        await self.run_retrain()
-                    except Exception:
-                        logger.exception("Retrain loop error")
+            if now.hour >= 18 and self._ran_retrain != today:
+                try:
+                    self._ran_retrain = today
+                    await self.run_retrain()
+                except Exception:
+                    logger.exception("Retrain loop error")
 
     # ------------------------------------------------------------------
     # Stream callback (sync — called from stream daemon thread)
