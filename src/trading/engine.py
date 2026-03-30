@@ -294,7 +294,10 @@ class AlertEngine:
         orders_placed: list[dict] = []
 
         if alpaca_enabled():
-            await sync_positions_from_alpaca()
+            try:
+                await sync_positions_from_alpaca()
+            except Exception:
+                logger.exception("Housekeeping: Alpaca sync failed")
 
         if alpaca_enabled():
             pending_ids = [p.get("order_id") for p in positions if p.get("order_id")]

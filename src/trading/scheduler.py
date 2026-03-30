@@ -274,8 +274,12 @@ class TradingScheduler:
         all_signals = [r for r in results if r.get("signal")]
 
         if alpaca_enabled():
-            await sync_positions_from_alpaca()
-            self._invalidate_positions_cache()
+            try:
+                _equity = await get_account_equity()
+                await sync_positions_from_alpaca(equity=_equity)
+                self._invalidate_positions_cache()
+            except Exception:
+                logger.exception("Alpaca sync failed — using cached positions")
         positions = self._load_cached_positions()
 
         # Detect exits; defer DB commit if Alpaca will confirm them

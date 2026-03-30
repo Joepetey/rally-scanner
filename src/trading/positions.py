@@ -56,17 +56,17 @@ __all__ = [
 # Alpaca merge — source of truth for which positions are open
 # ---------------------------------------------------------------------------
 
-async def get_merged_positions() -> dict:
+async def get_merged_positions(equity: float = 0.0) -> dict:
     """Sync with Alpaca broker state then return DB positions."""
-    await sync_positions_from_alpaca()
+    await sync_positions_from_alpaca(equity=equity)
     return load_positions()
 
 
-async def sync_positions_from_alpaca() -> dict:
+async def sync_positions_from_alpaca(equity: float = 0.0) -> dict:
     """Reconcile DB with Alpaca broker state.
 
     Three cases:
-    1. In Alpaca + in DB  → update qty/entry_price from broker, keep all metadata
+    1. In Alpaca + in DB  → update qty/entry_price/current_price from broker
     2. In Alpaca, not DB  → insert with broker values and PARAMS-derived stops
     3. In DB, not Alpaca  → broker closed it; recover fill price, delete + record closed
     """
@@ -111,6 +111,10 @@ async def sync_positions_from_alpaca() -> dict:
             p = PARAMS
             entry = bp["avg_entry_price"]
             atr_val = round(entry * p.default_atr_pct, 4)
+            # Compute size from broker market_value when equity is available
+            size = round(bp["market_value"] / equity, 4) if equity > 0 else 0.0
+            current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else entry
+            pnl = round((current / entry - 1) * 100, 2) if entry else 0.0
             new_pos = {
                 "ticker": ticker,
                 "qty": bp["qty"],
@@ -119,23 +123,32 @@ async def sync_positions_from_alpaca() -> dict:
                 "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
                 "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
                 "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
-                "highest_close": entry,
+                "highest_close": max(entry, current),
                 "atr": atr_val,
                 "bars_held": 0,
-                "size": 0.0,
+                "size": size,
+                "current_price": current,
+                "unrealized_pnl_pct": pnl,
                 "p_rally": 0.0,
                 "status": "open",
             }
             save_position_meta(new_pos)
-            logger.warning("sync: inserted untracked position %s with default stops", ticker)
+            logger.warning("sync: inserted untracked position %s (size=%.1f%%)", ticker, size * 100)
 
-        # Case 1: in both — update qty/entry from broker, keep all metadata unchanged
+        # Case 1: in both — update qty/entry/current_price from broker
         matched_tickers = broker_tickers & db_tickers
         for ticker in matched_tickers:
             bp = broker_map[ticker]
             pos = meta_map[ticker]
             pos["qty"] = bp["qty"]
             pos["entry_price"] = bp["avg_entry_price"]
+            current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else pos["entry_price"]
+            pos["current_price"] = current
+            pos["unrealized_pnl_pct"] = round(
+                (current / pos["entry_price"] - 1) * 100, 2
+            ) if pos["entry_price"] else 0.0
+            if equity > 0:
+                pos["size"] = round(bp["market_value"] / equity, 4)
             save_position_meta(pos)
 
         return {

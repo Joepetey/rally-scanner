@@ -134,6 +134,16 @@ def init_schema() -> None:
             ADD COLUMN IF NOT EXISTS p_rally DOUBLE PRECISION DEFAULT 0
         """)
 
+        # Persist current_price + unrealized PnL so display doesn't revert to 0
+        cur.execute("""
+            ALTER TABLE system_positions
+            ADD COLUMN IF NOT EXISTS current_price DOUBLE PRECISION DEFAULT 0
+        """)
+        cur.execute("""
+            ALTER TABLE system_positions
+            ADD COLUMN IF NOT EXISTS unrealized_pnl_pct DOUBLE PRECISION DEFAULT 0
+        """)
+
         # Add exit order tracking columns if not present (migration-safe)
         cur.execute("""
             ALTER TABLE system_positions

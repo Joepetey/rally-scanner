@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 _UPSERT_POSITION_SQL = """INSERT INTO system_positions
        (ticker, entry_price, entry_date, stop_price, target_price,
         trailing_stop, highest_close, atr, bars_held, size, qty,
-        order_id, trail_order_id, target_order_id, p_rally, updated_at)
-   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        order_id, trail_order_id, target_order_id, p_rally,
+        current_price, unrealized_pnl_pct, updated_at)
+   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
    ON CONFLICT (ticker) DO UPDATE SET
        entry_price=EXCLUDED.entry_price, entry_date=EXCLUDED.entry_date,
        stop_price=EXCLUDED.stop_price, target_price=EXCLUDED.target_price,
@@ -27,6 +28,8 @@ _UPSERT_POSITION_SQL = """INSERT INTO system_positions
        trail_order_id=EXCLUDED.trail_order_id,
        target_order_id=EXCLUDED.target_order_id,
        p_rally=EXCLUDED.p_rally,
+       current_price=EXCLUDED.current_price,
+       unrealized_pnl_pct=EXCLUDED.unrealized_pnl_pct,
        updated_at=NOW()"""
 
 
@@ -40,6 +43,8 @@ def _position_params(pos: dict) -> tuple:
         pos.get("atr", 0), pos.get("bars_held", 0), pos.get("size", 0),
         pos.get("qty", 0), pos.get("order_id"), pos.get("trail_order_id"),
         pos.get("target_order_id"), pos.get("p_rally", 0),
+        pos.get("current_price", pos.get("entry_price", 0)),
+        pos.get("unrealized_pnl_pct", 0),
     )
 
 
