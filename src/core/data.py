@@ -163,13 +163,13 @@ def fetch_daily_batch(
     cache = DataCache() if (use_cache and PIPELINE.cache_enabled) else None
     result: dict[str, pd.DataFrame] = {}
     tickers_to_fetch: list[str] = []
-    yesterday = (datetime.now() - timedelta(days=2)).date()
+    most_recent_trading_day = (pd.Timestamp.now() - pd.tseries.offsets.BDay(1)).date()
 
     # Phase 1: Check cache
     if cache is not None:
         for ticker in tickers:
             last = cache.last_date(ticker)
-            if last is not None and last.date() >= yesterday:
+            if last is not None and last.date() >= most_recent_trading_day:
                 cached_df = cache.get(ticker)
                 if cached_df is not None and len(cached_df) > 0:
                     result[ticker] = cached_df
