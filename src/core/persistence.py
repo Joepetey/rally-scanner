@@ -38,7 +38,9 @@ def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
     artifacts["saved_at"] = datetime.now().isoformat()
 
     path = MODELS_DIR / f"{ticker}.joblib"
-    joblib.dump(artifacts, path)
+    tmp_path = path.with_suffix(".tmp")
+    joblib.dump(artifacts, tmp_path)
+    tmp_path.rename(path)
 
     save_manifest_entry(ticker, {
         "saved_at": artifacts["saved_at"],
