@@ -28,6 +28,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from config import PARAMS
+from db.events import clear_price_alerts
 from db.positions import load_position_meta, save_position_meta
 from integrations.alpaca.executor import (
     check_pending_fills,
@@ -36,7 +37,6 @@ from integrations.alpaca.executor import (
     get_snapshots,
     place_exit_orders,
 )
-from db.events import clear_price_alerts
 from integrations.discord.notify import (
     _exit_embed,
     _fill_confirmation_embed,
