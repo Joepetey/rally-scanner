@@ -21,8 +21,10 @@ from integrations.alpaca.executor import (
     check_pending_fills,
     execute_exit,
     get_recent_sell_fills,
-    is_enabled as alpaca_enabled,
     place_exit_orders,
+)
+from integrations.alpaca.executor import (
+    is_enabled as alpaca_enabled,
 )
 from trading.positions import (
     async_close_position,
@@ -152,7 +154,9 @@ class AlertEngine:
         effective_stop = max(stop, trailing)
 
         if effective_stop > 0 and price <= effective_stop:
-            if log_price_alert(today, ticker, "stop_breached", price, effective_stop, entry, pnl_pct):
+            if log_price_alert(
+                today, ticker, "stop_breached", price, effective_stop, entry, pnl_pct
+            ):
                 level_name = "Trailing Stop" if trailing > stop else "Stop"
                 return AlertEvent(
                     ticker=ticker,
@@ -179,7 +183,9 @@ class AlertEngine:
         elif self._proximity_pct > 0 and effective_stop > 0:
             distance = (price / effective_stop - 1) * 100
             if 0 < distance <= self._proximity_pct:
-                if log_price_alert(today, ticker, "near_stop", price, effective_stop, entry, pnl_pct):
+                if log_price_alert(
+                    today, ticker, "near_stop", price, effective_stop, entry, pnl_pct
+                ):
                     level_name = "Trailing Stop" if trailing > stop else "Stop"
                     return AlertEvent(
                         ticker=ticker,

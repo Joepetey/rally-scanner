@@ -17,9 +17,9 @@ from monitoring import init_sentry
 init_sentry()
 
 try:
+    from api import start_api_server
     from db.pool import init_pool
     from db.schema import init_schema
-    from api import start_api_server
     from integrations.discord.bot import make_bot, make_discord_event_handler
     from log import setup_logging
     from trading.scheduler import TradingScheduler

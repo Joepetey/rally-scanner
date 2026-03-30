@@ -6,15 +6,13 @@ and bot notification dispatch.
 """
 
 import asyncio
-import threading
 import time
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from trading.engine import AlertEngine, AlertEvent, ExitResult, HousekeepingResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -208,8 +206,12 @@ class TestAlpacaStreamManager:
         mgr, _ = self._make_mgr(on_trade=lambda t, p: fired.append(t))
         mgr._throttle = 1.0
 
-        t1 = MagicMock(); t1.symbol = "AAPL"; t1.price = 150.0
-        t2 = MagicMock(); t2.symbol = "MSFT"; t2.price = 400.0
+        t1 = MagicMock()
+        t1.symbol = "AAPL"
+        t1.price = 150.0
+        t2 = MagicMock()
+        t2.symbol = "MSFT"
+        t2.price = 400.0
 
         await mgr._handle_trade(t1)
         await mgr._handle_trade(t2)  # different ticker — should fire
@@ -505,7 +507,7 @@ class TestAlertEngineEvaluateSingleTicker:
 
         with patch("trading.engine.save_position_meta") as mock_save, \
              patch("trading.engine.log_price_alert", return_value=False):
-            events = await self.engine.check_prices([pos], quotes)
+            _ = await self.engine.check_prices([pos], quotes)
 
         # stop_price should have been raised to lock level
         assert pos["stop_price"] == pytest.approx(100.0 * 1.02, rel=1e-4)
@@ -681,8 +683,8 @@ class TestStreamHealthMonitoring:
     @pytest.mark.asyncio
     async def test_degradation_alert_fires_after_threshold(self):
         """StreamDegradedEvent is emitted once stream has been down >= 5 cycles."""
-        from trading.scheduler import TradingScheduler
         from trading.engine import StreamDegradedEvent
+        from trading.scheduler import TradingScheduler
 
         received = []
         scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
@@ -711,8 +713,8 @@ class TestStreamHealthMonitoring:
     @pytest.mark.asyncio
     async def test_degradation_alert_fires_only_once(self):
         """StreamDegradedEvent is not re-emitted on subsequent disconnected cycles."""
-        from trading.scheduler import TradingScheduler
         from trading.engine import StreamDegradedEvent
+        from trading.scheduler import TradingScheduler
 
         received = []
         scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
@@ -740,8 +742,8 @@ class TestStreamHealthMonitoring:
     @pytest.mark.asyncio
     async def test_recovery_alert_fires_after_degradation(self):
         """StreamRecoveredEvent is emitted when stream reconnects after degradation alert."""
+        from trading.engine import StreamRecoveredEvent
         from trading.scheduler import TradingScheduler
-        from trading.engine import StreamDegradedEvent, StreamRecoveredEvent
 
         received = []
         scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
@@ -777,8 +779,8 @@ class TestStreamHealthMonitoring:
     @pytest.mark.asyncio
     async def test_no_alert_before_threshold(self):
         """No StreamDegradedEvent before 5 disconnected cycles."""
-        from trading.scheduler import TradingScheduler
         from trading.engine import StreamDegradedEvent
+        from trading.scheduler import TradingScheduler
 
         received = []
         scheduler = TradingScheduler(on_event=AsyncMock(side_effect=lambda e: received.append(e)))
@@ -811,7 +813,6 @@ class TestStreamFallback:
         """_polling_loop should not call get_snapshots when stream.is_connected."""
         from trading.scheduler import TradingScheduler
 
-        received = []
         scheduler = TradingScheduler(on_event=AsyncMock())
         mock_stream = MagicMock()
         mock_stream.is_connected = True
@@ -835,9 +836,10 @@ class TestStreamFallback:
     @pytest.mark.asyncio
     async def test_polling_runs_when_stream_disconnected(self):
         """_polling_loop should poll when stream.is_connected is False."""
-        from trading.scheduler import TradingScheduler
         import zoneinfo
         from datetime import datetime
+
+        from trading.scheduler import TradingScheduler
 
         scheduler = TradingScheduler(on_event=AsyncMock())
         mock_stream = MagicMock()
@@ -908,7 +910,6 @@ class TestBotNotification:
 
     def _make_handler(self):
         """Return (bot_module, _handle_trading_event, mock_send_alert)."""
-        import importlib
         import integrations.discord.bot as bot_mod
 
         sent = []
@@ -970,8 +971,8 @@ class TestBotNotification:
 
     @pytest.mark.asyncio
     async def test_scan_result_signals_uses_signal_embed(self):
-        from trading.engine import ScanResult
         from integrations.discord.notify import _signal_embed
+        from trading.engine import ScanResult
 
         event = ScanResult(
             signals=[{
@@ -992,8 +993,8 @@ class TestBotNotification:
 
     @pytest.mark.asyncio
     async def test_stream_degraded_embed(self):
-        from trading.engine import StreamDegradedEvent
         from integrations.discord.notify import _stream_degraded_embed
+        from trading.engine import StreamDegradedEvent
 
         event = StreamDegradedEvent(disconnected_minutes=7)
         embed_data = _stream_degraded_embed(event.disconnected_minutes)
@@ -1003,8 +1004,8 @@ class TestBotNotification:
 
     @pytest.mark.asyncio
     async def test_stream_recovered_embed(self):
-        from trading.engine import StreamRecoveredEvent
         from integrations.discord.notify import _stream_recovered_embed
+        from trading.engine import StreamRecoveredEvent
 
         event = StreamRecoveredEvent(downtime_minutes=12)
         embed_data = _stream_recovered_embed(event.downtime_minutes)
@@ -1013,8 +1014,8 @@ class TestBotNotification:
 
     @pytest.mark.asyncio
     async def test_housekeeping_fill_notification(self):
-        from trading.engine import FillNotification
         from integrations.discord.notify import _fill_confirmation_embed
+        from trading.engine import FillNotification
 
         result = HousekeepingResult(
             fills_confirmed=[

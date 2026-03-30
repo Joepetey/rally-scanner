@@ -1,9 +1,8 @@
 """Model metadata persistence — manifest and regime states."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from db.pool import get_conn, row_to_dict
-
 
 # ---------------------------------------------------------------------------
 # model_manifest CRUD
@@ -36,7 +35,7 @@ def save_manifest_entry(ticker: str, meta: dict) -> None:
 
 
 def load_manifest() -> dict:
-    """Return all model manifest entries as {ticker: {saved_at, train_start, train_end, r_up, d_dn}}."""
+    """Return all model manifest entries as {ticker: {saved_at, train_start, train_end, r_up, d_dn}}."""  # noqa: E501
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM model_manifest")
@@ -81,13 +80,13 @@ def save_regime_states(states: dict) -> None:
                     s.get("p_normal", 0),
                     s.get("p_expanding", 0),
                     s.get("dominant_regime", ""),
-                    s.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    s.get("timestamp", datetime.now(UTC).isoformat()),
                 ),
             )
 
 
 def load_regime_states() -> dict:
-    """Return all regime states as {ticker: {p_compressed, p_normal, p_expanding, dominant_regime, timestamp}}."""
+    """Return all regime states as {ticker: {p_compressed, p_normal, p_expanding, dominant_regime, timestamp}}."""  # noqa: E501
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM regime_states")

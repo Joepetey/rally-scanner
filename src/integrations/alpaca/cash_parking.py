@@ -142,8 +142,12 @@ async def sell_sgov(equity: float, gap_fraction: float) -> OrderResult | None:
 
     try:
         result = await asyncio.to_thread(_sync)
-        logger.info("Sold %d/%d SGOV shares (gap=%.1f%%)", qty_to_sell, qty_held, gap_fraction * 100)
+        logger.info(
+            "Sold %d/%d SGOV shares (gap=%.1f%%)", qty_to_sell, qty_held, gap_fraction * 100
+        )
         return result
     except Exception as exc:
         logger.exception("Failed to sell SGOV")
-        return OrderResult(ticker=_TICKER, side="sell", qty=qty_to_sell, success=False, error=str(exc))
+        return OrderResult(
+            ticker=_TICKER, side="sell", qty=qty_to_sell, success=False, error=str(exc)
+        )

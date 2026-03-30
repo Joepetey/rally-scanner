@@ -2,8 +2,6 @@
 
 from datetime import date, timedelta
 
-import pytest
-
 from db.portfolio import (
     load_equity_history,
     load_trade_journal,

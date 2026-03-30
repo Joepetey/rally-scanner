@@ -32,6 +32,7 @@ from trading.engine import (
     StreamRecoveredEvent,
     WatchlistEvent,
 )
+
 from .agent import process_message
 from .notify import (
     _approaching_alert_embed,
@@ -144,7 +145,7 @@ def make_discord_event_handler(
                         title="⚠️ Daily Scan Skipped — No Trained Models",
                         description=(
                             "No trained models were found on the volume.\n"
-                            "Run retrain before the next scan: ask me to **retrain** or trigger it manually."
+                            "Run retrain before the next scan: ask me to **retrain** or trigger it manually."  # noqa: E501
                         ),
                         color=discord.Color.orange(),
                     )
@@ -166,8 +167,10 @@ def make_discord_event_handler(
 
                     entry_ok = [o for o in event.orders
                                 if o.get("side") == "buy" and o.get("success")]
-                    entry_fail = [o for o in event.orders
-                                  if o.get("side") == "buy" and not o.get("success") and not o.get("skipped")]
+                    entry_fail = [
+                        o for o in event.orders
+                        if o.get("side") == "buy" and not o.get("success") and not o.get("skipped")
+                    ]
                     exit_ok = [o for o in event.orders
                                if o.get("side") == "sell" and o.get("success")]
 
@@ -177,7 +180,8 @@ def make_discord_event_handler(
                         )
                     if entry_fail:
                         await _send_alert(
-                            discord.Embed.from_dict(_order_failure_embed(entry_fail)), "order_failure"
+                            discord.Embed.from_dict(_order_failure_embed(entry_fail)),
+                            "order_failure",
                         )
                     if exit_ok and event.equity:
                         await _send_alert(
@@ -327,8 +331,10 @@ def make_bot(token: str) -> RallyBot:
     # Simulation command — !simulate <scenario> [equity]
     # ------------------------------------------------------------------
     @bot.command(name="simulate")
-    async def simulate_command(ctx: commands.Context, scenario: str = "", *, rest: str = "") -> None:
-        """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""
+    async def simulate_command(
+        ctx: commands.Context, scenario: str = "", *, rest: str = ""
+    ) -> None:
+        """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""  # noqa: E501
         from simulation.runner import SimulationRunner
 
         # Parse optional equity override from remaining args

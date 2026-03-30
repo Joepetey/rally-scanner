@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def _dollar_metrics(capital: float, size: float, entry: float, stop: float | None = None) -> dict:
-    """Compute dollar allocation and risk from capital, size fraction, entry price, and optional stop."""
+    """Compute dollar allocation and risk from capital, size fraction, entry price, and stop."""
     metrics: dict = {}
     if capital > 0 and size > 0:
         metrics["dollar_allocation"] = capital * size
@@ -61,7 +61,12 @@ def _get_client() -> anthropic.Anthropic | None:
 TOOLS = [
     {
         "name": "get_signals",
-        "description": "Show recent entry signals from the market scanner. These are BUY SIGNALS only — NOT confirmed open positions. Whether actual trades were placed depends on whether Alpaca auto-execution is enabled. Use get_system_positions to see what is actually open.",
+        "description": (
+            "Show recent entry signals from the market scanner. These are BUY SIGNALS only"
+            " — NOT confirmed open positions. Whether actual trades were placed depends on"
+            " whether Alpaca auto-execution is enabled. Use get_system_positions to see what"
+            " is actually open."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -88,15 +93,18 @@ TOOLS = [
     },
     {
         "name": "enter_trade",
-        "description": "Record a new trade entry for the user. Auto-fills size/stop/target from system signal if available.",
+        "description": (
+            "Record a new trade entry for the user."
+            " Auto-fills size/stop/target from system signal if available."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL, NVDA)"},
+                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL, NVDA)"},  # noqa: E501
                 "price": {"type": "number", "description": "Entry price in dollars"},
-                "size": {"type": "number", "description": "Position size as decimal fraction of capital (e.g. 0.15 for 15%). Optional - will use system recommendation if available."},
-                "stop": {"type": "number", "description": "Stop-loss price in dollars. Optional - will use system recommendation if available."},
-                "target": {"type": "number", "description": "Profit target price in dollars. Optional - will use system recommendation if available."},
+                "size": {"type": "number", "description": "Position size as decimal fraction of capital (e.g. 0.15 for 15%). Optional - will use system recommendation if available."},  # noqa: E501
+                "stop": {"type": "number", "description": "Stop-loss price in dollars. Optional - will use system recommendation if available."},  # noqa: E501
+                "target": {"type": "number", "description": "Profit target price in dollars. Optional - will use system recommendation if available."},  # noqa: E501
                 "notes": {"type": "string", "description": "Optional notes about the trade"}
             },
             "required": ["ticker", "price"]
@@ -117,22 +125,22 @@ TOOLS = [
     },
     {
         "name": "get_pnl",
-        "description": "Show the user's P&L summary including total return, win rate, best/worst trades.",
+        "description": "Show the user's P&L summary including total return, win rate, best/worst trades.",  # noqa: E501
         "input_schema": {
             "type": "object",
             "properties": {
-                "period": {"type": "string", "description": "Time period: 'all', '30d', or '7d'", "enum": ["all", "30d", "7d"]}
+                "period": {"type": "string", "description": "Time period: 'all', '30d', or '7d'", "enum": ["all", "30d", "7d"]}  # noqa: E501
             },
             "required": []
         }
     },
     {
         "name": "set_capital",
-        "description": "Set the user's portfolio capital amount. This is used to calculate position sizes and dollar-based P&L.",
+        "description": "Set the user's portfolio capital amount. This is used to calculate position sizes and dollar-based P&L.",  # noqa: E501
         "input_schema": {
             "type": "object",
             "properties": {
-                "amount": {"type": "number", "description": "Portfolio capital in dollars (e.g., 10000 for $10,000)"}
+                "amount": {"type": "number", "description": "Portfolio capital in dollars (e.g., 10000 for $10,000)"}  # noqa: E501
             },
             "required": ["amount"]
         }
@@ -155,14 +163,14 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {"type": "integer", "description": "Number of days of history to show (default 30)"}
+                "days": {"type": "integer", "description": "Number of days of history to show (default 30)"}  # noqa: E501
             },
             "required": []
         }
     },
     {
         "name": "get_health",
-        "description": "Show model health status - how many models are fresh vs stale, and system status.",
+        "description": "Show model health status - how many models are fresh vs stale, and system status.",  # noqa: E501
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -171,13 +179,13 @@ TOOLS = [
     },
     {
         "name": "run_scan",
-        "description": "Run the market scanner to find new rally signals. Returns ticker signals — NOT confirmed trades. Actual positions are only opened if Alpaca auto-execution is configured; check get_system_positions to see what is actually open.",
+        "description": "Run the market scanner to find new rally signals. Returns ticker signals — NOT confirmed trades. Actual positions are only opened if Alpaca auto-execution is configured; check get_system_positions to see what is actually open.",  # noqa: E501
         "input_schema": {
             "type": "object",
             "properties": {
                 "config": {
                     "type": "string",
-                    "description": "Scan configuration: 'conservative' (default), 'baseline', 'aggressive', or 'concentrated'",
+                    "description": "Scan configuration: 'conservative' (default), 'baseline', 'aggressive', or 'concentrated'",  # noqa: E501
                     "enum": ["baseline", "conservative", "aggressive", "concentrated"]
                 }
             },
@@ -186,14 +194,14 @@ TOOLS = [
     },
     {
         "name": "run_retrain",
-        "description": "Retrain models for all tickers in the universe. This is a long-running operation (can take 10-30+ minutes). The user will receive progress updates during training and a completion notification.",
+        "description": "Retrain models for all tickers in the universe. This is a long-running operation (can take 10-30+ minutes). The user will receive progress updates during training and a completion notification.",  # noqa: E501
         "input_schema": {
             "type": "object",
             "properties": {
                 "tickers": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional list of specific tickers to retrain. If not provided, retrains all tickers in universe."
+                    "description": "Optional list of specific tickers to retrain. If not provided, retrains all tickers in universe."  # noqa: E501
                 }
             },
             "required": []
@@ -634,7 +642,8 @@ def _run_scan(config: str = "conservative") -> dict:
         # New signals: from scan results directly (not just entered positions)
         new_signals = [r for r in results if r.get("signal") and r["ticker"] not in open_tickers]
 
-        # Re-query DB for current open positions (scheduler may have modified state since scan started)
+        # Re-query DB for current open positions (scheduler may have modified state since scan
+        # started)
         current_state = get_merged_positions_sync()
         current_positions = current_state.get("positions", [])
         closed_today = current_state.get("closed_today", [])
@@ -740,7 +749,7 @@ def execute_tool(
         return {
             "_async_task": "retrain",
             "tickers": tickers,
-            "message": "Starting model retraining... This will take 10-30+ minutes. You'll receive progress updates."
+            "message": "Starting model retraining... This will take 10-30+ minutes. You'll receive progress updates."  # noqa: E501
         }
     elif tool_name == "get_price":
         return _get_price(tool_input.get("tickers", []))
@@ -834,7 +843,7 @@ Key conventions:
         logger.warning("Rate limit hit for user %s", discord_username)
         conversation_history.pop()  # remove the user message we just added
         return (
-            "Rate limit reached — too many tokens in flight. Try again in a moment, or type `/clear` to reset your conversation history.",
+            "Rate limit reached — too many tokens in flight. Try again in a moment, or type `/clear` to reset your conversation history.",  # noqa: E501
             conversation_history,
             [],
         )
@@ -887,7 +896,7 @@ Key conventions:
         except anthropic.RateLimitError:
             logger.warning("Rate limit hit mid-turn for user %s", discord_username)
             return (
-                "Rate limit reached mid-response. Try again in a moment, or type `/clear` to reset your conversation history.",
+                "Rate limit reached mid-response. Try again in a moment, or type `/clear` to reset your conversation history.",  # noqa: E501
                 conversation_history,
                 async_tasks,
             )

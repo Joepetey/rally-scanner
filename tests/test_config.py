@@ -13,7 +13,7 @@ def test_asset_config_fields():
 
 def test_assets_dict_nonempty():
     assert len(ASSETS) > 0
-    for key, ac in ASSETS.items():
+    for _key, ac in ASSETS.items():
         assert ac.asset_class in ("equity", "crypto")
         assert ac.r_up > 0
         assert ac.d_dn > 0
@@ -35,6 +35,6 @@ def test_pipeline_defaults():
 
 
 def test_crypto_assets_use_usd_suffix():
-    for key, ac in ASSETS.items():
+    for _key, ac in ASSETS.items():
         if ac.asset_class == "crypto":
-            assert ac.ticker.endswith("-USD"), f"{key} crypto ticker should end with -USD"
+            assert ac.ticker.endswith("-USD"), f"{_key} crypto ticker should end with -USD"

@@ -87,6 +87,6 @@ def fit_model(
         "state_order": state_order,
         "feature_cols": feature_cols,
         # Normalised coefficients — useful for fold-level diagnostics in backtest
-        "coefs": dict(zip(feature_cols, lr.coef_[0] / scaler.scale_)),
+        "coefs": dict(zip(feature_cols, lr.coef_[0] / scaler.scale_, strict=False)),
         "intercept": float(lr.intercept_[0]),
     }

@@ -3,16 +3,19 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # third-party
 from pydantic import BaseModel
 
 try:
     from alpaca.data.requests import StockSnapshotRequest
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import OrderClass as AlpacaOrderClass
     from alpaca.trading.enums import (
         OrderSide,
         OrderStatus,
+        OrderType,
         QueryOrderStatus,
         TimeInForce,
     )
@@ -24,7 +27,6 @@ try:
         TakeProfitRequest,
         TrailingStopOrderRequest,
     )
-    from alpaca.trading.enums import OrderClass as AlpacaOrderClass, OrderType
 
     _ALPACA_AVAILABLE = True
 except ImportError:
@@ -40,7 +42,7 @@ from db.positions import (
     log_skipped_signal,
     remove_from_queue,
 )
-from integrations.alpaca.broker import _data_client, _safe_qty, _trading_client, get_all_positions
+from integrations.alpaca.broker import _data_client, _safe_qty, _trading_client
 from trading.positions import async_close_position, get_group_exposure, get_total_exposure
 from trading.risk_manager import is_circuit_breaker_active
 
@@ -58,7 +60,8 @@ class OrderResult(BaseModel):
     error: str | None = None
     already_closed: bool = False
     skipped: bool = False  # intentional non-execution (risk cap, non-tradable, etc.)
-    actual_size: float | None = None  # actual allocated fraction (may differ from signal size after partial sizing)
+    # actual allocated fraction (may differ from signal size after partial sizing)
+    actual_size: float | None = None
 
 
 def is_enabled() -> bool:
@@ -689,7 +692,7 @@ async def get_recent_sell_fills(tickers: list[str]) -> dict[str, float]:
 
     def _sync() -> dict[str, float]:
         client = _trading_client()
-        after = datetime.now(timezone.utc) - timedelta(hours=24)
+        after = datetime.now(UTC) - timedelta(hours=24)
         orders = client.get_orders(filter=GetOrdersRequest(
             status=QueryOrderStatus.CLOSED,
             after=after,

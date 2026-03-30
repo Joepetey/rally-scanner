@@ -28,7 +28,6 @@ from unittest.mock import MagicMock
 
 from alpaca.trading.enums import OrderSide, OrderStatus
 
-
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
@@ -43,7 +42,7 @@ class MockAlpacaOrder:
     status: OrderStatus
     filled_avg_price: str | None = None
     filled_qty: str | None = None
-    legs: list["MockAlpacaOrder"] = field(default_factory=list)
+    legs: list[MockAlpacaOrder] = field(default_factory=list)
 
 
 @dataclass

@@ -3,7 +3,9 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from alpaca.trading.enums import OrderSide, OrderStatus
 
+from db.positions import load_positions, save_positions
 from integrations.alpaca.executor import (
     OrderResult,
     cancel_order,
@@ -19,14 +21,12 @@ from integrations.alpaca.executor import (
     place_trailing_stop,
 )
 from integrations.discord.notify import _order_embed, _order_failure_embed
-from db.positions import load_positions, save_positions
+from tests.helpers.alpaca_mock import MockAlpacaOrder
 from trading.positions import (
     close_position_intraday,
     get_trail_order_ids,
     update_fill_prices,
 )
-from tests.helpers.alpaca_mock import MockAlpacaOrder
-from alpaca.trading.enums import OrderSide, OrderStatus
 
 # ---------------------------------------------------------------------------
 # is_enabled()

@@ -1,0 +1,2 @@
+[console_scripts]
+rally-scanner = app:main_sync

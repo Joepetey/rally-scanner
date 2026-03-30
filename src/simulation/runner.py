@@ -23,7 +23,6 @@ scheduler's normal event path — the runner does not duplicate them.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -31,8 +30,8 @@ from config import PARAMS
 from db.positions import load_position_meta, save_position_meta
 from integrations.alpaca.executor import (
     check_pending_fills,
-    execute_exit,
     execute_entries,
+    execute_exit,
     get_snapshots,
     place_exit_orders,
 )
@@ -41,13 +40,13 @@ from integrations.discord.notify import (
     _fill_confirmation_embed,
     _order_embed,
 )
-from trading.positions import close_position_intraday, update_fill_prices
 from simulation.scenarios import (
     TICKER,
     get_inject_prices,
     get_signal_for_scenario,
     setup_position_for_scenario,
 )
+from trading.positions import close_position_intraday, update_fill_prices
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +179,9 @@ class SimulationRunner:
                     )
                 pos = fresh
                 fill_confirmed = True
-                logger.info("sim[%s]: fill confirmed %.4f (attempt %d)", scenario, fill_price, attempt + 1)
+                logger.info(
+                    "sim[%s]: fill confirmed %.4f (attempt %d)", scenario, fill_price, attempt + 1
+                )
                 break
 
         if not fill_confirmed:
@@ -217,7 +218,10 @@ class SimulationRunner:
         if exit_reason is None:
             return SimulationResult(
                 scenario=scenario, success=False,
-                error=f"Exit did not complete within timeout ({_EXIT_POLL_ATTEMPTS * _EXIT_POLL_INTERVAL}s)",
+                error=(
+                    f"Exit did not complete within timeout "
+                    f"({_EXIT_POLL_ATTEMPTS * _EXIT_POLL_INTERVAL}s)"
+                ),
             )
 
         pnl_pct = round((exit_price / fill_price - 1) * 100, 2) if fill_price else None

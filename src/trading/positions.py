@@ -6,28 +6,24 @@ Broker source of truth is Alpaca API.
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 
 from config import PARAMS, TICKER_TO_GROUP
-from integrations.alpaca.broker import get_all_positions
 from db.positions import (
     clear_expired_queue,
     delete_position_meta,
     dequeue_signals,
-    get_closed_today,
     get_unevaluated_skipped,
     load_all_position_meta,
     load_position_meta,
     load_positions,
     record_closed_position,
-    remove_from_queue,
     save_position_meta,
     save_positions,
-    tighten_trailing_stop,
     update_skipped_outcome,
 )
+from integrations.alpaca.broker import get_all_positions
 
 logger = logging.getLogger(__name__)
 

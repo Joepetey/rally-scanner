@@ -62,13 +62,13 @@ class AlpacaStreamManager:
 
         # --- Equity stream state ---
         self._symbols: set[str] = set()
-        self._stream: "StockDataStream | None" = None
+        self._stream: StockDataStream | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # --- Crypto stream state ---
         self._crypto_symbols: set[str] = set()
-        self._crypto_stream: "CryptoDataStream | None" = None
+        self._crypto_stream: CryptoDataStream | None = None
         self._crypto_thread: threading.Thread | None = None
 
         self._lock = threading.Lock()

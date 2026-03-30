@@ -4,8 +4,8 @@ import os
 
 # third-party
 try:
-    from alpaca.trading.client import TradingClient
     from alpaca.data.historical.stock import StockHistoricalDataClient
+    from alpaca.trading.client import TradingClient
     _ALPACA_AVAILABLE = True
 except ImportError:
     _ALPACA_AVAILABLE = False

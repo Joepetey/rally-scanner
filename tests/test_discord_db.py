@@ -16,7 +16,6 @@ from db.trades import (
 )
 from db.users import ensure_user, get_capital, set_capital
 
-
 # pg_db fixture from conftest.py handles init + truncate
 
 

@@ -403,7 +403,7 @@ def _stream_degraded_embed(disconnected_minutes: int) -> dict:
         "title": "Stream Degraded — Polling-Only Mode",
         "color": 0xFF8C00,
         "description": (
-            f"The Alpaca WebSocket stream has been disconnected for **{disconnected_minutes} min**.\n"
+            f"The Alpaca WebSocket stream has been disconnected for **{disconnected_minutes} min**.\n"  # noqa: E501
             "Price alert latency has degraded from seconds to ~15 minutes.\n"
             "Reconnect attempts are ongoing — check Railway logs for details."
         ),
@@ -416,7 +416,7 @@ def _stream_recovered_embed(downtime_minutes: int) -> dict:
         "title": "Stream Recovered",
         "color": 0x00FF00,
         "description": (
-            f"The Alpaca WebSocket stream has reconnected after **{downtime_minutes} min** of downtime.\n"
+            f"The Alpaca WebSocket stream has reconnected after **{downtime_minutes} min** of downtime.\n"  # noqa: E501
             "Real-time price alerts are active again."
         ),
     }

@@ -1,6 +1,6 @@
-"""DB helpers for operational event logging: orders, discord messages, price alerts, scheduler events."""
+"""DB helpers for operational event logging: orders, discord messages, price alerts, scheduler."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from db.pool import get_conn
 
@@ -21,7 +21,8 @@ def log_order(
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO orders (ticker, side, order_type, qty, context, order_id, status, fill_price, error)
+            INSERT INTO orders
+                (ticker, side, order_type, qty, context, order_id, status, fill_price, error)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
@@ -32,7 +33,7 @@ def log_order(
 
 def update_order_fill(order_id: str, fill_price: float, filled_at: datetime | None = None) -> None:
     """Mark an order as filled with the confirmed fill price."""
-    ts = filled_at or datetime.now(timezone.utc)
+    ts = filled_at or datetime.now(UTC)
     with get_conn() as conn:
         conn.cursor().execute(
             """

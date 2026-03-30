@@ -25,7 +25,6 @@ os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
-import numpy as np
 import pandas as pd
 
 from config import ASSETS, PARAMS, PIPELINE, AssetConfig

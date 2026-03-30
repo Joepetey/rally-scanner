@@ -11,7 +11,8 @@ import threading
 import time as _time
 import zoneinfo
 from collections.abc import Awaitable, Callable
-from datetime import date as _date, datetime
+from datetime import date as _date
+from datetime import datetime
 
 from config import ASSETS, PARAMS
 from core.data import fetch_quotes
@@ -20,17 +21,32 @@ from db.events import finish_scheduler_event, log_order, log_scheduler_event
 from db.portfolio import record_closed_trades, update_daily_snapshot
 from db.positions import (
     delete_position_meta as _del_meta,
+)
+from db.positions import (
     load_position_meta as _load_position_meta,
+)
+from db.positions import (
     load_positions,
+)
+from db.positions import (
     record_closed_position as _rec_closed,
+)
+from db.positions import (
     save_latest_scan as _save_latest_scan,
+)
+from db.positions import (
     save_position_meta as _save_position_meta,
+)
+from db.positions import (
     save_watchlist as _db_save_watchlist,
 )
+from integrations.alpaca.broker import get_all_positions
 from integrations.alpaca.cash_parking import (
     buy_sgov,
-    is_enabled as sgov_enabled,
     sell_sgov,
+)
+from integrations.alpaca.cash_parking import (
+    is_enabled as sgov_enabled,
 )
 from integrations.alpaca.executor import (
     check_exit_fills,
@@ -38,9 +54,10 @@ from integrations.alpaca.executor import (
     execute_exits,
     get_account_equity,
     get_snapshots,
+)
+from integrations.alpaca.executor import (
     is_enabled as alpaca_enabled,
 )
-from integrations.alpaca.broker import get_all_positions
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from pipeline.retrain import retrain_all
 from pipeline.scanner import scan_all, scan_watchlist
@@ -312,7 +329,9 @@ class TradingScheduler:
                                   r.order_id, "filled" if r.success else "failed",
                                   r.fill_price, r.error)
                     if ok:
-                        size_map = {r.ticker: r.actual_size for r in ok if r.actual_size is not None}
+                        size_map = {
+                            r.ticker: r.actual_size for r in ok if r.actual_size is not None
+                        }
                         filled_tickers = {r.ticker for r in ok}
                         filled_signals = [
                             {**s, "size": size_map.get(s["ticker"], s["size"])}
@@ -369,7 +388,9 @@ class TradingScheduler:
                     q_results = await execute_entries(queued, equity=equity)
                     q_ok = [r for r in q_results if r.success]
                     if q_ok:
-                        q_size_map = {r.ticker: r.actual_size for r in q_ok if r.actual_size is not None}
+                        q_size_map = {
+                            r.ticker: r.actual_size for r in q_ok if r.actual_size is not None
+                        }
                         filled_queued = [
                             {**s, "size": q_size_map.get(s["ticker"], s["size"])}
                             for s in queued if s["ticker"] in {r.ticker for r in q_ok}
@@ -395,7 +416,10 @@ class TradingScheduler:
         duration = round(_time.time() - t0, 1)
         finish_scheduler_event(_event_id, "success", n_signals=len(signals),
                                n_exits=len(confirmed_exits), duration_s=duration)
-        logger.info("Scan complete — %d signals, %d exits (%.0fs)", len(signals), len(confirmed_exits), duration)
+        logger.info(
+            "Scan complete — %d signals, %d exits (%.0fs)",
+            len(signals), len(confirmed_exits), duration,
+        )
 
         await self._on_event(ScanResult(
             signals=signals,
@@ -525,7 +549,10 @@ class TradingScheduler:
                         self._stream.update_subscriptions({p["ticker"] for p in all_pos})
 
                 # Stale price check + IEX REST fallback every 2 housekeeping cycles
-                if self._stream and self._stream.is_connected and self._housekeeping_cycles % 2 == 0:
+                if (
+                    self._stream and self._stream.is_connected
+                    and self._housekeeping_cycles % 2 == 0
+                ):
                     new_stale, known_stale = self._stream.get_stale_tickers(stale_seconds=300.0)
                     stale = new_stale + known_stale
                     if new_stale:
@@ -559,20 +586,26 @@ class TradingScheduler:
                                     )
                                     if pos:
                                         await self._execute_breach_guarded(
-                                            event.ticker, pos, event.current_price, event.alert_type,
+                                            event.ticker, pos,
+                                            event.current_price, event.alert_type,
                                         )
                         except Exception:
                             logger.exception("IEX fallback evaluation failed")
 
-                # Stream degradation monitoring: alert after 5 consecutive disconnected cycles (~5 min)
+                # Stream degradation monitoring: alert after 5 consecutive disconnected cycles
+                # (~5 min)
                 _DEGRADE_THRESHOLD = 5
                 if self._stream:
                     if not self._stream.is_connected:
                         self._stream_degraded_cycles += 1
-                        if self._stream_degraded_cycles >= _DEGRADE_THRESHOLD and not self._stream_alert_sent:
+                        if (
+                            self._stream_degraded_cycles >= _DEGRADE_THRESHOLD
+                            and not self._stream_alert_sent
+                        ):
                             self._stream_alert_sent = True
                             logger.warning(
-                                "Stream has been disconnected for %d min — emitting degradation alert",
+                                "Stream has been disconnected for %d min"
+                                " — emitting degradation alert",
                                 self._stream_degraded_cycles,
                             )
                             await self._on_event(StreamDegradedEvent(
@@ -624,7 +657,10 @@ class TradingScheduler:
                 events = await self._engine.check_prices(positions, quotes)
                 for event in events:
                     await self._on_event(event)
-                    if event.alert_type in ("stop_breached", "target_breached") and alpaca_enabled():
+                    if (
+                        event.alert_type in ("stop_breached", "target_breached")
+                        and alpaca_enabled()
+                    ):
                         pos = next((p for p in positions if p["ticker"] == event.ticker), None)
                         if pos:
                             await self._execute_breach_guarded(
@@ -710,7 +746,10 @@ class TradingScheduler:
                 # which fill at or near the open regardless, but sizing and stop/target
                 # calculations are more accurate with real opening prices.
                 if PARAMS.morning_scan_enabled and now.hour == 9 and 30 <= now.minute < 35:
-                    if self._ran_morning_scan != today and not self._scan_in_progress.get("morning"):
+                    if (
+                        self._ran_morning_scan != today
+                        and not self._scan_in_progress.get("morning")
+                    ):
                         self._ran_morning_scan = today
                         self._scan_in_progress["morning"] = True
                         try:

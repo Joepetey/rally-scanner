@@ -1,6 +1,6 @@
 """Universe cache persistence — single-row cache of S&P 500 + Nasdaq tickers."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from db.pool import get_conn
 
@@ -17,7 +17,7 @@ def save_universe_cache(tickers: list[str], source: str) -> None:
                    source=EXCLUDED.source,
                    fetched_at=EXCLUDED.fetched_at,
                    updated_at=NOW()""",
-            (tickers, source, datetime.now(timezone.utc)),
+            (tickers, source, datetime.now(UTC)),
         )
 
 
