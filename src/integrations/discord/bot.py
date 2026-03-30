@@ -335,6 +335,7 @@ def make_bot(token: str) -> RallyBot:
         ctx: commands.Context, scenario: str = "", *, rest: str = ""
     ) -> None:
         """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""  # noqa: E501
+        from integrations.alpaca.broker import simulation_keys
         from simulation.runner import SimulationRunner
 
         # Parse optional equity override from remaining args
@@ -358,43 +359,55 @@ def make_bot(token: str) -> RallyBot:
             await ctx.send("⚠️ Scheduler not initialised — cannot run simulation.")
             return
 
-        # Resolve equity: use override if provided, else fetch from Alpaca
-        if equity_override > 0:
-            equity = equity_override
-        else:
-            try:
-                from integrations.alpaca.executor import get_account_equity
-                equity = await get_account_equity()
-            except Exception as e:
-                await ctx.send(f"⚠️ Could not fetch account equity: {e}")
-                return
+        # Switch to simulation Alpaca account so paper orders don't pollute
+        # the production account (and vice-versa during sync).
+        try:
+            sim_ctx = simulation_keys()
+            sim_ctx.__enter__()
+        except RuntimeError as e:
+            await ctx.send(f"⚠️ {e}")
+            return
 
-        inject_fn = scheduler._stream.inject_trade if scheduler._stream else None
+        try:
+            # Resolve equity: use override if provided, else fetch from simulation account
+            if equity_override > 0:
+                equity = equity_override
+            else:
+                try:
+                    from integrations.alpaca.executor import get_account_equity
+                    equity = await get_account_equity()
+                except Exception as e:
+                    await ctx.send(f"⚠️ Could not fetch account equity: {e}")
+                    return
 
-        async def send_embed(embed_dict: dict) -> None:
-            await ctx.send(embed=discord.Embed.from_dict(embed_dict))
+            inject_fn = scheduler._stream.inject_trade if scheduler._stream else None
 
-        runner = SimulationRunner(
-            inject_fn=inject_fn,
-            invalidate_cache_fn=scheduler._invalidate_positions_cache,
-        )
+            async def send_embed(embed_dict: dict) -> None:
+                await ctx.send(embed=discord.Embed.from_dict(embed_dict))
 
-        await ctx.send(
-            f"▶️ **Simulation starting** — scenario: `{scenario}` | equity: `${equity:,.0f}`\n"
-            f"BTC paper order will be placed. Results follow..."
-        )
-        result = await runner.run(scenario, equity, send_embed)
-
-        if result.success:
-            pnl = result.realized_pnl_pct or 0.0
-            sign = "+" if pnl >= 0 else ""
-            await ctx.send(
-                f"✅ **Simulation complete** — `{scenario}`\n"
-                f"Entry: `${result.entry_price:,.2f}` → Exit: `${result.exit_price:,.2f}`\n"
-                f"Reason: `{result.exit_reason}` | PnL: `{sign}{pnl:.2f}%`"
+            runner = SimulationRunner(
+                inject_fn=inject_fn,
+                invalidate_cache_fn=scheduler._invalidate_positions_cache,
             )
-        else:
-            await ctx.send(f"❌ **Simulation failed** — `{scenario}`\n{result.error}")
+
+            await ctx.send(
+                f"▶️ **Simulation starting** — scenario: `{scenario}` | equity: `${equity:,.0f}`\n"
+                f"BTC paper order will be placed on simulation account. Results follow..."
+            )
+            result = await runner.run(scenario, equity, send_embed)
+
+            if result.success:
+                pnl = result.realized_pnl_pct or 0.0
+                sign = "+" if pnl >= 0 else ""
+                await ctx.send(
+                    f"✅ **Simulation complete** — `{scenario}`\n"
+                    f"Entry: `${result.entry_price:,.2f}` → Exit: `${result.exit_price:,.2f}`\n"
+                    f"Reason: `{result.exit_reason}` | PnL: `{sign}{pnl:.2f}%`"
+                )
+            else:
+                await ctx.send(f"❌ **Simulation failed** — `{scenario}`\n{result.error}")
+        finally:
+            sim_ctx.__exit__(None, None, None)
 
     # ------------------------------------------------------------------
     # Message handler for natural language interaction via Claude

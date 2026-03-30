@@ -716,3 +716,60 @@ async def test_place_trailing_stop_failure(alpaca_mock):
     trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
 
     assert trail_id is None
+
+
+# ---------------------------------------------------------------------------
+# simulation_keys context manager
+# ---------------------------------------------------------------------------
+
+
+def test_simulation_keys_swaps_and_restores(monkeypatch):
+    """simulation_keys swaps to sim keys and restores originals on exit."""
+    from integrations.alpaca.broker import simulation_keys
+
+    monkeypatch.setenv("ALPACA_API_KEY", "prod-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "prod-secret")
+    monkeypatch.setenv("ALPACA_SIMULATION_API_KEY", "sim-key")
+    monkeypatch.setenv("ALPACA_SIMULATION_SECRET_KEY", "sim-secret")
+
+    import os
+
+    with simulation_keys():
+        assert os.environ["ALPACA_API_KEY"] == "sim-key"
+        assert os.environ["ALPACA_SECRET_KEY"] == "sim-secret"
+
+    assert os.environ["ALPACA_API_KEY"] == "prod-key"
+    assert os.environ["ALPACA_SECRET_KEY"] == "prod-secret"
+
+
+def test_simulation_keys_restores_on_error(monkeypatch):
+    """Keys are restored even if the simulation raises."""
+    from integrations.alpaca.broker import simulation_keys
+
+    monkeypatch.setenv("ALPACA_API_KEY", "prod-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "prod-secret")
+    monkeypatch.setenv("ALPACA_SIMULATION_API_KEY", "sim-key")
+    monkeypatch.setenv("ALPACA_SIMULATION_SECRET_KEY", "sim-secret")
+
+    import os
+
+    with pytest.raises(ValueError):
+        with simulation_keys():
+            raise ValueError("boom")
+
+    assert os.environ["ALPACA_API_KEY"] == "prod-key"
+    assert os.environ["ALPACA_SECRET_KEY"] == "prod-secret"
+
+
+def test_simulation_keys_missing_raises(monkeypatch):
+    """Raises RuntimeError when simulation keys aren't configured."""
+    from integrations.alpaca.broker import simulation_keys
+
+    monkeypatch.setenv("ALPACA_API_KEY", "prod-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "prod-secret")
+    monkeypatch.delenv("ALPACA_SIMULATION_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SIMULATION_SECRET_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="ALPACA_SIMULATION_API_KEY"):
+        with simulation_keys():
+            pass

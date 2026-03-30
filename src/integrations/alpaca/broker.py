@@ -1,6 +1,7 @@
 # stdlib
 import asyncio
 import os
+from contextlib import contextmanager
 
 # third-party
 try:
@@ -57,3 +58,27 @@ async def get_all_positions() -> list[dict]:
         ]
 
     return await asyncio.to_thread(_sync)
+
+
+@contextmanager
+def simulation_keys():
+    """Temporarily swap ALPACA_API_KEY/SECRET_KEY to the simulation account.
+
+    Raises RuntimeError if ALPACA_SIMULATION_API_KEY is not set.
+    """
+    sim_key = os.environ.get("ALPACA_SIMULATION_API_KEY")
+    sim_secret = os.environ.get("ALPACA_SIMULATION_SECRET_KEY")
+    if not sim_key or not sim_secret:
+        raise RuntimeError(
+            "ALPACA_SIMULATION_API_KEY and ALPACA_SIMULATION_SECRET_KEY must be set"
+        )
+
+    orig_key = os.environ["ALPACA_API_KEY"]
+    orig_secret = os.environ["ALPACA_SECRET_KEY"]
+    os.environ["ALPACA_API_KEY"] = sim_key
+    os.environ["ALPACA_SECRET_KEY"] = sim_secret
+    try:
+        yield
+    finally:
+        os.environ["ALPACA_API_KEY"] = orig_key
+        os.environ["ALPACA_SECRET_KEY"] = orig_secret
