@@ -38,6 +38,7 @@ from integrations.alpaca.executor import (
     get_snapshots,
     is_enabled as alpaca_enabled,
 )
+from integrations.alpaca.broker import get_all_positions
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from pipeline.retrain import retrain_all
 from pipeline.scanner import scan_all, scan_watchlist
@@ -330,7 +331,24 @@ class TradingScheduler:
                                   r.fill_price, r.error)
                     if ok_exit:
                         ok_tickers = {r.ticker for r in ok_exit}
-                        confirmed_exits = [p for p in closed if p["ticker"] in ok_tickers]
+                        # Confirm at the broker level before deleting DB records.
+                        # success=True only means the close_position() API call succeeded;
+                        # if an OCO leg still held the shares, the position may still be
+                        # open at Alpaca. Ghost positions would be re-inserted by
+                        # sync_positions_from_alpaca() with wrong risk params.
+                        broker_positions = await get_all_positions()
+                        still_open = {p["ticker"] for p in broker_positions}
+                        ghost_tickers = ok_tickers & still_open
+                        if ghost_tickers:
+                            logger.warning(
+                                "Exit API success but position still open at broker "
+                                "— skipping DB delete to avoid ghost position: %s",
+                                ghost_tickers,
+                            )
+                        confirmed_exits = [
+                            p for p in closed
+                            if p["ticker"] in ok_tickers and p["ticker"] not in still_open
+                        ]
                         for pos in confirmed_exits:
                             _del_meta(pos["ticker"])
                             _rec_closed(pos)
