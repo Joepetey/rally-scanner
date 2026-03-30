@@ -27,6 +27,7 @@ def compute_position_size(preds: pd.DataFrame) -> pd.Series:
     Clamped to [min_position_size, max_risk]. Returns 0 for positions below minimum.
     """
     p = PARAMS
-    raw_size = p.vol_target_k * (preds["P_RALLY"] - p.p_rally_threshold) / preds["ATR_pct"]
+    atr = preds["ATR_pct"].replace(0, float("nan"))
+    raw_size = p.vol_target_k * (preds["P_RALLY"] - p.p_rally_threshold) / atr
     clipped = raw_size.clip(lower=0.0, upper=p.max_risk_frac)
     return clipped.where(clipped >= p.min_position_size, 0.0)
