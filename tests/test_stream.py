@@ -597,6 +597,50 @@ class TestTradingSchedulerIntegration:
         assert len(received) >= 1
         assert received[0].alert_type == "stop_breached"
 
+    def test_stream_write_skipped_when_position_deleted(self):
+        """MIC-72: stream callback must not resurrect a deleted position.
+
+        If async_close_position deletes the row between the cache read and the
+        _save_position_meta call, the DB existence check should suppress the write.
+        """
+        from trading.scheduler import TradingScheduler
+
+        scheduler = TradingScheduler(on_event=AsyncMock())
+        # Use a real loop object so _loop is truthy; run_coroutine_threadsafe is
+        # never called because evaluate_single_ticker returns no event here.
+        scheduler._loop = MagicMock()
+
+        pos = _make_pos(entry=100.0, stop=95.0)
+        # Position exists in cache but NOT in DB (simulates post-delete state)
+        with patch("trading.scheduler.load_positions", return_value={"positions": [pos]}), \
+             patch("trading.scheduler.update_position_for_price", return_value=True), \
+             patch("trading.scheduler._load_position_meta", return_value=None) as mock_load, \
+             patch("trading.scheduler._save_position_meta") as mock_save, \
+             patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "evaluate_single_ticker", return_value=None):
+            scheduler._on_stream_trade("AAPL", 94.0)
+
+        mock_load.assert_called_once_with("AAPL")
+        mock_save.assert_not_called()
+
+    def test_stream_write_proceeds_when_position_exists(self):
+        """Stream callback writes meta when position still exists in DB."""
+        from trading.scheduler import TradingScheduler
+
+        scheduler = TradingScheduler(on_event=AsyncMock())
+        scheduler._loop = MagicMock()
+
+        pos = _make_pos(entry=100.0, stop=95.0)
+        with patch("trading.scheduler.load_positions", return_value={"positions": [pos]}), \
+             patch("trading.scheduler.update_position_for_price", return_value=True), \
+             patch("trading.scheduler._load_position_meta", return_value=pos), \
+             patch("trading.scheduler._save_position_meta") as mock_save, \
+             patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "evaluate_single_ticker", return_value=None):
+            scheduler._on_stream_trade("AAPL", 94.0)
+
+        mock_save.assert_called_once_with(pos)
+
     @pytest.mark.asyncio
     async def test_concurrent_exit_guard_prevents_double_exit(self):
         """Second breach for same ticker while first is exiting should be skipped."""

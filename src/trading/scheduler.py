@@ -7,6 +7,7 @@ Zero Discord imports.
 
 import asyncio
 import logging
+import threading
 import time as _time
 import zoneinfo
 from collections.abc import Awaitable, Callable
@@ -19,6 +20,7 @@ from db.events import finish_scheduler_event, log_order, log_scheduler_event
 from db.portfolio import record_closed_trades, update_daily_snapshot
 from db.positions import (
     delete_position_meta as _del_meta,
+    load_position_meta as _load_position_meta,
     load_positions,
     record_closed_position as _rec_closed,
     save_latest_scan as _save_latest_scan,
@@ -136,6 +138,11 @@ class TradingScheduler:
         # Positions cache: populated on first read, invalidated on any write.
         # Cuts volume-mount DB reads to near-zero during steady state.
         self._positions_cache: dict | None = None
+
+        # Threading lock for stream-callback writes. Guards the cache-read →
+        # DB-write sequence in _on_stream_trade against concurrent
+        # async_close_position deletes (which run on the event loop).
+        self._stream_write_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Positions cache helpers
@@ -816,8 +823,14 @@ class TradingScheduler:
             return
 
         if update_position_for_price(pos, price):
-            _save_position_meta(pos)
-            self._invalidate_positions_cache()
+            with self._stream_write_lock:
+                # Re-verify the position still exists in DB before writing.
+                # async_close_position (event loop) may have deleted it between
+                # our cache read above and this point — without this check the
+                # UPSERT would resurrect a position that was intentionally closed.
+                if _load_position_meta(ticker) is not None:
+                    _save_position_meta(pos)
+                    self._invalidate_positions_cache()
 
         event = self._engine.evaluate_single_ticker(ticker, price, pos)
         if event:
