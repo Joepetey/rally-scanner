@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from alpaca.trading.enums import OrderSide, OrderStatus
@@ -42,6 +43,7 @@ class MockAlpacaOrder:
     status: OrderStatus
     filled_avg_price: str | None = None
     filled_qty: str | None = None
+    filled_at: datetime | None = None
     legs: list[MockAlpacaOrder] = field(default_factory=list)
 
 
@@ -176,6 +178,7 @@ class AlpacaMock:
             status=OrderStatus.FILLED,
             filled_avg_price=str(fill_price),
             filled_qty=qty,
+            filled_at=datetime.now(tz=UTC),
         )
         self._orders[order_id] = order
         return order

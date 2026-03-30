@@ -672,9 +672,12 @@ async def check_pending_fills(order_ids: list[str]) -> dict[str, float]:
             status=QueryOrderStatus.CLOSED,
         ))
         id_set = set(order_ids)
+        today = datetime.now(tz=UTC).date()
         fills: dict[str, float] = {}
         for order in orders:
             if order.status != OrderStatus.FILLED:
+                continue
+            if order.filled_at and order.filled_at.date() != today:
                 continue
             oid = str(order.id)
             if oid in id_set and order.filled_avg_price:
