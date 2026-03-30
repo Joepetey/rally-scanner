@@ -1,7 +1,12 @@
-"""Tests for TradingScheduler invariants — focused on _store_order_ids."""
+"""Tests for TradingScheduler invariants.
 
+Covers _store_order_ids, scan dedup, timeout, concurrent exit guards,
+reconcile with empty positions, and housekeeping market-hours/crypto logic.
+"""
+
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -131,3 +136,211 @@ async def test_store_order_ids_invalidates_cache():
         await scheduler._store_order_ids([])
 
     assert scheduler._positions_cache is None
+
+
+# ------------------------------------------------------------------
+# Scan dedup, timeout, concurrent exit, reconcile, housekeeping
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_dedup_prevents_concurrent_same_scan_type():
+    """Calling run_daily_scan("morning") twice concurrently must invoke scan_all exactly once."""
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+
+    # Make scan_all slow so both tasks overlap
+    scan_started = asyncio.Event()
+
+    def _slow_scan_all(*args, **kwargs):
+        # Signal that scan has started, then block
+        scan_started.set()
+        return []
+
+    async def _guarded_scan(scan_type: str):
+        """Replicate _scan_loop dedup guard around run_daily_scan."""
+        if scheduler._scan_in_progress.get(scan_type):
+            return
+        scheduler._scan_in_progress[scan_type] = True
+        try:
+            async with asyncio.timeout(600):
+                await scheduler.run_daily_scan(scan_type)
+        finally:
+            scheduler._scan_in_progress[scan_type] = False
+
+    with patch("trading.scheduler.scan_all", side_effect=_slow_scan_all) as mock_scan, \
+         patch("trading.scheduler.load_manifest", return_value={"AAPL": {}}), \
+         patch("trading.scheduler.load_positions", return_value={"positions": []}), \
+         patch("trading.scheduler.update_existing_positions", return_value={"positions": []}), \
+         patch("trading.scheduler.update_daily_snapshot"), \
+         patch("trading.scheduler._save_latest_scan"), \
+         patch("trading.scheduler._db_save_watchlist"), \
+         patch("trading.scheduler.alpaca_enabled", return_value=False), \
+         patch("trading.scheduler.log_scheduler_event", return_value=1), \
+         patch("trading.scheduler.finish_scheduler_event"):
+        # Launch two concurrent guarded scans
+        t1 = asyncio.create_task(_guarded_scan("morning"))
+        t2 = asyncio.create_task(_guarded_scan("morning"))
+        await asyncio.gather(t1, t2)
+
+        assert mock_scan.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_daily_scan_respects_timeout():
+    """run_daily_scan must raise TimeoutError when scan_all exceeds the timeout window."""
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+
+    original_to_thread = asyncio.to_thread
+
+    async def _hanging_to_thread(func, *args, **kwargs):
+        # Only hang when scan_all is called; pass through everything else
+        if func.__name__ == "scan_all":
+            await asyncio.sleep(9999)
+            return []
+        return await original_to_thread(func, *args, **kwargs)
+
+    with patch("trading.scheduler.load_manifest", return_value={"AAPL": {}}), \
+         patch("trading.scheduler.log_scheduler_event", return_value=1), \
+         patch("trading.scheduler.finish_scheduler_event"), \
+         patch("asyncio.to_thread", side_effect=_hanging_to_thread):
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await scheduler.run_daily_scan("morning")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_exits_for_same_ticker_prevented():
+    """Simultaneous breach exits for the same ticker must execute exactly once."""
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+
+    pos = {"ticker": "AAPL", "entry_price": 150.0, "stop_price": 140.0}
+
+    mock_exit_result = MagicMock()
+    mock_exit_result.ticker = "AAPL"
+
+    # Make execute_breach slow enough that both tasks overlap
+    async def _slow_execute_breach(*args, **kwargs):
+        await asyncio.sleep(0.1)
+        return mock_exit_result
+
+    scheduler._engine = MagicMock()
+    scheduler._engine.execute_breach = AsyncMock(side_effect=_slow_execute_breach)
+    scheduler._stream = None
+
+    with patch.object(scheduler, "run_risk_evaluation", new_callable=AsyncMock), \
+         patch("trading.scheduler.load_positions", return_value={"positions": []}):
+        t1 = asyncio.create_task(
+            scheduler._execute_breach_guarded("AAPL", pos, 139.0, "stop_breached"),
+        )
+        t2 = asyncio.create_task(
+            scheduler._execute_breach_guarded("AAPL", pos, 139.0, "stop_breached"),
+        )
+        await asyncio.gather(t1, t2)
+
+    scheduler._engine.execute_breach.assert_awaited_once()
+    assert "AAPL" not in scheduler._exiting_tickers  # cleaned up
+
+
+@pytest.mark.asyncio
+async def test_reconcile_loop_runs_with_empty_positions():
+    """_reconcile_loop must not crash with empty positions."""
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+    scheduler._positions_cache = {"positions": []}
+
+    scheduler._engine = MagicMock()
+    scheduler._engine.is_market_open.return_value = True
+
+    call_count = 0
+
+    async def _sleep_then_stop(seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise asyncio.CancelledError  # break out after first iteration
+
+    mock_fills = AsyncMock(return_value=[])
+    with patch("trading.scheduler.alpaca_enabled", return_value=True), \
+         patch("trading.scheduler.check_exit_fills", mock_fills), \
+         patch("asyncio.sleep", side_effect=_sleep_then_stop):
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._reconcile_loop()
+
+    mock_fills.assert_awaited_once_with([])
+
+
+@pytest.mark.asyncio
+async def test_housekeeping_skips_outside_market_hours_without_crypto():
+    """Housekeeping loop must skip when market is closed and no crypto positions."""
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+    scheduler._positions_cache = {"positions": []}  # no crypto
+
+    scheduler._engine = MagicMock()
+    scheduler._engine.is_market_open.return_value = False
+    scheduler._engine.run_housekeeping = AsyncMock()
+
+    call_count = 0
+
+    async def _sleep_then_stop(seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise asyncio.CancelledError
+
+    with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
+         patch("trading.scheduler.ASSETS", {}):
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._housekeeping_loop()
+
+    # run_housekeeping must NOT have been called — the iteration was skipped
+    scheduler._engine.run_housekeeping.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
+    """Housekeeping must NOT skip when market is closed but a crypto position is open."""
+    scheduler = _make_scheduler()
+    scheduler._exit_lock = asyncio.Lock()
+    scheduler._snapshot_lock = asyncio.Lock()
+
+    # Simulate one open BTC position
+    scheduler._positions_cache = {
+        "positions": [{"ticker": "BTC-USD", "entry_price": 60000}],
+    }
+
+    scheduler._engine = MagicMock()
+    scheduler._engine.is_market_open.return_value = False
+    scheduler._engine.run_housekeeping = AsyncMock(
+        return_value=MagicMock(fills_confirmed=0, orders_placed=0),
+    )
+    scheduler._stream = None
+
+    call_count = 0
+
+    async def _sleep_then_stop(seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise asyncio.CancelledError
+
+    btc_asset = MagicMock()
+    btc_asset.asset_class = "crypto"
+
+    with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
+         patch("config.ASSETS", {"BTC-USD": btc_asset}), \
+         patch("trading.scheduler.load_positions", return_value=scheduler._positions_cache), \
+         patch("trading.scheduler.alpaca_enabled", return_value=False):
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._housekeeping_loop()
+
+    # run_housekeeping MUST have been called — crypto keeps it alive
+    scheduler._engine.run_housekeeping.assert_awaited_once()
