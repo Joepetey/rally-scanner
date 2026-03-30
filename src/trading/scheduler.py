@@ -967,7 +967,8 @@ class TradingScheduler:
             if result.success and result.order_id:
                 for pos in state["positions"]:
                     if pos["ticker"] == result.ticker:
-                        pos["order_id"] = result.order_id
+                        if not pos.get("order_id"):
+                            pos["order_id"] = result.order_id
                         if result.qty:
                             pos["qty"] = result.qty
                         if result.trail_order_id:
