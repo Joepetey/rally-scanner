@@ -114,6 +114,9 @@ class TradingScheduler:
         # Weekend crypto scan dedup: "{date}_{6h_slot}" (slot 0=midnight,1=6am,2=noon,3=6pm)
         self._ran_weekend_scan: str = ""
 
+        # In-progress scan guard: prevent concurrent scans of the same type
+        self._scan_in_progress: dict[str, bool] = {}
+
         # Concurrent exit guard: prevent double-exit for the same ticker
         self._exiting_tickers: set[str] = set()
         self._exit_lock: asyncio.Lock  # assigned in start()
@@ -682,21 +685,41 @@ class TradingScheduler:
                 # which fill at or near the open regardless, but sizing and stop/target
                 # calculations are more accurate with real opening prices.
                 if PARAMS.morning_scan_enabled and now.hour == 9 and 30 <= now.minute < 35:
-                    if self._ran_morning_scan != today:
+                    if self._ran_morning_scan != today and not self._scan_in_progress.get("morning"):
                         self._ran_morning_scan = today
-                        await self.run_daily_scan("morning")
+                        self._scan_in_progress["morning"] = True
+                        try:
+                            async with asyncio.timeout(600):
+                                await self.run_daily_scan("morning")
+                        finally:
+                            self._scan_in_progress["morning"] = False
                 elif now.hour == 16 and 30 <= now.minute < 35:
-                    if self._ran_daily_scan != today:
+                    if self._ran_daily_scan != today and not self._scan_in_progress.get("daily"):
                         self._ran_daily_scan = today
-                        await self.run_daily_scan("daily")
+                        self._scan_in_progress["daily"] = True
+                        try:
+                            async with asyncio.timeout(600):
+                                await self.run_daily_scan("daily")
+                        finally:
+                            self._scan_in_progress["daily"] = False
                 elif PARAMS.midday_scans_enabled and now.hour == 11 and now.minute < 5:
-                    if self._ran_midday_1 != today:
+                    if self._ran_midday_1 != today and not self._scan_in_progress.get("midday_1"):
                         self._ran_midday_1 = today
-                        await self.run_midday_scan()
+                        self._scan_in_progress["midday_1"] = True
+                        try:
+                            async with asyncio.timeout(600):
+                                await self.run_midday_scan()
+                        finally:
+                            self._scan_in_progress["midday_1"] = False
                 elif PARAMS.midday_scans_enabled and now.hour == 13 and now.minute < 5:
-                    if self._ran_midday_2 != today:
+                    if self._ran_midday_2 != today and not self._scan_in_progress.get("midday_2"):
                         self._ran_midday_2 = today
-                        await self.run_midday_scan()
+                        self._scan_in_progress["midday_2"] = True
+                        try:
+                            async with asyncio.timeout(600):
+                                await self.run_midday_scan()
+                        finally:
+                            self._scan_in_progress["midday_2"] = False
             except Exception:
                 logger.exception("Scan loop error")
 
@@ -722,12 +745,19 @@ class TradingScheduler:
             logger.debug("Weekend crypto scan: no trained crypto models found, skipping")
             return
 
+        if self._scan_in_progress.get("weekend_crypto"):
+            return
         self._ran_weekend_scan = run_key
         logger.info(
             "Weekend crypto scan: %s (tickers=%s)",
             run_key, sorted(crypto_tickers),
         )
-        await self.run_daily_scan("weekend_crypto", tickers=crypto_tickers)
+        self._scan_in_progress["weekend_crypto"] = True
+        try:
+            async with asyncio.timeout(600):
+                await self.run_daily_scan("weekend_crypto", tickers=crypto_tickers)
+        finally:
+            self._scan_in_progress["weekend_crypto"] = False
 
     async def _retrain_loop(self) -> None:
         """Time-based: weekly retrain Sunday 6 PM ET."""
