@@ -356,7 +356,6 @@ async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
 async def test_retrain_fires_after_window_on_sunday():
     """Retrain must fire if scheduler starts after 18:05 ET on Sunday (catch-up)."""
     from datetime import datetime as _dt
-    from unittest.mock import PropertyMock
 
     scheduler = _make_scheduler()
     scheduler._exit_lock = asyncio.Lock()
