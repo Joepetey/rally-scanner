@@ -56,7 +56,10 @@ def load_model(ticker: str) -> dict:
     path = MODELS_DIR / f"{ticker}.joblib"
     if not path.exists():
         raise FileNotFoundError(f"No saved model for {ticker}")
-    return joblib.load(path)
+    try:
+        return joblib.load(path)
+    except Exception as e:
+        raise RuntimeError(f"Corrupt model artifact for {ticker}: {e}") from e
 
 
 def load_manifest() -> dict:
