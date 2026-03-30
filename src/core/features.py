@@ -92,7 +92,7 @@ def compute_range(df: pd.DataFrame) -> pd.DataFrame:
     df["RangeHigh"] = df["High"].rolling(p.range_period, min_periods=p.range_period).max()
     df["RangeLow"] = df["Low"].rolling(p.range_period, min_periods=p.range_period).min()
     df["RangeWidth"] = (df["RangeHigh"] - df["RangeLow"]) / df["Close"]
-    df["RangeTightness"] = df["RangeWidth"] / df["ATR_pct"]
+    df["RangeTightness"] = df["RangeWidth"] / df["ATR_pct"].replace(0, float("nan"))
     return df
 
 

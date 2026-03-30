@@ -107,7 +107,8 @@ def scan_single(
 
     # Check features are available
     missing = latest[feature_cols].isna().any(axis=1).iloc[0]
-    if missing:
+    has_inf = np.isinf(latest[feature_cols].values).any()
+    if missing or has_inf:
         return {"ticker": ticker, "status": "features_incomplete"}
 
     # Predict rally probability
