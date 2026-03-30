@@ -89,6 +89,24 @@ async def get_account_equity() -> float:
     return await asyncio.to_thread(_sync)
 
 
+async def get_all_positions() -> list[dict]:
+    def _sync():
+        client = _trading_client()
+        positions = client.get_all_positions()
+        return [
+            {
+                "ticker": p.symbol,
+                "qty": float(p.qty),
+                "avg_entry_price": float(p.avg_entry_price),
+                "market_value": float(p.market_value),
+                "unrealized_pl": float(p.unrealized_pl),
+            }
+            for p in positions
+        ]
+
+    return await asyncio.to_thread(_sync)
+
+
 async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
     equity_tickers = [
         t for t in tickers
