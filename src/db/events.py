@@ -15,8 +15,8 @@ def log_order(
     status: str = "pending",
     fill_price: float | None = None,
     error: str | None = None,
-) -> int:
-    """Insert an order record. Returns the new row id."""
+) -> int | None:
+    """Insert an order record. Returns the new row id, or None if duplicate order_id."""
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -24,11 +24,13 @@ def log_order(
             INSERT INTO orders
                 (ticker, side, order_type, qty, context, order_id, status, fill_price, error)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (order_id) DO NOTHING
             RETURNING id
             """,
             (ticker, side, order_type, qty, context, order_id, status, fill_price, error),
         )
-        return cur.fetchone()["id"]
+        row = cur.fetchone()
+        return row["id"] if row else None
 
 
 def update_order_fill(order_id: str, fill_price: float, filled_at: datetime | None = None) -> None:

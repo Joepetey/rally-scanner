@@ -10,6 +10,7 @@ Directory structure:
 Manifest metadata is stored in the `model_manifest` PostgreSQL table.
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -19,8 +20,8 @@ from config import AssetConfig
 from db.models import load_manifest as _db_load_manifest
 from db.models import save_manifest_entry
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-MODELS_DIR = PROJECT_ROOT / "models"
+PROJECT_ROOT = Path(os.environ.get("APP_ROOT", Path.cwd()))
+MODELS_DIR = Path(os.environ.get("MODELS_DIR", PROJECT_ROOT / "models"))
 
 
 def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
