@@ -275,8 +275,9 @@ class TestSyncEdgeCases:
             "highest_close": 105.0, "atr": 2.0, "bars_held": 3, "size": 0.08, "qty": 5,
         }]
 
+        no_fills = AsyncMock(return_value={})
         with patch("trading.positions.get_all_positions", AsyncMock(return_value=[])), \
-             patch("integrations.alpaca.executor.get_recent_sell_fills", AsyncMock(return_value={})):
+             patch("integrations.alpaca.executor.get_recent_sell_fills", no_fills):
             result = await sync_positions_from_alpaca()
 
         assert result["closed"] == 1
@@ -300,8 +301,9 @@ class TestSyncEdgeCases:
             "ticker": "NEW", "qty": 10, "avg_entry_price": 50.0,
             "market_value": 500.0, "unrealized_pl": 0.0,
         }])
+        no_fills = AsyncMock(return_value={})
         with patch("trading.positions.get_all_positions", mock_broker), \
-             patch("integrations.alpaca.executor.get_recent_sell_fills", AsyncMock(return_value={})):
+             patch("integrations.alpaca.executor.get_recent_sell_fills", no_fills):
             await sync_positions_from_alpaca(equity=10000.0)
 
         saved_pos = mock_save.call_args[0][0]
