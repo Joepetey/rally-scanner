@@ -1,9 +1,6 @@
 [build]
-builder = "nixpacks"
+builder = "RAILPACK"
 buildCommand = "pip install --no-cache-dir ."
-
-[build.nixpacks]
-aptPkgs = []
 
 [deploy]
 startCommand = "bash start.sh"
