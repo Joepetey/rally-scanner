@@ -11,28 +11,50 @@ from urllib.request import Request, urlopen
 
 from rally_ml.config import PARAMS as _P
 
+from integrations.discord.colors import (
+    BLUE as _BLUE,
+)
+from integrations.discord.colors import (
+    EMOJI_CLOSE as _EMOJI_CLOSE,
+)
+from integrations.discord.colors import (
+    EMOJI_STOP as _EMOJI_STOP,
+)
+from integrations.discord.colors import (
+    EMOJI_TARGET as _EMOJI_TARGET,
+)
+from integrations.discord.colors import (
+    EMOJI_WARN as _EMOJI_WARN,
+)
+from integrations.discord.colors import (
+    FOOTER_INTRADAY as _FOOTER_INTRADAY,
+)
+from integrations.discord.colors import (
+    FOOTER_INTRADAY_WARN as _FOOTER_INTRADAY_WARN,
+)
+from integrations.discord.colors import (
+    GOLD as _GOLD,
+)
+from integrations.discord.colors import (
+    GRAY as _GRAY,
+)
+from integrations.discord.colors import (
+    GREEN as _GREEN,
+)
+from integrations.discord.colors import (
+    ORANGE as _ORANGE,
+)
+from integrations.discord.colors import (
+    RED as _RED,
+)
+from integrations.discord.colors import (
+    RED_ORANGE as _RED_ORANGE,
+)
+from integrations.discord.colors import (
+    SKY as _SKY,
+)
+
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Shared constants
-# ---------------------------------------------------------------------------
-
-_GREEN = 0x00FF00
-_RED = 0xFF0000
-_ORANGE = 0xFF8C00
-_RED_ORANGE = 0xFF4500
-_SKY = 0x87CEEB
-_GOLD = 0xFFD700
-_GRAY = 0x95A5A6
-_BLUE = 0x0099FF
-
-_EMOJI_STOP = "\u26a0\ufe0f"   # ⚠️
-_EMOJI_TARGET = "\u2705"        # ✅
-_EMOJI_CLOSE = "\u274c"         # ❌
-_EMOJI_WARN = "\u26a0\ufe0f"   # ⚠️
-
-_FOOTER_INTRADAY = "Intraday alert \u2014 daily scan handles exits"
-_FOOTER_INTRADAY_WARN = "Intraday warning \u2014 daily scan handles exits"
 
 
 def _pnl_sign(pnl: float) -> str:

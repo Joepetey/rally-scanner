@@ -50,13 +50,6 @@ from .notify import (
 
 logger = logging.getLogger(__name__)
 
-# Colors
-GREEN = 0x00FF00
-RED = 0xFF0000
-BLUE = 0x0099FF
-GOLD = 0xFFD700
-GRAY = 0x95A5A6
-
 
 # ---------------------------------------------------------------------------
 

@@ -67,17 +67,17 @@ from integrations.alpaca.executor import (
 )
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from pipeline.scanner import scan_all, scan_watchlist
-from trading.engine import (
-    AlertEngine,
+from trading.engine import AlertEngine
+from trading.events import (
     AlertEvent,
     ExitResult,
-    HousekeepingResult,
     RegimeEvent,
     RetrainResult,
     RiskActionEvent,
     ScanResult,
     StreamDegradedEvent,
     StreamRecoveredEvent,
+    TradingEvent,
     WatchlistEvent,
 )
 from trading.positions import (
@@ -96,14 +96,6 @@ from trading.risk_manager import compute_drawdown, evaluate, execute_actions
 
 _ET = zoneinfo.ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
-
-# All event types the scheduler can emit
-TradingEvent = (
-    AlertEvent | ExitResult | HousekeepingResult |
-    ScanResult | WatchlistEvent | RegimeEvent | RetrainResult | RiskActionEvent |
-    StreamDegradedEvent | StreamRecoveredEvent
-)
-
 
 class TradingScheduler:
     """Owns AlertEngine + AlpacaStreamManager, emits typed events via callback.
