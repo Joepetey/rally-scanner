@@ -9,56 +9,21 @@ import logging
 import os
 import queue
 import time as _time
-import traceback
-from collections.abc import Awaitable, Callable
 
 import discord
 from discord.ext import commands
 
 from core.persistence import load_manifest
 from db.conversations import get_conversation_history, save_conversation_history
-from db.events import log_discord_message
 from db.users import ensure_user
-from pipeline.retrain import retrain_all
-from trading.engine import (
-    AlertEvent,
-    ExitResult,
-    HousekeepingResult,
-    RegimeEvent,
-    RetrainResult,
-    RiskActionEvent,
-    ScanResult,
-    StreamDegradedEvent,
-    StreamRecoveredEvent,
-    WatchlistEvent,
+from integrations.discord.event_handlers import (  # noqa: F401 — re-export
+    make_discord_event_handler,
 )
+from pipeline.retrain import retrain_all
 
 from .agent import process_message
-from .notify import (
-    _approaching_alert_embed,
-    _error_embed,
-    _exit_embed,
-    _fill_confirmation_embed,
-    _order_embed,
-    _order_failure_embed,
-    _positions_embed,
-    _price_alert_embed,
-    _regime_shift_embed,
-    _retrain_embed,
-    _risk_action_embed,
-    _signal_embed,
-    _stream_degraded_embed,
-    _stream_recovered_embed,
-)
 
 logger = logging.getLogger(__name__)
-
-# Colors
-GREEN = 0x00FF00
-RED = 0xFF0000
-BLUE = 0x0099FF
-GOLD = 0xFFD700
-GRAY = 0x95A5A6
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +49,7 @@ async def _run_retrain_task(
     """Run model retraining with live progress updates."""
     try:
         await channel.send(
-            "🔄 **Starting model retraining...**\n"
+            "\U0001f504 **Starting model retraining...**\n"
             "This will take 10-30+ minutes depending on the number of tickers."
         )
 
@@ -106,13 +71,13 @@ async def _run_retrain_task(
                     done, total, success, failed = progress_queue.get_nowait()
                     pct = int(done / total * 100) if total else 0
                     await channel.send(
-                        f"⏳ **Retraining... {elapsed_min}m elapsed**\n"
-                        f"• Progress: {done}/{total} ({pct}%)\n"
-                        f"• Success: {success} | Failed: {failed}"
+                        f"\u23f3 **Retraining... {elapsed_min}m elapsed**\n"
+                        f"\u2022 Progress: {done}/{total} ({pct}%)\n"
+                        f"\u2022 Success: {success} | Failed: {failed}"
                     )
                 except queue.Empty:
                     await channel.send(
-                        f"⏳ **Retraining... {elapsed_min}m elapsed** (fetching data)"
+                        f"\u23f3 **Retraining... {elapsed_min}m elapsed** (fetching data)"
                     )
 
         update_task = asyncio.create_task(send_updates())
@@ -137,21 +102,21 @@ async def _run_retrain_task(
             total = success
 
         await channel.send(
-            f"✅ **Retraining complete!**\n"
-            f"• Trained: {success}/{total} models\n"
-            f"• Failed: {failed}\n"
-            f"• Time: {minutes}m {seconds}s\n"
-            f"• You can now run scans to find signals!"
+            f"\u2705 **Retraining complete!**\n"
+            f"\u2022 Trained: {success}/{total} models\n"
+            f"\u2022 Failed: {failed}\n"
+            f"\u2022 Time: {minutes}m {seconds}s\n"
+            f"\u2022 You can now run scans to find signals!"
         )
     except Exception as e:
         logger.exception("Retrain task failed")
-        await channel.send(f"❌ **Retraining failed:** {str(e)}")
+        await channel.send(f"\u274c **Retraining failed:** {str(e)}")
 
 
 async def _simulate_command(
     ctx: commands.Context, scenario: str = "", *, rest: str = "",
 ) -> None:
-    """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""  # noqa: E501
+    """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""
     from integrations.alpaca.broker import simulation_keys
     from simulation.runner import SimulationRunner
 
@@ -160,7 +125,9 @@ async def _simulate_command(
         try:
             equity_override = float(rest.strip())
         except ValueError:
-            await ctx.send(f"⚠️ Invalid equity value: `{rest.strip()}` — must be a number.")
+            await ctx.send(
+                f"\u26a0\ufe0f Invalid equity value: `{rest.strip()}` \u2014 must be a number."
+            )
             return
 
     if not scenario:
@@ -172,14 +139,14 @@ async def _simulate_command(
 
     scheduler = ctx.bot.scheduler
     if scheduler is None:
-        await ctx.send("⚠️ Scheduler not initialised — cannot run simulation.")
+        await ctx.send("\u26a0\ufe0f Scheduler not initialised \u2014 cannot run simulation.")
         return
 
     try:
         sim_ctx = simulation_keys()
         sim_ctx.__enter__()
     except RuntimeError as e:
-        await ctx.send(f"⚠️ {e}")
+        await ctx.send(f"\u26a0\ufe0f {e}")
         return
 
     try:
@@ -190,7 +157,7 @@ async def _simulate_command(
                 from integrations.alpaca.executor import get_account_equity
                 equity = await get_account_equity()
             except Exception as e:
-                await ctx.send(f"⚠️ Could not fetch account equity: {e}")
+                await ctx.send(f"\u26a0\ufe0f Could not fetch account equity: {e}")
                 return
 
         inject_fn = scheduler._stream.inject_trade if scheduler._stream else None
@@ -201,7 +168,8 @@ async def _simulate_command(
         runner = SimulationRunner(inject_fn=inject_fn)
 
         await ctx.send(
-            f"▶️ **Simulation starting** — scenario: `{scenario}` | equity: `${equity:,.0f}`\n"
+            f"\u25b6\ufe0f **Simulation starting** \u2014 scenario: `{scenario}`"
+            f" | equity: `${equity:,.0f}`\n"
             f"BTC paper order will be placed on simulation account. Results follow..."
         )
         result = await runner.run(scenario, equity, send_embed)
@@ -210,12 +178,12 @@ async def _simulate_command(
             pnl = result.realized_pnl_pct or 0.0
             sign = "+" if pnl >= 0 else ""
             await ctx.send(
-                f"✅ **Simulation complete** — `{scenario}`\n"
-                f"Entry: `${result.entry_price:,.2f}` → Exit: `${result.exit_price:,.2f}`\n"
+                f"\u2705 **Simulation complete** \u2014 `{scenario}`\n"
+                f"Entry: `${result.entry_price:,.2f}` \u2192 Exit: `${result.exit_price:,.2f}`\n"
                 f"Reason: `{result.exit_reason}` | PnL: `{sign}{pnl:.2f}%`"
             )
         else:
-            await ctx.send(f"❌ **Simulation failed** — `{scenario}`\n{result.error}")
+            await ctx.send(f"\u274c **Simulation failed** \u2014 `{scenario}`\n{result.error}")
     finally:
         sim_ctx.__exit__(None, None, None)
 
@@ -246,200 +214,6 @@ class RallyBot(commands.Bot):
         )
 
 
-# ---------------------------------------------------------------------------
-# Event handlers (MIC-128)
-# ---------------------------------------------------------------------------
-
-async def _handle_alert_event(
-    event: AlertEvent, send_alert: Callable,
-) -> None:
-    if event.alert_type in ("stop_breached", "target_breached"):
-        embed = discord.Embed.from_dict(_price_alert_embed([event.model_dump()]))
-        await send_alert(embed, "price_alert")
-    elif event.alert_type in ("near_stop", "near_target"):
-        embed = discord.Embed.from_dict(_approaching_alert_embed([event.model_dump()]))
-        await send_alert(embed, "price_alert")
-
-
-async def _handle_exit_result(
-    event: ExitResult, send_alert: Callable,
-) -> None:
-    embed = discord.Embed.from_dict(_exit_embed([event.model_dump()]))
-    await send_alert(embed, "exit")
-
-
-async def _handle_housekeeping_result(
-    event: HousekeepingResult, send_alert: Callable,
-) -> None:
-    if event.fills_confirmed:
-        fills = [f.model_dump() for f in event.fills_confirmed]
-        embed = discord.Embed.from_dict(_fill_confirmation_embed(fills))
-        await send_alert(embed, "order")
-
-
-async def _handle_scan_result(
-    event: ScanResult, send_alert: Callable,
-) -> None:
-    if event.error:
-        embed = discord.Embed(
-            title="⚠️ Daily Scan Skipped — No Trained Models",
-            description=(
-                "No trained models were found on the volume.\n"
-                "Run retrain before the next scan: ask me to **retrain** or trigger it manually."  # noqa: E501
-            ),
-            color=discord.Color.orange(),
-        )
-        await send_alert(embed, "scan_error")
-        return
-
-    if event.signals:
-        sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
-        if event.scan_type == "premarket":
-            sig_embed.title = (
-                f"Pre-Market Signals ({len(event.signals)})"
-                " \u2014 executing at open"
-            )
-        elif event.scan_type not in ("daily", "morning", "cascade", "post_retrain"):
-            sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
-            sig_embed.set_footer(text="From watchlist mid-day scan")
-        await send_alert(sig_embed, "signal")
-
-    pos = event.positions_summary.get("positions", [])
-    await send_alert(discord.Embed.from_dict(_positions_embed(pos)), "positions")
-
-    if event.exits:
-        await send_alert(discord.Embed.from_dict(_exit_embed(event.exits)), "exit")
-
-    entry_ok = [o for o in event.orders if o.get("side") == "buy" and o.get("success")]
-    entry_fail = [
-        o for o in event.orders
-        if o.get("side") == "buy" and not o.get("success") and not o.get("skipped")
-    ]
-    exit_ok = [o for o in event.orders if o.get("side") == "sell" and o.get("success")]
-
-    if entry_ok and event.equity:
-        await send_alert(discord.Embed.from_dict(_order_embed(entry_ok, event.equity)), "order")
-    if entry_fail:
-        await send_alert(discord.Embed.from_dict(_order_failure_embed(entry_fail)), "order_failure")
-    if exit_ok and event.equity:
-        await send_alert(discord.Embed.from_dict(_order_embed(exit_ok, event.equity)), "order")
-
-
-async def _handle_watchlist_event(
-    event: WatchlistEvent, send_alert: Callable,
-) -> None:
-    if event.signals:
-        sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
-        sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
-        sig_embed.set_footer(text="From watchlist mid-day scan")
-        await send_alert(sig_embed, "signal")
-
-
-async def _handle_regime_event(
-    event: RegimeEvent, send_alert: Callable,
-) -> None:
-    await send_alert(
-        discord.Embed.from_dict(_regime_shift_embed(event.transitions)), "regime_shift",
-    )
-    if event.cascade_triggered:
-        await send_alert(discord.Embed(
-            title="Regime Cascade — Early Scan Triggered",
-            description=(
-                f"{len(event.transitions)} regime shifts detected simultaneously.\n"
-                f"Tickers: {', '.join(t['ticker'] for t in event.transitions)}\n"
-                "Running full scan now..."
-            ),
-            color=0xFF4500,
-        ), "regime_shift")
-
-
-async def _handle_retrain_result(
-    event: RetrainResult, send_alert: Callable,
-) -> None:
-    health = {
-        "total_count": event.manifest_size,
-        "fresh_count": event.manifest_size,
-        "stale_count": 0,
-    }
-    await send_alert(
-        discord.Embed.from_dict(_retrain_embed(health, event.duration_seconds)), "retrain",
-    )
-
-
-async def _handle_risk_action_event(
-    event: RiskActionEvent, send_alert: Callable,
-) -> None:
-    await send_alert(
-        discord.Embed.from_dict(_risk_action_embed(event.actions)), "risk_action",
-    )
-
-
-async def _handle_stream_degraded(
-    event: StreamDegradedEvent, send_alert: Callable,
-) -> None:
-    await send_alert(
-        discord.Embed.from_dict(_stream_degraded_embed(event.disconnected_minutes)),
-        "stream_degraded",
-    )
-
-
-async def _handle_stream_recovered(
-    event: StreamRecoveredEvent, send_alert: Callable,
-) -> None:
-    await send_alert(
-        discord.Embed.from_dict(_stream_recovered_embed(event.downtime_minutes)),
-        "stream_recovered",
-    )
-
-
-_EVENT_HANDLERS: dict[type, Callable] = {
-    AlertEvent: _handle_alert_event,
-    ExitResult: _handle_exit_result,
-    HousekeepingResult: _handle_housekeeping_result,
-    ScanResult: _handle_scan_result,
-    WatchlistEvent: _handle_watchlist_event,
-    RegimeEvent: _handle_regime_event,
-    RetrainResult: _handle_retrain_result,
-    RiskActionEvent: _handle_risk_action_event,
-    StreamDegradedEvent: _handle_stream_degraded,
-    StreamRecoveredEvent: _handle_stream_recovered,
-}
-
-
-def make_discord_event_handler(
-    bot: RallyBot,
-) -> Callable[..., Awaitable[None]]:
-    """Return an async handler that sends TradingScheduler events to Discord."""
-    alert_channel_id = os.environ.get("DISCORD_CHANNEL_ID", "")
-
-    async def _send_alert(embed: discord.Embed, msg_type: str = "other") -> None:
-        if not alert_channel_id:
-            return
-        channel = bot.get_channel(int(alert_channel_id))
-        if channel:
-            await channel.send(embed=embed)
-        log_discord_message(msg_type, embed.title, (embed.description or "")[:500] or None)
-
-    async def _send_error_alert(task_name: str, error: Exception) -> None:
-        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-        details = f"```\n{tb[-3500:]}\n```"
-        embed = discord.Embed.from_dict(_error_embed(f"{task_name} Failed", details))
-        await _send_alert(embed, "error")
-
-    async def _handle_trading_event(event) -> None:
-        """Dispatch a typed TradingScheduler event to its handler."""
-        handler = _EVENT_HANDLERS.get(type(event))
-        if handler is None:
-            return
-        try:
-            await handler(event, _send_alert)
-        except Exception as e:
-            logger.exception("Event handler error for %s", type(event).__name__)
-            await _send_error_alert(f"Event Handler ({type(event).__name__})", e)
-
-    return _handle_trading_event
-
-
 def make_bot(token: str) -> RallyBot:
     """Create and configure the agentic Discord bot."""
     bot = RallyBot()
@@ -464,7 +238,7 @@ def make_bot(token: str) -> RallyBot:
 
         if not os.environ.get("ANTHROPIC_API_KEY"):
             await message.channel.send(
-                "💡 **Tip**: Set `ANTHROPIC_API_KEY` in `.env` to enable the agentic bot!"
+                "\U0001f4a1 **Tip**: Set `ANTHROPIC_API_KEY` in `.env` to enable the agentic bot!"
             )
             return
 
@@ -512,7 +286,7 @@ def make_bot(token: str) -> RallyBot:
             except Exception as e:
                 logger.exception("Claude message processing failed")
                 await message.channel.send(
-                    f"⚠️ Error processing your request: {str(e)}"
+                    f"\u26a0\ufe0f Error processing your request: {str(e)}"
                 )
 
     return bot
