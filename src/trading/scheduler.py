@@ -25,6 +25,7 @@ from db.positions import (
 )
 from db.positions import (
     get_recently_closed_tickers,
+    load_current_signals,
     load_positions,
 )
 from db.positions import (
@@ -129,12 +130,18 @@ class TradingScheduler:
 
         # Daily dedup: store ISO date string of last run
         self._ran_morning_scan: str = ""
-        self._ran_daily_scan: str = ""
+        self._ran_morning_execute: str = ""
         self._ran_midday_1: str = ""
         self._ran_midday_2: str = ""
         self._ran_retrain: str = ""
         # Weekend crypto scan dedup: "{date}_{6h_slot}" (slot 0=midnight,1=6am,2=noon,3=6pm)
         self._ran_weekend_scan: str = ""
+
+        # Pre-market scan results, consumed by market-open execution
+        self._pending_signals: list[dict] = []
+        self._pending_exits: list[dict] = []
+        self._pending_scan_results: list[dict] = []
+        self._pending_positions_embed: list[dict] = []
 
         # In-progress scan guard: prevent concurrent scans of the same type
         self._scan_in_progress: dict[str, bool] = {}
@@ -422,6 +429,258 @@ class TradingScheduler:
         ))
 
         # Post-scan risk evaluation picks up any regime changes
+        await self.run_risk_evaluation()
+
+    async def run_premarket_scan(self) -> None:
+        """Run full-universe scan at 9:00 AM ET and store signals for market-open execution."""
+        logger.info("Scheduler: starting pre-market scan")
+        _event_id = log_scheduler_event("scan")
+        t0 = _time.time()
+
+        manifest = load_manifest()
+        if not manifest:
+            finish_scheduler_event(_event_id, "error", n_signals=0, n_exits=0, duration_s=0)
+            await self._on_event(ScanResult(
+                signals=[], exits=[], orders=[],
+                positions_summary={},
+                scan_type="premarket",
+                error="No trained models found",
+            ))
+            return
+
+        results = await asyncio.to_thread(scan_all, None, False, "conservative")
+        if not results:
+            finish_scheduler_event(_event_id, "success", n_signals=0, n_exits=0,
+                                   duration_s=round(_time.time() - t0, 1))
+            return
+
+        all_signals = [r for r in results if r.get("signal")]
+
+        if alpaca_enabled():
+            try:
+                _equity = await get_account_equity()
+                await sync_positions_from_alpaca(equity=_equity)
+            except Exception:
+                logger.exception("Alpaca sync failed — using cached positions")
+        positions = load_positions()
+
+        # Detect exits; defer DB commit — execution happens at 9:30
+        positions = await asyncio.to_thread(
+            update_existing_positions, positions, results, not alpaca_enabled(),
+        )
+        closed = positions.get("closed_today", [])
+
+        if closed and not alpaca_enabled():
+            record_closed_trades(closed)
+
+        update_daily_snapshot(positions, results)
+        self._save_watchlist(results, positions)
+        await asyncio.to_thread(_save_latest_scan, results, positions)
+
+        if manifest:
+            self._watchlist_tickers = sorted(manifest.keys())
+
+        open_tickers = {p["ticker"] for p in positions.get("positions", [])}
+        cooldown_tickers: set[str] = set()
+        if PARAMS.cooldown_days > 0:
+            cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+            cooled = [s["ticker"] for s in all_signals
+                      if s["ticker"] not in open_tickers and s["ticker"] in cooldown_tickers]
+            if cooled:
+                logger.info("Cooldown filter (%dd): skipping %s", PARAMS.cooldown_days, cooled)
+        signals = [s for s in all_signals
+                   if s["ticker"] not in open_tickers and s["ticker"] not in cooldown_tickers]
+
+        positions_for_embed = list(positions.get("positions", []))
+
+        # Store for market-open execution
+        self._pending_signals = signals
+        self._pending_exits = list(closed) if alpaca_enabled() else []
+        self._pending_scan_results = results
+        self._pending_positions_embed = positions_for_embed
+
+        duration = round(_time.time() - t0, 1)
+        confirmed_exits = list(closed) if not alpaca_enabled() else []
+        finish_scheduler_event(_event_id, "success", n_signals=len(signals),
+                               n_exits=len(confirmed_exits), duration_s=duration)
+        logger.info(
+            "Pre-market scan complete — %d signals, %d pending exits (%.0fs)",
+            len(signals), len(self._pending_exits), duration,
+        )
+
+        await self._on_event(ScanResult(
+            signals=signals,
+            exits=confirmed_exits,
+            orders=[],
+            positions_summary={"positions": positions_for_embed},
+            scan_type="premarket",
+        ))
+
+    async def run_market_open_execute(self) -> None:
+        """Execute pending signals and exits at market open (9:30 AM ET)."""
+        # Restart fallback: reload from DB if in-memory state was lost
+        if not self._pending_signals and not self._pending_exits:
+            if self._ran_morning_scan == _date.today().isoformat():
+                db_signals = load_current_signals()
+                if db_signals:
+                    logger.info(
+                        "Restart fallback: loaded %d signals from current_signals table",
+                        len(db_signals),
+                    )
+                    self._pending_signals = db_signals
+
+        if not self._pending_signals and not self._pending_exits:
+            logger.info("Market-open execute: nothing pending, skipping")
+            return
+
+        logger.info(
+            "Scheduler: executing %d entries + %d exits at market open",
+            len(self._pending_signals), len(self._pending_exits),
+        )
+        _event_id = log_scheduler_event("execute")
+        t0 = _time.time()
+
+        signals = self._pending_signals
+        closed = self._pending_exits
+        results = self._pending_scan_results
+        positions_for_embed = self._pending_positions_embed
+
+        orders: list[dict] = []
+        confirmed_exits: list[dict] = list(closed) if not alpaca_enabled() else []
+        scan_equity: float = 0.0
+
+        if alpaca_enabled():
+            try:
+                # Re-sync in case of pre-market changes
+                equity = await get_account_equity()
+                scan_equity = equity
+                await sync_positions_from_alpaca(equity=equity)
+
+                # Re-filter against current open positions (safety)
+                open_tickers = {
+                    p["ticker"] for p in load_positions().get("positions", [])
+                }
+                signals = [s for s in signals if s["ticker"] not in open_tickers]
+
+                # Sell SGOV to cover capital gap for new entries
+                if sgov_enabled() and signals:
+                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
+                    _needed = sum(s.get("size", 0) for s in signals)
+                    _gap = max(_needed - _available, 0.0)
+                    sgov_sell = await sell_sgov(equity, _gap)
+                    if sgov_sell and sgov_sell.success:
+                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
+
+                if signals:
+                    entry_results = await execute_entries(signals, equity=equity)
+                    ok = [r for r in entry_results if r.success]
+                    for r in entry_results:
+                        log_order(r.ticker, "buy", "market", r.qty, "entry",
+                                  r.order_id, "filled" if r.success else "failed",
+                                  r.fill_price, r.error)
+                    if ok:
+                        size_map = {
+                            r.ticker: r.actual_size for r in ok if r.actual_size is not None
+                        }
+                        filled_tickers = {r.ticker for r in ok}
+                        filled_signals = [
+                            {**s, "size": size_map.get(s["ticker"], s["size"])}
+                            for s in signals if s["ticker"] in filled_tickers
+                        ]
+
+                        fresh_positions = load_positions()
+                        add_signal_positions(fresh_positions, filled_signals)
+
+                        await self._store_order_ids(entry_results)
+                        if self._stream:
+                            all_pos = load_positions().get("positions", [])
+                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+                    orders.extend([r.model_dump() for r in entry_results])
+
+                if closed:
+                    exit_results = await execute_exits(closed)
+                    ok_exit = [r for r in exit_results if r.success]
+                    for r in exit_results:
+                        log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
+                                  r.order_id, "filled" if r.success else "failed",
+                                  r.fill_price, r.error)
+                    if ok_exit:
+                        ok_tickers = {r.ticker for r in ok_exit}
+                        broker_positions = await get_all_positions()
+                        still_open = {p["ticker"] for p in broker_positions}
+                        ghost_tickers = ok_tickers & still_open
+                        if ghost_tickers:
+                            logger.warning(
+                                "Exit API success but position still open at broker "
+                                "— skipping DB delete to avoid ghost position: %s",
+                                ghost_tickers,
+                            )
+                        confirmed_exits = [
+                            p for p in closed
+                            if p["ticker"] in ok_tickers and p["ticker"] not in still_open
+                        ]
+                        for pos in confirmed_exits:
+                            _del_meta(pos["ticker"])
+                            _rec_closed(pos)
+                        record_closed_trades(confirmed_exits)
+
+                    orders.extend([r.model_dump() for r in exit_results])
+
+                # Re-attempt queued signals freed by today's closes
+                queued = await asyncio.to_thread(process_signal_queue)
+                if queued:
+                    q_results = await execute_entries(queued, equity=equity)
+                    q_ok = [r for r in q_results if r.success]
+                    if q_ok:
+                        q_size_map = {
+                            r.ticker: r.actual_size for r in q_ok if r.actual_size is not None
+                        }
+                        filled_queued = [
+                            {**s, "size": q_size_map.get(s["ticker"], s["size"])}
+                            for s in queued if s["ticker"] in {r.ticker for r in q_ok}
+                        ]
+
+                        add_signal_positions(load_positions(), filled_queued)
+
+                        await self._store_order_ids(q_results)
+                    orders.extend([r.model_dump() for r in q_results])
+
+                # Park idle capital in SGOV
+                if sgov_enabled():
+                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
+                    sgov_buy = await buy_sgov(equity, idle)
+                    if sgov_buy and sgov_buy.success:
+                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
+
+            except Exception:
+                logger.exception("Alpaca execution failed during market-open execute")
+
+        if results:
+            await asyncio.to_thread(update_skipped_outcomes, results)
+
+        duration = round(_time.time() - t0, 1)
+        finish_scheduler_event(_event_id, "success", n_signals=len(signals),
+                               n_exits=len(confirmed_exits), duration_s=duration)
+        logger.info(
+            "Market-open execute complete — %d signals, %d exits (%.0fs)",
+            len(signals), len(confirmed_exits), duration,
+        )
+
+        await self._on_event(ScanResult(
+            signals=signals,
+            exits=confirmed_exits,
+            orders=orders,
+            positions_summary={"positions": positions_for_embed},
+            scan_type="morning",
+            equity=scan_equity,
+        ))
+
+        # Clear pending state
+        self._pending_signals = []
+        self._pending_exits = []
+        self._pending_scan_results = []
+        self._pending_positions_embed = []
+
         await self.run_risk_evaluation()
 
     async def run_midday_scan(self) -> None:
@@ -719,7 +978,8 @@ class TradingScheduler:
     async def _scan_loop(self) -> None:
         """Time-based scan loop.
 
-        Weekdays: morning (9:30 AM), daily (4:30 PM), midday (11 AM, 1 PM) ET.
+        Weekdays: pre-market scan (9:00 AM), market-open execute (9:30 AM),
+                  midday watchlist scans (11 AM, 1 PM) ET.
         Weekends: crypto-only scan every 6 hours (0, 6, 12, 18 ET).
         """
         while True:
@@ -737,11 +997,8 @@ class TradingScheduler:
 
             # Weekday scans
             try:
-                # 9:30 AM ET — at market open so scan_all receives opening-print prices
-                # rather than pre-market prices. execute_entries submits market orders
-                # which fill at or near the open regardless, but sizing and stop/target
-                # calculations are more accurate with real opening prices.
-                if PARAMS.morning_scan_enabled and now.hour == 9 and 30 <= now.minute < 35:
+                # 9:00 AM ET — pre-market scan (full universe)
+                if PARAMS.morning_scan_enabled and now.hour == 9 and now.minute < 5:
                     if (
                         self._ran_morning_scan != today
                         and not self._scan_in_progress.get("morning")
@@ -750,18 +1007,22 @@ class TradingScheduler:
                         self._scan_in_progress["morning"] = True
                         try:
                             async with asyncio.timeout(600):
-                                await self.run_daily_scan("morning")
+                                await self.run_premarket_scan()
                         finally:
                             self._scan_in_progress["morning"] = False
-                elif now.hour == 16 and 30 <= now.minute < 35:
-                    if self._ran_daily_scan != today and not self._scan_in_progress.get("daily"):
-                        self._ran_daily_scan = today
-                        self._scan_in_progress["daily"] = True
+                # 9:30 AM ET — execute entries/exits at market open
+                elif PARAMS.morning_scan_enabled and now.hour == 9 and 30 <= now.minute < 35:
+                    if (
+                        self._ran_morning_execute != today
+                        and not self._scan_in_progress.get("execute")
+                    ):
+                        self._ran_morning_execute = today
+                        self._scan_in_progress["execute"] = True
                         try:
-                            async with asyncio.timeout(600):
-                                await self.run_daily_scan("daily")
+                            async with asyncio.timeout(300):
+                                await self.run_market_open_execute()
                         finally:
-                            self._scan_in_progress["daily"] = False
+                            self._scan_in_progress["execute"] = False
                 elif PARAMS.midday_scans_enabled and now.hour == 11 and now.minute < 5:
                     if self._ran_midday_1 != today and not self._scan_in_progress.get("midday_1"):
                         self._ran_midday_1 = today

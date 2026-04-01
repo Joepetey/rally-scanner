@@ -318,12 +318,19 @@ def init_schema() -> None:
                 close        DOUBLE PRECISION NOT NULL DEFAULT 0,
                 size         DOUBLE PRECISION NOT NULL DEFAULT 0,
                 atr_pct      DOUBLE PRECISION NOT NULL DEFAULT 0,
+                range_low    DOUBLE PRECISION NOT NULL DEFAULT 0,
                 trend        INTEGER NOT NULL DEFAULT 0,
                 golden_cross INTEGER NOT NULL DEFAULT 0,
                 rsi          DOUBLE PRECISION NOT NULL DEFAULT 0,
                 is_position  BOOLEAN NOT NULL DEFAULT FALSE,
                 updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """)
+
+        # Add range_low to current_signals if not present (migration-safe)
+        cur.execute("""
+            ALTER TABLE current_signals
+            ADD COLUMN IF NOT EXISTS range_low DOUBLE PRECISION NOT NULL DEFAULT 0
         """)
 
         cur.execute("""

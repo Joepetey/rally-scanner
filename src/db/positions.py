@@ -381,13 +381,14 @@ def save_latest_scan(results: list[dict], positions: dict) -> None:
                 cur.execute(
                     """INSERT INTO current_signals
                            (ticker, p_rally, comp_score, fail_dn, close, size,
-                            atr_pct, trend, golden_cross, rsi, is_position)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                            atr_pct, range_low, trend, golden_cross, rsi, is_position)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (
                         r["ticker"], p_rally_pct, r.get("comp_score", 0),
                         r.get("fail_dn", 0), r.get("close", 0), r.get("size", 0),
-                        r.get("atr_pct", 0), r.get("trend", 0),
-                        r.get("golden_cross", 0), r.get("rsi", 0), is_pos,
+                        r.get("atr_pct", 0), r.get("range_low", 0),
+                        r.get("trend", 0), r.get("golden_cross", 0),
+                        r.get("rsi", 0), is_pos,
                     ),
                 )
 
@@ -408,6 +409,41 @@ def save_latest_scan(results: list[dict], positions: dict) -> None:
                         r.get("vix_pctile", 0), r.get("rsi", 0),
                     ),
                 )
+
+
+def load_current_signals() -> list[dict]:
+    """Load signals from the last pre-market scan (restart fallback).
+
+    Returns dicts compatible with execute_entries: ticker, close, size, atr_pct,
+    range_low, p_rally, date.
+    """
+    from datetime import date as _date
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT ticker, p_rally, comp_score, close, size, atr_pct, range_low
+               FROM current_signals
+               WHERE NOT is_position
+               ORDER BY p_rally DESC"""
+        )
+        rows = cur.fetchall()
+
+    today = _date.today().isoformat()
+    return [
+        {
+            "ticker": r["ticker"],
+            "p_rally": r["p_rally"] / 100,  # stored as pct, executor expects 0-1
+            "comp_score": r["comp_score"],
+            "close": r["close"],
+            "size": r["size"],
+            "atr_pct": r["atr_pct"],
+            "range_low": r["range_low"],
+            "date": today,
+            "signal": True,
+        }
+        for r in rows
+    ]
 
 
 def load_watchlist() -> dict:

@@ -154,7 +154,12 @@ def make_discord_event_handler(
                 case ScanResult():
                     if event.signals:
                         sig_embed = discord.Embed.from_dict(_signal_embed(event.signals))
-                        if event.scan_type not in ("daily", "morning", "cascade", "post_retrain"):
+                        if event.scan_type == "premarket":
+                            sig_embed.title = (
+                                f"Pre-Market Signals ({len(event.signals)})"
+                                " \u2014 executing at open"
+                            )
+                        elif event.scan_type not in ("daily", "morning", "cascade", "post_retrain"):
                             sig_embed.title = f"Mid-day Signal ({len(event.signals)})"
                             sig_embed.set_footer(text="From watchlist mid-day scan")
                         await _send_alert(sig_embed, "signal")
