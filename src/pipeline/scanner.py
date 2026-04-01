@@ -472,6 +472,21 @@ def scan_watchlist(
         for future in as_completed(futures):
             results.append(future.result())
 
+    # Update signals with live prices (same as scan_all)
+    signals = [r for r in results if r.get("signal")]
+    if signals:
+        live_tickers = [s["ticker"] for s in signals]
+        quotes = fetch_quotes(live_tickers)
+        for sig in signals:
+            q = quotes.get(sig["ticker"], {})
+            if "price" in q:
+                daily_close = sig["close"]
+                sig["close"] = q["price"]
+                logger.info(
+                    "%s: live price $%.2f (daily close was $%.2f)",
+                    sig["ticker"], q["price"], daily_close,
+                )
+
     return results
 
 
