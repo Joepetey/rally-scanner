@@ -326,30 +326,7 @@ class TradingScheduler:
                         orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
 
                 if signals:
-                    entry_results = await execute_entries(signals, equity=equity)
-                    ok = [r for r in entry_results if r.success]
-                    for r in entry_results:
-                        log_order(r.ticker, "buy", "market", r.qty, "entry",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok:
-                        size_map = {
-                            r.ticker: r.actual_size for r in ok if r.actual_size is not None
-                        }
-                        filled_tickers = {r.ticker for r in ok}
-                        filled_signals = [
-                            {**s, "size": size_map.get(s["ticker"], s["size"])}
-                            for s in signals if s["ticker"] in filled_tickers
-                        ]
-
-                        fresh_positions = load_positions()
-                        add_signal_positions(fresh_positions, filled_signals)
-
-                        await self._store_order_ids(entry_results)
-                        # Update stream subscriptions after new entries
-                        if self._stream:
-                            all_pos = load_positions().get("positions", [])
-                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+                    entry_results = await self._execute_and_log_entries(signals, equity)
                     orders.extend([r.model_dump() for r in entry_results])
 
                 if closed:
@@ -387,23 +364,8 @@ class TradingScheduler:
                     orders.extend([r.model_dump() for r in exit_results])
 
                 # Re-attempt queued signals freed by today's closes
-                queued = await asyncio.to_thread(process_signal_queue)
-                if queued:
-                    q_results = await execute_entries(queued, equity=equity)
-                    q_ok = [r for r in q_results if r.success]
-                    if q_ok:
-                        q_size_map = {
-                            r.ticker: r.actual_size for r in q_ok if r.actual_size is not None
-                        }
-                        filled_queued = [
-                            {**s, "size": q_size_map.get(s["ticker"], s["size"])}
-                            for s in queued if s["ticker"] in {r.ticker for r in q_ok}
-                        ]
-
-                        add_signal_positions(load_positions(), filled_queued)
-
-                        await self._store_order_ids(q_results)
-                    orders.extend([r.model_dump() for r in q_results])
+                q_results = await self._execute_queued_entries(equity)
+                orders.extend([r.model_dump() for r in q_results])
 
                 # Park idle capital in SGOV
                 if sgov_enabled():
@@ -578,29 +540,7 @@ class TradingScheduler:
                         orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
 
                 if signals:
-                    entry_results = await execute_entries(signals, equity=equity)
-                    ok = [r for r in entry_results if r.success]
-                    for r in entry_results:
-                        log_order(r.ticker, "buy", "market", r.qty, "entry",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok:
-                        size_map = {
-                            r.ticker: r.actual_size for r in ok if r.actual_size is not None
-                        }
-                        filled_tickers = {r.ticker for r in ok}
-                        filled_signals = [
-                            {**s, "size": size_map.get(s["ticker"], s["size"])}
-                            for s in signals if s["ticker"] in filled_tickers
-                        ]
-
-                        fresh_positions = load_positions()
-                        add_signal_positions(fresh_positions, filled_signals)
-
-                        await self._store_order_ids(entry_results)
-                        if self._stream:
-                            all_pos = load_positions().get("positions", [])
-                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+                    entry_results = await self._execute_and_log_entries(signals, equity)
                     orders.extend([r.model_dump() for r in entry_results])
 
                 if closed:
@@ -633,23 +573,8 @@ class TradingScheduler:
                     orders.extend([r.model_dump() for r in exit_results])
 
                 # Re-attempt queued signals freed by today's closes
-                queued = await asyncio.to_thread(process_signal_queue)
-                if queued:
-                    q_results = await execute_entries(queued, equity=equity)
-                    q_ok = [r for r in q_results if r.success]
-                    if q_ok:
-                        q_size_map = {
-                            r.ticker: r.actual_size for r in q_ok if r.actual_size is not None
-                        }
-                        filled_queued = [
-                            {**s, "size": q_size_map.get(s["ticker"], s["size"])}
-                            for s in queued if s["ticker"] in {r.ticker for r in q_ok}
-                        ]
-
-                        add_signal_positions(load_positions(), filled_queued)
-
-                        await self._store_order_ids(q_results)
-                    orders.extend([r.model_dump() for r in q_results])
+                q_results = await self._execute_queued_entries(equity)
+                orders.extend([r.model_dump() for r in q_results])
 
                 # Park idle capital in SGOV
                 if sgov_enabled():
@@ -1282,3 +1207,43 @@ class TradingScheduler:
                 "signal": bool(r.get("signal")),
             })
         _db_save_watchlist(watchlist, scan_date=_date.today())
+
+    async def _execute_and_log_entries(self, signals: list[dict], equity: float) -> list:
+        """Execute entry orders, log each result, and update positions + stream subscriptions."""
+        entry_results = await execute_entries(signals, equity=equity)
+        ok = [r for r in entry_results if r.success]
+        for r in entry_results:
+            log_order(r.ticker, "buy", "market", r.qty, "entry",
+                      r.order_id, "filled" if r.success else "failed",
+                      r.fill_price, r.error)
+        if ok:
+            size_map = {r.ticker: r.actual_size for r in ok if r.actual_size is not None}
+            filled_tickers = {r.ticker for r in ok}
+            filled_signals = [
+                {**s, "size": size_map.get(s["ticker"], s["size"])}
+                for s in signals if s["ticker"] in filled_tickers
+            ]
+            fresh_positions = load_positions()
+            add_signal_positions(fresh_positions, filled_signals)
+            await self._store_order_ids(entry_results)
+            if self._stream:
+                all_pos = load_positions().get("positions", [])
+                self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+        return entry_results
+
+    async def _execute_queued_entries(self, equity: float) -> list:
+        """Re-attempt queued signals freed by today's closes."""
+        queued = await asyncio.to_thread(process_signal_queue)
+        if not queued:
+            return []
+        q_results = await execute_entries(queued, equity=equity)
+        q_ok = [r for r in q_results if r.success]
+        if q_ok:
+            q_size_map = {r.ticker: r.actual_size for r in q_ok if r.actual_size is not None}
+            filled_queued = [
+                {**s, "size": q_size_map.get(s["ticker"], s["size"])}
+                for s in queued if s["ticker"] in {r.ticker for r in q_ok}
+            ]
+            add_signal_positions(load_positions(), filled_queued)
+            await self._store_order_ids(q_results)
+        return q_results
