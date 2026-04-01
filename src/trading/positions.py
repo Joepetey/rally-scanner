@@ -62,6 +62,82 @@ async def get_merged_positions(equity: float = 0.0) -> dict:
     return load_positions()
 
 
+async def _sync_close_broker_exits(
+    closed_tickers: set[str], meta_map: dict,
+) -> None:
+    """Case 3: in DB but gone from Alpaca — broker closed the position."""
+    from integrations.alpaca.executor import get_recent_sell_fills
+
+    fills = await get_recent_sell_fills(list(closed_tickers)) if closed_tickers else {}
+    for ticker in closed_tickers:
+        pos = meta_map[ticker]
+        fill_price = fills.get(ticker, 0.0)
+        pnl = (
+            round((fill_price / pos["entry_price"] - 1) * 100, 2)
+            if fill_price and pos.get("entry_price") else 0.0
+        )
+        pos["exit_price"] = fill_price
+        pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
+        pos["exit_reason"] = "broker_closed"
+        pos["realized_pnl_pct"] = pnl
+        pos["status"] = "closed"
+        delete_position_meta(ticker)
+        record_closed_position(pos)
+        logger.info("sync: closed %s (broker_closed), fill=%.4f", ticker, fill_price)
+
+
+def _sync_insert_untracked(
+    inserted_tickers: set[str], broker_map: dict, equity: float,
+) -> None:
+    """Case 2: in Alpaca but not in DB — insert with PARAMS-derived stops."""
+    p = PARAMS
+    for ticker in inserted_tickers:
+        bp = broker_map[ticker]
+        entry = bp["avg_entry_price"]
+        atr_val = round(entry * p.default_atr_pct, 4)
+        size = round(bp["market_value"] / equity, 4) if equity > 0 else 0.0
+        current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else entry
+        pnl = round((current / entry - 1) * 100, 2) if entry else 0.0
+        new_pos = {
+            "ticker": ticker,
+            "qty": bp["qty"],
+            "entry_price": entry,
+            "entry_date": datetime.now().strftime("%Y-%m-%d"),
+            "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
+            "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
+            "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
+            "highest_close": max(entry, current),
+            "atr": atr_val,
+            "bars_held": 0,
+            "size": size,
+            "current_price": current,
+            "unrealized_pnl_pct": pnl,
+            "p_rally": 0.0,
+            "status": "open",
+        }
+        save_position_meta(new_pos)
+        logger.warning("sync: inserted untracked position %s (size=%.1f%%)", ticker, size * 100)
+
+
+def _sync_update_matched(
+    matched_tickers: set[str], broker_map: dict, meta_map: dict, equity: float,
+) -> None:
+    """Case 1: in both — update qty/entry/current_price from broker."""
+    for ticker in matched_tickers:
+        bp = broker_map[ticker]
+        pos = meta_map[ticker]
+        pos["qty"] = bp["qty"]
+        pos["entry_price"] = bp["avg_entry_price"]
+        current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else pos["entry_price"]
+        pos["current_price"] = current
+        pos["unrealized_pnl_pct"] = round(
+            (current / pos["entry_price"] - 1) * 100, 2
+        ) if pos["entry_price"] else 0.0
+        if equity > 0:
+            pos["size"] = round(bp["market_value"] / equity, 4)
+        save_position_meta(pos)
+
+
 async def sync_positions_from_alpaca(equity: float = 0.0) -> dict:
     """Reconcile DB with Alpaca broker state.
 
@@ -71,9 +147,6 @@ async def sync_positions_from_alpaca(equity: float = 0.0) -> dict:
     3. In DB, not Alpaca  → broker closed it; recover fill price, delete + record closed
     """
     async with _positions_lock:
-        # Local import to avoid circular dependency (executor imports from trading.positions)
-        from integrations.alpaca.executor import get_recent_sell_fills
-
         broker_list = await get_all_positions()
         broker_map = {p["ticker"]: p for p in broker_list}
         meta_list = load_all_position_meta()
@@ -82,74 +155,13 @@ async def sync_positions_from_alpaca(equity: float = 0.0) -> dict:
         broker_tickers = set(broker_map)
         db_tickers = set(meta_map)
 
-        # Case 3: in DB, gone from Alpaca — broker closed the position
         closed_tickers = db_tickers - broker_tickers
-        fills = {}
-        if closed_tickers:
-            fills = await get_recent_sell_fills(list(closed_tickers))
-        for ticker in closed_tickers:
-            pos = meta_map[ticker]
-            fill_price = fills.get(ticker, 0.0)
-            pnl = (
-                round((fill_price / pos["entry_price"] - 1) * 100, 2)
-                if fill_price and pos.get("entry_price") else 0.0
-            )
-            pos["exit_price"] = fill_price
-            pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
-            pos["exit_reason"] = "broker_closed"
-            pos["realized_pnl_pct"] = pnl
-            pos["status"] = "closed"
-            delete_position_meta(ticker)
-            record_closed_position(pos)
-            logger.info("sync: closed %s (broker_closed), fill=%.4f", ticker, fill_price)
-
-        # Case 2: in Alpaca, not in DB — untracked position (manually opened / missed fill)
-        # Derive stops/target from entry price using PARAMS defaults
         inserted_tickers = broker_tickers - db_tickers
-        for ticker in inserted_tickers:
-            bp = broker_map[ticker]
-            p = PARAMS
-            entry = bp["avg_entry_price"]
-            atr_val = round(entry * p.default_atr_pct, 4)
-            # Compute size from broker market_value when equity is available
-            size = round(bp["market_value"] / equity, 4) if equity > 0 else 0.0
-            current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else entry
-            pnl = round((current / entry - 1) * 100, 2) if entry else 0.0
-            new_pos = {
-                "ticker": ticker,
-                "qty": bp["qty"],
-                "entry_price": entry,
-                "entry_date": datetime.now().strftime("%Y-%m-%d"),
-                "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
-                "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
-                "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
-                "highest_close": max(entry, current),
-                "atr": atr_val,
-                "bars_held": 0,
-                "size": size,
-                "current_price": current,
-                "unrealized_pnl_pct": pnl,
-                "p_rally": 0.0,
-                "status": "open",
-            }
-            save_position_meta(new_pos)
-            logger.warning("sync: inserted untracked position %s (size=%.1f%%)", ticker, size * 100)
-
-        # Case 1: in both — update qty/entry/current_price from broker
         matched_tickers = broker_tickers & db_tickers
-        for ticker in matched_tickers:
-            bp = broker_map[ticker]
-            pos = meta_map[ticker]
-            pos["qty"] = bp["qty"]
-            pos["entry_price"] = bp["avg_entry_price"]
-            current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else pos["entry_price"]
-            pos["current_price"] = current
-            pos["unrealized_pnl_pct"] = round(
-                (current / pos["entry_price"] - 1) * 100, 2
-            ) if pos["entry_price"] else 0.0
-            if equity > 0:
-                pos["size"] = round(bp["market_value"] / equity, 4)
-            save_position_meta(pos)
+
+        await _sync_close_broker_exits(closed_tickers, meta_map)
+        _sync_insert_untracked(inserted_tickers, broker_map, equity)
+        _sync_update_matched(matched_tickers, broker_map, meta_map, equity)
 
         return {
             "synced": len(matched_tickers),
@@ -166,6 +178,31 @@ def get_merged_positions_sync() -> dict:
 # ---------------------------------------------------------------------------
 # Position update logic
 # ---------------------------------------------------------------------------
+
+def _ratchet_trailing_stop(pos: dict, current: dict, p) -> None:
+    """Update trailing stop if close is a new high. Mutates pos in-place."""
+    if current["close"] > pos.get("highest_close", pos["entry_price"]):
+        pos["highest_close"] = current["close"]
+        atr_fallback = current["close"] * p.default_atr_pct
+        atr_val = current.get("atr", atr_fallback)
+        new_trail = current["close"] - p.trailing_stop_atr_mult * atr_val
+        pos["trailing_stop"] = max(pos.get("trailing_stop", 0), new_trail)
+
+
+def _evaluate_exit_conditions(pos: dict, current: dict, p) -> str | None:
+    """Return exit reason string if any condition triggered, else None."""
+    if current["close"] <= pos["stop_price"]:
+        return "stop"
+    if current["close"] >= pos["target_price"]:
+        return "profit_target"
+    if pos["bars_held"] >= 2 and current["close"] < pos.get("trailing_stop", 0):
+        return "trail_stop"
+    if pos["bars_held"] >= p.time_stop_bars:
+        return "time_stop"
+    if current.get("rv_pctile", 0) > p.rv_exit_pct:
+        return "vol_exhaustion"
+    return None
+
 
 def update_position_for_price(pos: dict, current_price: float) -> bool:
     """Ratchet trailing stop and apply profit lock for a real-time price tick.
@@ -231,13 +268,7 @@ def update_existing_positions(
             (current["close"] / pos["entry_price"] - 1) * 100, 2
         )
 
-        # Update trailing stop
-        if current["close"] > pos.get("highest_close", pos["entry_price"]):
-            pos["highest_close"] = current["close"]
-            atr_fallback = current["close"] * p.default_atr_pct
-            atr_val = current.get("atr", atr_fallback)
-            new_trail = current["close"] - p.trailing_stop_atr_mult * atr_val
-            pos["trailing_stop"] = max(pos.get("trailing_stop", 0), new_trail)
+        _ratchet_trailing_stop(pos, current, p)
 
         # Profit lock: raise hard stop floor once close reaches lock level (idempotent)
         if p.profit_lock_pct > 0:
@@ -247,18 +278,7 @@ def update_existing_positions(
                 if new_stop > pos.get("stop_price", 0):
                     pos["stop_price"] = round(new_stop, 4)
 
-        # Check exit conditions
-        exit_reason = None
-        if current["close"] <= pos["stop_price"]:
-            exit_reason = "stop"
-        elif current["close"] >= pos["target_price"]:
-            exit_reason = "profit_target"
-        elif pos["bars_held"] >= 2 and current["close"] < pos.get("trailing_stop", 0):
-            exit_reason = "trail_stop"
-        elif pos["bars_held"] >= p.time_stop_bars:
-            exit_reason = "time_stop"
-        elif current.get("rv_pctile", 0) > p.rv_exit_pct:
-            exit_reason = "vol_exhaustion"
+        exit_reason = _evaluate_exit_conditions(pos, current, p)
 
         if exit_reason:
             pos["exit_reason"] = exit_reason

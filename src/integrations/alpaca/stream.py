@@ -276,26 +276,26 @@ class AlpacaStreamManager:
             return DataFeed.SIP
         return DataFeed.IEX
 
-    async def _handle_trade(self, trade) -> None:
-        """Called from StockDataStream's internal event loop per trade event."""
-        ticker = str(trade.symbol)
-        price = float(trade.price)
+    def _fire_trade(
+        self, ticker: str, price: float, connected_event: "threading.Event",
+    ) -> None:
+        """Throttle, dedup, and fire the on_trade callback for a ticker."""
         now = time.monotonic()
-
-        # Per-ticker throttle
         last = self._last_fired.get(ticker, 0.0)
         if now - last < self._throttle:
             return
-
         self._last_fired[ticker] = now
         self._last_trade_time[ticker] = now
         self._known_stale.discard(ticker)
-        self._connected.set()
-
+        connected_event.set()
         try:
             self._on_trade(ticker, price)
         except Exception:
             logger.exception("on_trade callback raised for %s", ticker)
+
+    async def _handle_trade(self, trade) -> None:
+        """Called from StockDataStream's internal event loop per trade event."""
+        self._fire_trade(str(trade.symbol), float(trade.price), self._connected)
 
     async def _handle_crypto_trade(self, trade) -> None:
         """Called from CryptoDataStream's internal event loop per trade event.
@@ -304,170 +304,126 @@ class AlpacaStreamManager:
         """
         # trade.symbol is "BTC/USD" — extract base to match internal key
         ticker = str(trade.symbol).split("/")[0]
-        price = float(trade.price)
-        now = time.monotonic()
+        self._fire_trade(ticker, float(trade.price), self._crypto_connected)
 
-        last = self._last_fired.get(ticker, 0.0)
-        if now - last < self._throttle:
+    def _run_stream_impl(
+        self,
+        symbol_attr: str,
+        stream_attr: str,
+        connected_event: "threading.Event",
+        label: str,
+        make_stream,
+        make_symbols,
+        handler,
+    ) -> None:
+        """Generic blocking stream runner. Called from supervisor loop."""
+        api_key = os.environ["ALPACA_API_KEY"]
+        secret_key = os.environ["ALPACA_SECRET_KEY"]
+
+        with self._lock:
+            symbols = set(getattr(self, symbol_attr))
+
+        if not symbols:
+            logger.info("%s stream: no symbols to subscribe — idle", label)
             return
 
-        self._last_fired[ticker] = now
-        self._last_trade_time[ticker] = now
-        self._known_stale.discard(ticker)
-        self._crypto_connected.set()
+        alpaca_syms = make_symbols(symbols)
+        stream = make_stream(api_key, secret_key)
+        stream.subscribe_trades(handler, *alpaca_syms)
+        logger.info(
+            "%s stream: subscribing to %d symbols: %s",
+            label, len(alpaca_syms), sorted(alpaca_syms),
+        )
+
+        with self._lock:
+            setattr(self, stream_attr, stream)
+
+        logger.info("%s stream: connecting", label)
 
         try:
-            self._on_trade(ticker, price)
-        except Exception:
-            logger.exception("on_trade callback raised for crypto %s", ticker)
+            stream.run()
+            logger.info("%s stream: disconnected cleanly", label)
+        finally:
+            with self._lock:
+                setattr(self, stream_attr, None)
+            connected_event.clear()
+            logger.info("%s stream: connection closed", label)
 
     def _run_stream(self) -> None:
         """Create and run the StockDataStream (blocking). Called from supervisor."""
-        api_key = os.environ["ALPACA_API_KEY"]
-        secret_key = os.environ["ALPACA_SECRET_KEY"]
-
-        with self._lock:
-            symbols = set(self._symbols)
-
-        if not symbols:
-            logger.info("Equity stream: no symbols to subscribe — idle")
-            return
-
-        stream = StockDataStream(api_key, secret_key, feed=self._get_feed())
-        stream.subscribe_trades(self._handle_trade, *symbols)
-        logger.info(
-            "Equity stream: subscribing to %d symbols (feed=%s): %s",
-            len(symbols), self._feed_name, sorted(symbols),
+        self._run_stream_impl(
+            symbol_attr="_symbols",
+            stream_attr="_stream",
+            connected_event=self._connected,
+            label=f"Equity (feed={self._feed_name})",
+            make_stream=lambda k, s: StockDataStream(k, s, feed=self._get_feed()),
+            make_symbols=lambda syms: list(syms),
+            handler=self._handle_trade,
         )
-
-        with self._lock:
-            self._stream = stream
-
-        logger.info("Equity stream: connecting (feed=%s)", self._feed_name)
-
-        try:
-            stream.run()
-            logger.info("Equity stream: disconnected cleanly")
-        finally:
-            with self._lock:
-                self._stream = None
-            self._connected.clear()
-            logger.info("Equity stream: connection closed")
 
     def _run_crypto_stream(self) -> None:
         """Create and run the CryptoDataStream (blocking). Called from crypto supervisor."""
-        api_key = os.environ["ALPACA_API_KEY"]
-        secret_key = os.environ["ALPACA_SECRET_KEY"]
-
-        with self._lock:
-            symbols = set(self._crypto_symbols)
-
-        if not symbols:
-            logger.info("Crypto stream: no symbols to subscribe — idle")
-            return
-
-        alpaca_syms = [self._to_alpaca_crypto_symbol(s) for s in symbols]
-        stream = CryptoDataStream(api_key, secret_key)
-        stream.subscribe_trades(self._handle_crypto_trade, *alpaca_syms)
-        logger.info(
-            "Crypto stream: subscribing to %d symbols: %s",
-            len(alpaca_syms), sorted(alpaca_syms),
+        self._run_stream_impl(
+            symbol_attr="_crypto_symbols",
+            stream_attr="_crypto_stream",
+            connected_event=self._crypto_connected,
+            label="Crypto",
+            make_stream=lambda k, s: CryptoDataStream(k, s),
+            make_symbols=lambda syms: [self._to_alpaca_crypto_symbol(s) for s in syms],
+            handler=self._handle_crypto_trade,
         )
 
-        with self._lock:
-            self._crypto_stream = stream
+    def _run_supervisor(
+        self,
+        run_fn: "Callable[[], None]",
+        symbol_attr: str,
+        connected_event: "threading.Event",
+        label: str,
+    ) -> None:
+        """Restart a stream on unexpected exit with exponential backoff."""
+        backoff = 1.0
+        max_backoff = 60.0
+        attempt = 0
 
-        logger.info("Crypto stream: connecting")
+        while not self._stop_event.is_set():
+            attempt += 1
+            try:
+                run_fn()
+                if self._stop_event.is_set():
+                    break
+                # If there are no symbols, run_fn returns immediately — expected, not a crash.
+                # Wait briefly and retry without incrementing backoff.
+                with self._lock:
+                    has_symbols = bool(getattr(self, symbol_attr))
+                if not has_symbols:
+                    logger.debug("%s stream: no symbols, idle for 5s", label)
+                    attempt -= 1
+                    self._stop_event.wait(timeout=5.0)
+                    continue
+                logger.warning(
+                    "%s stream exited unexpectedly (attempt %d), restarting in %.0fs",
+                    label, attempt, backoff,
+                )
+            except Exception as e:
+                logger.warning(
+                    "%s stream error (attempt %d): %s — restarting in %.0fs",
+                    label, attempt, e, backoff,
+                )
 
-        try:
-            stream.run()
-            logger.info("Crypto stream: disconnected cleanly")
-        finally:
-            with self._lock:
-                self._crypto_stream = None
-            self._crypto_connected.clear()
-            logger.info("Crypto stream: connection closed")
+            connected_event.clear()
+            logger.info("%s stream: reconnect attempt %d in %.0fs", label, attempt + 1, backoff)
+            self._stop_event.wait(timeout=backoff)
+            if self._stop_event.is_set():
+                break
+            backoff = min(backoff * 2, max_backoff)
+            logger.info("%s stream: reconnect attempt %d starting", label, attempt + 1)
 
     def _supervisor_loop(self) -> None:
         """Restart the equity stream on unexpected exit with exponential backoff."""
-        backoff = 1.0
-        max_backoff = 60.0
-        attempt = 0
-
-        while not self._stop_event.is_set():
-            attempt += 1
-            try:
-                self._run_stream()
-                if self._stop_event.is_set():
-                    break
-                # If there are no equity symbols, _run_stream returns immediately —
-                # that's expected, not a crash. Wait briefly and retry without
-                # incrementing backoff so the supervisor is ready when symbols appear.
-                with self._lock:
-                    has_symbols = bool(self._symbols)
-                if not has_symbols:
-                    logger.debug("Equity stream: no symbols, idle for 5s")
-                    attempt -= 1
-                    self._stop_event.wait(timeout=5.0)
-                    continue
-                logger.warning(
-                    "Equity stream exited unexpectedly (attempt %d), restarting in %.0fs",
-                    attempt, backoff,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Equity stream error (attempt %d): %s — restarting in %.0fs",
-                    attempt, e, backoff,
-                )
-
-            self._connected.clear()
-
-            logger.info("Equity stream: reconnect attempt %d in %.0fs", attempt + 1, backoff)
-            self._stop_event.wait(timeout=backoff)
-            if self._stop_event.is_set():
-                break
-
-            backoff = min(backoff * 2, max_backoff)
-            logger.info("Equity stream: reconnect attempt %d starting", attempt + 1)
+        self._run_supervisor(self._run_stream, "_symbols", self._connected, "Equity")
 
     def _crypto_supervisor_loop(self) -> None:
         """Restart the crypto stream on unexpected exit with exponential backoff."""
-        backoff = 1.0
-        max_backoff = 60.0
-        attempt = 0
-
-        while not self._stop_event.is_set():
-            attempt += 1
-            try:
-                self._run_crypto_stream()
-                if self._stop_event.is_set():
-                    break
-                # If there are no crypto symbols, _run_crypto_stream returns immediately —
-                # that's expected, not a crash. Wait briefly and retry without
-                # incrementing backoff so the supervisor is ready when symbols appear.
-                with self._lock:
-                    has_symbols = bool(self._crypto_symbols)
-                if not has_symbols:
-                    logger.debug("Crypto stream: no symbols, idle for 5s")
-                    attempt -= 1
-                    self._stop_event.wait(timeout=5.0)
-                    continue
-                logger.warning(
-                    "Crypto stream exited unexpectedly (attempt %d), restarting in %.0fs",
-                    attempt, backoff,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Crypto stream error (attempt %d): %s — restarting in %.0fs",
-                    attempt, e, backoff,
-                )
-
-            self._crypto_connected.clear()
-
-            logger.info("Crypto stream: reconnect attempt %d in %.0fs", attempt + 1, backoff)
-            self._stop_event.wait(timeout=backoff)
-            if self._stop_event.is_set():
-                break
-
-            backoff = min(backoff * 2, max_backoff)
-            logger.info("Crypto stream: reconnect attempt %d starting", attempt + 1)
+        self._run_supervisor(
+            self._run_crypto_stream, "_crypto_symbols", self._crypto_connected, "Crypto",
+        )

@@ -31,6 +31,16 @@ from trading.positions import get_merged_positions_sync
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Constants (MIC-119)
+# ---------------------------------------------------------------------------
+
+_STALE_MODEL_DAYS = 14
+_MAX_STALE_DISPLAY = 10
+_DEFAULT_TRADE_LIMIT = 10
+_WATCHLIST_CAP = 20
+_MAX_PRICE_TICKERS = 10
+
 
 def _dollar_metrics(capital: float, size: float, entry: float, stop: float | None = None) -> dict:
     """Compute dollar allocation and risk from capital, size fraction, entry price, and stop."""
@@ -487,7 +497,9 @@ def _set_capital(discord_id: int, amount: float) -> dict:
     }
 
 
-def _get_trade_history(discord_id: int, ticker: str | None = None, limit: int = 10) -> dict:
+def _get_trade_history(  # noqa: E501
+    discord_id: int, ticker: str | None = None, limit: int = _DEFAULT_TRADE_LIMIT,
+) -> dict:
     """Get trade history."""
     trades = get_trade_history(discord_id, ticker=ticker, limit=limit)
 
@@ -569,7 +581,7 @@ def _get_health() -> dict:
         try:
             saved_at = datetime.fromisoformat(info["saved_at"])
             age_days = (now - saved_at).days
-            if age_days > 14:
+            if age_days > _STALE_MODEL_DAYS:
                 stale.append({"ticker": ticker, "age_days": age_days})
             else:
                 fresh.append(ticker)
@@ -589,7 +601,7 @@ def _get_health() -> dict:
     }
 
     if stale:
-        stale_sorted = sorted(stale, key=lambda x: -x["age_days"])[:10]
+        stale_sorted = sorted(stale, key=lambda x: -x["age_days"])[:_MAX_STALE_DISPLAY]
         result["stalest_models"] = stale_sorted
 
     return result
@@ -683,10 +695,10 @@ def _run_scan(config: str = "conservative") -> dict:
 def _get_watchlist() -> dict:
     """Return tickers near signal threshold from the last scan."""
     result = load_watchlist()
-    # Cap to top 20 to avoid bloating conversation history with full-universe dumps
-    if isinstance(result.get("tickers"), list) and len(result["tickers"]) > 20:
-        result["tickers"] = result["tickers"][:20]
-        result["count"] = 20
+    # Cap to avoid bloating conversation history with full-universe dumps
+    if isinstance(result.get("tickers"), list) and len(result["tickers"]) > _WATCHLIST_CAP:
+        result["tickers"] = result["tickers"][:_WATCHLIST_CAP]
+        result["count"] = _WATCHLIST_CAP
     return result
 
 
@@ -694,8 +706,8 @@ def _get_price(tickers: list[str]) -> dict:
     """Fetch current quotes for one or more tickers."""
     if not tickers:
         return {"error": "No tickers provided"}
-    if len(tickers) > 10:
-        tickers = tickers[:10]
+    if len(tickers) > _MAX_PRICE_TICKERS:
+        tickers = tickers[:_MAX_PRICE_TICKERS]
 
     try:
         quotes = fetch_quotes(tickers)
@@ -708,6 +720,30 @@ def _get_price(tickers: list[str]) -> dict:
     return {"count": len(quotes), "quotes": quotes}
 
 
+_TOOL_DISPATCH: dict = {
+    "get_signals": lambda ti, did, cap: _get_signals(did, cap),
+    "get_system_positions": lambda ti, did, cap: _get_system_positions(did, cap),
+    "get_user_positions": lambda ti, did, cap: _get_user_positions(did, cap),
+    "enter_trade": lambda ti, did, cap: _enter_trade(did, ti, cap),
+    "exit_trade": lambda ti, did, cap: _exit_trade(did, ti, cap),
+    "get_pnl": lambda ti, did, cap: _get_pnl(did, ti.get("period", "all")),
+    "set_capital": lambda ti, did, cap: _set_capital(did, ti.get("amount")),
+    "get_trade_history": lambda ti, did, cap: _get_trade_history(
+        did, ti.get("ticker"), ti.get("limit", _DEFAULT_TRADE_LIMIT),
+    ),
+    "get_portfolio": lambda ti, did, cap: _get_portfolio(ti.get("days", 30)),
+    "get_health": lambda ti, did, cap: _get_health(),
+    "run_scan": lambda ti, did, cap: _run_scan(ti.get("config", "conservative")),
+    "run_retrain": lambda ti, did, cap: {
+        "_async_task": "retrain",
+        "tickers": ti.get("tickers"),
+        "message": "Starting model retraining... This will take 10-30+ minutes. You'll receive progress updates.",  # noqa: E501
+    },
+    "get_price": lambda ti, did, cap: _get_price(ti.get("tickers", [])),
+    "get_watchlist": lambda ti, did, cap: _get_watchlist(),
+}
+
+
 def execute_tool(
     tool_name: str,
     tool_input: dict,
@@ -715,91 +751,19 @@ def execute_tool(
     capital: float,
 ) -> dict:
     """Execute a tool and return results."""
-    if tool_name == "get_signals":
-        return _get_signals(discord_id, capital)
-    elif tool_name == "get_system_positions":
-        return _get_system_positions(discord_id, capital)
-    elif tool_name == "get_user_positions":
-        return _get_user_positions(discord_id, capital)
-    elif tool_name == "enter_trade":
-        return _enter_trade(discord_id, tool_input, capital)
-    elif tool_name == "exit_trade":
-        return _exit_trade(discord_id, tool_input, capital)
-    elif tool_name == "get_pnl":
-        period = tool_input.get("period", "all")
-        return _get_pnl(discord_id, period)
-    elif tool_name == "set_capital":
-        amount = tool_input.get("amount")
-        return _set_capital(discord_id, amount)
-    elif tool_name == "get_trade_history":
-        ticker = tool_input.get("ticker")
-        limit = tool_input.get("limit", 10)
-        return _get_trade_history(discord_id, ticker, limit)
-    elif tool_name == "get_portfolio":
-        days = tool_input.get("days", 30)
-        return _get_portfolio(days)
-    elif tool_name == "get_health":
-        return _get_health()
-    elif tool_name == "run_scan":
-        config = tool_input.get("config", "conservative")
-        return _run_scan(config)
-    elif tool_name == "run_retrain":
-        # Mark as async task - will be handled specially by discord_bot
-        tickers = tool_input.get("tickers")
-        return {
-            "_async_task": "retrain",
-            "tickers": tickers,
-            "message": "Starting model retraining... This will take 10-30+ minutes. You'll receive progress updates."  # noqa: E501
-        }
-    elif tool_name == "get_price":
-        return _get_price(tool_input.get("tickers", []))
-    elif tool_name == "get_watchlist":
-        return _get_watchlist()
-    else:
+    handler = _TOOL_DISPATCH.get(tool_name)
+    if handler is None:
         return {"error": f"Unknown tool: {tool_name}"}
+    return handler(tool_input, discord_id, capital)
 
 
 # ---------------------------------------------------------------------------
 # Main Agent Function
 # ---------------------------------------------------------------------------
 
-def process_message(
-    user_message: str,
-    discord_id: int,
-    discord_username: str,
-    conversation_history: list[dict] | None = None,
-) -> tuple[str, list[dict], list[dict]]:
-    """Process a user message with Claude, execute tools as needed.
-
-    Args:
-        user_message: The user's natural language message
-        discord_id: Discord user ID
-        discord_username: Discord username for context
-        conversation_history: Previous messages (optional)
-
-    Returns:
-        Tuple of (response_text, updated_conversation_history, async_tasks)
-    """
-    async_tasks = []  # Track async tasks to run
-    client = _get_client()
-    if not client:
-        return (
-            "Claude API not configured. Use slash commands instead.",
-            conversation_history or [],
-            []
-        )
-
-    # Ensure user exists and get their capital
-    ensure_user(discord_id, discord_username)
-    capital = get_capital(discord_id)
-
-    # Initialize history
-    if conversation_history is None:
-        conversation_history = []
-
-    # Build system prompt with context
+def _build_system_prompt(discord_username: str, capital: float) -> str:
     capital_context = f"${capital:,.0f}" if capital > 0 else "not set"
-    system_prompt = f"""You are a helpful trading assistant for the Rally Scanner system.
+    return f"""You are a helpful trading assistant for the Rally Scanner system.
 
 The user {discord_username} is asking about their trades and market signals.
 Their portfolio capital is {capital_context}.
@@ -821,98 +785,130 @@ Key conventions:
 - The system uses a volatility-targeted sizing approach
 """
 
-    # Add user message to history
-    conversation_history.append({
-        "role": "user",
-        "content": user_message
-    })
 
-    # Call Claude with tools
+def _call_claude(client, model: str, max_tokens: int, system_prompt: str, history: list[dict]):
+    return client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=system_prompt,
+        messages=history,
+        tools=TOOLS,
+    )
+
+
+def _run_tool_loop(
+    client,
+    model: str,
+    max_tokens: int,
+    system_prompt: str,
+    conversation_history: list[dict],
+    discord_id: int,
+    capital: float,
+    discord_username: str,
+    async_tasks: list[dict],
+    response,
+) -> tuple[str | None, list[dict]]:
+    """Drive the tool-use loop until stop_reason != 'tool_use'.
+
+    Returns (response_text, history) where response_text is None on rate limit.
+    """
+    while response.stop_reason == "tool_use":
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                logger.info("Executing tool: %s with input: %s", block.name, block.input)
+                result = execute_tool(block.name, block.input, discord_id, capital)
+                if isinstance(result, dict) and "_async_task" in result:
+                    async_tasks.append(result)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result),
+                })
+
+        conversation_history.append({
+            "role": "assistant",
+            "content": [block.model_dump() for block in response.content],
+        })
+        conversation_history.append({"role": "user", "content": tool_results})
+
+        try:
+            response = _call_claude(client, model, max_tokens, system_prompt, conversation_history)
+        except anthropic.RateLimitError:
+            logger.warning("Rate limit hit mid-turn for user %s", discord_username)
+            return None, conversation_history
+
+    response_text = "".join(
+        block.text for block in response.content if hasattr(block, "text")
+    )
+    conversation_history.append({
+        "role": "assistant",
+        "content": [block.model_dump() for block in response.content],
+    })
+    return response_text, conversation_history
+
+
+def process_message(
+    user_message: str,
+    discord_id: int,
+    discord_username: str,
+    conversation_history: list[dict] | None = None,
+) -> tuple[str, list[dict], list[dict]]:
+    """Process a user message with Claude, execute tools as needed.
+
+    Args:
+        user_message: The user's natural language message
+        discord_id: Discord user ID
+        discord_username: Discord username for context
+        conversation_history: Previous messages (optional)
+
+    Returns:
+        Tuple of (response_text, updated_conversation_history, async_tasks)
+    """
+    async_tasks: list[dict] = []
+    client = _get_client()
+    if not client:
+        return (
+            "Claude API not configured. Use slash commands instead.",
+            conversation_history or [],
+            [],
+        )
+
+    ensure_user(discord_id, discord_username)
+    capital = get_capital(discord_id)
+
+    if conversation_history is None:
+        conversation_history = []
+
+    system_prompt = _build_system_prompt(discord_username, capital)
+    conversation_history.append({"role": "user", "content": user_message})
+
     model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
     max_tokens = int(os.environ.get("CLAUDE_MAX_TOKENS", "2048"))
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=conversation_history,
-            tools=TOOLS,
-        )
+        response = _call_claude(client, model, max_tokens, system_prompt, conversation_history)
     except anthropic.RateLimitError:
         logger.warning("Rate limit hit for user %s", discord_username)
-        conversation_history.pop()  # remove the user message we just added
+        conversation_history.pop()
         return (
             "Rate limit reached — too many tokens in flight. Try again in a moment, or type `/clear` to reset your conversation history.",  # noqa: E501
             conversation_history,
             [],
         )
 
-    # Handle tool use loop
-    while response.stop_reason == "tool_use":
-        # Extract and execute tool calls
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                logger.info("Executing tool: %s with input: %s", block.name, block.input)
-                result = execute_tool(
-                    block.name,
-                    block.input,
-                    discord_id,
-                    capital
-                )
+    response_text, conversation_history = _run_tool_loop(
+        client, model, max_tokens, system_prompt,
+        conversation_history, discord_id, capital, discord_username,
+        async_tasks, response,
+    )
 
-                # Check if this is an async task
-                if isinstance(result, dict) and "_async_task" in result:
-                    async_tasks.append(result)
-
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result)
-                })
-
-        # Add assistant response to history (convert TextBlocks to dicts)
-        conversation_history.append({
-            "role": "assistant",
-            "content": [block.model_dump() for block in response.content]
-        })
-
-        # Add tool results
-        conversation_history.append({
-            "role": "user",
-            "content": tool_results
-        })
-
-        # Continue conversation
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system_prompt,
-                messages=conversation_history,
-                tools=TOOLS,
-            )
-        except anthropic.RateLimitError:
-            logger.warning("Rate limit hit mid-turn for user %s", discord_username)
-            return (
-                "Rate limit reached mid-response. Try again in a moment, or type `/clear` to reset your conversation history.",  # noqa: E501
-                conversation_history,
-                async_tasks,
-            )
-
-    # Extract final text response
-    response_text = ""
-    for block in response.content:
-        if hasattr(block, "text"):
-            response_text += block.text
-
-    # Add final response to history (convert TextBlocks to dicts)
-    conversation_history.append({
-        "role": "assistant",
-        "content": [block.model_dump() for block in response.content]
-    })
+    if response_text is None:
+        return (
+            "Rate limit reached mid-response. Try again in a moment, or type `/clear` to reset your conversation history.",  # noqa: E501
+            conversation_history,
+            async_tasks,
+        )
 
     logger.info("Claude response for %s: %s...", discord_username, response_text[:100])
-
     return response_text, conversation_history, async_tasks

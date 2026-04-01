@@ -1231,17 +1231,17 @@ class TradingScheduler:
     async def _store_order_ids(self, results: list) -> None:
         """Persist Alpaca order IDs to position records after entry fills."""
         state = load_positions()
+        pos_by_ticker = {pos["ticker"]: pos for pos in state["positions"]}
         for result in results:
             if result.success and result.order_id:
-                for pos in state["positions"]:
-                    if pos["ticker"] == result.ticker:
-                        if not pos.get("order_id"):
-                            pos["order_id"] = result.order_id
-                        if result.qty:
-                            pos["qty"] = result.qty
-                        if result.trail_order_id:
-                            pos["trail_order_id"] = result.trail_order_id
-                        break
+                pos = pos_by_ticker.get(result.ticker)
+                if pos:
+                    if not pos.get("order_id"):
+                        pos["order_id"] = result.order_id
+                    if result.qty:
+                        pos["qty"] = result.qty
+                    if result.trail_order_id:
+                        pos["trail_order_id"] = result.trail_order_id
         await async_save_positions(state)
 
     def _has_open_crypto_positions(self) -> bool:

@@ -344,6 +344,73 @@ def save_watchlist(entries: list[dict], scan_date: date) -> None:
             )
 
 
+_SCAN_RESULT_COLS = (
+    "ticker, p_rally, p_rally_raw, comp_score, fail_dn, "
+    "trend, golden_cross, hmm_compressed, rv_pctile, atr_pct, "
+    "macd_hist, vol_ratio, vix_pctile, rsi, close, size, is_signal, is_position"
+)
+
+_SIGNAL_COLS = (
+    "ticker, p_rally, comp_score, fail_dn, close, size, "
+    "atr_pct, range_low, trend, golden_cross, rsi, is_position"
+)
+
+_WATCHLIST_SNAPSHOT_COLS = (
+    "ticker, p_rally, p_rally_raw, comp_score, fail_dn, "
+    "close, size, trend, golden_cross, hmm_compressed, "
+    "rv_pctile, atr_pct, macd_hist, vol_ratio, vix_pctile, rsi"
+)
+
+
+def _insert_scan_result_row(
+    cur, r: dict, is_sig: bool, is_pos: bool, p_rally_pct: float,
+) -> None:
+    cur.execute(
+        f"INSERT INTO latest_scan_results ({_SCAN_RESULT_COLS}) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (
+            r["ticker"], p_rally_pct, r.get("p_rally_raw", 0),
+            r.get("comp_score", 0), r.get("fail_dn", 0),
+            r.get("trend", 0), r.get("golden_cross", 0),
+            r.get("hmm_compressed", 0), r.get("rv_pctile", 0),
+            r.get("atr_pct", 0), r.get("macd_hist", 0),
+            r.get("vol_ratio", 1), r.get("vix_pctile", 0),
+            r.get("rsi", 0), r.get("close", 0), r.get("size", 0),
+            is_sig, is_pos,
+        ),
+    )
+
+
+def _insert_current_signal_row(cur, r: dict, is_pos: bool, p_rally_pct: float) -> None:
+    cur.execute(
+        f"INSERT INTO current_signals ({_SIGNAL_COLS}) "  # noqa: E501
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (
+            r["ticker"], p_rally_pct, r.get("comp_score", 0),
+            r.get("fail_dn", 0), r.get("close", 0), r.get("size", 0),
+            r.get("atr_pct", 0), r.get("range_low", 0),
+            r.get("trend", 0), r.get("golden_cross", 0),
+            r.get("rsi", 0), is_pos,
+        ),
+    )
+
+
+def _insert_watchlist_snapshot_row(cur, r: dict, p_rally_pct: float) -> None:
+    cur.execute(
+        f"INSERT INTO current_watchlist ({_WATCHLIST_SNAPSHOT_COLS}) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (
+            r["ticker"], p_rally_pct, r.get("p_rally_raw", 0),
+            r.get("comp_score", 0), r.get("fail_dn", 0),
+            r.get("close", 0), r.get("size", 0), r.get("trend", 0),
+            r.get("golden_cross", 0), r.get("hmm_compressed", 0),
+            r.get("rv_pctile", 0), r.get("atr_pct", 0),
+            r.get("macd_hist", 0), r.get("vol_ratio", 1),
+            r.get("vix_pctile", 0), r.get("rsi", 0),
+        ),
+    )
+
+
 def save_latest_scan(results: list[dict], positions: dict) -> None:
     """Replace current-state scan tables atomically on each scan."""
     open_tickers = {p["ticker"] for p in positions.get("positions", [])}
@@ -358,57 +425,11 @@ def save_latest_scan(results: list[dict], positions: dict) -> None:
             is_pos = r["ticker"] in open_tickers
             p_rally_pct = round(r.get("p_rally", 0) * 100, 1)
 
-            cur.execute(
-                """INSERT INTO latest_scan_results
-                       (ticker, p_rally, p_rally_raw, comp_score, fail_dn,
-                        trend, golden_cross, hmm_compressed, rv_pctile, atr_pct,
-                        macd_hist, vol_ratio, vix_pctile, rsi, close, size,
-                        is_signal, is_position)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (
-                    r["ticker"], p_rally_pct, r.get("p_rally_raw", 0),
-                    r.get("comp_score", 0), r.get("fail_dn", 0),
-                    r.get("trend", 0), r.get("golden_cross", 0),
-                    r.get("hmm_compressed", 0), r.get("rv_pctile", 0),
-                    r.get("atr_pct", 0), r.get("macd_hist", 0),
-                    r.get("vol_ratio", 1), r.get("vix_pctile", 0),
-                    r.get("rsi", 0), r.get("close", 0), r.get("size", 0),
-                    is_sig, is_pos,
-                ),
-            )
-
+            _insert_scan_result_row(cur, r, is_sig, is_pos, p_rally_pct)
             if is_sig:
-                cur.execute(
-                    """INSERT INTO current_signals
-                           (ticker, p_rally, comp_score, fail_dn, close, size,
-                            atr_pct, range_low, trend, golden_cross, rsi, is_position)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        r["ticker"], p_rally_pct, r.get("comp_score", 0),
-                        r.get("fail_dn", 0), r.get("close", 0), r.get("size", 0),
-                        r.get("atr_pct", 0), r.get("range_low", 0),
-                        r.get("trend", 0), r.get("golden_cross", 0),
-                        r.get("rsi", 0), is_pos,
-                    ),
-                )
-
+                _insert_current_signal_row(cur, r, is_pos, p_rally_pct)
             if not is_sig and not is_pos:
-                cur.execute(
-                    """INSERT INTO current_watchlist
-                           (ticker, p_rally, p_rally_raw, comp_score, fail_dn,
-                            close, size, trend, golden_cross, hmm_compressed,
-                            rv_pctile, atr_pct, macd_hist, vol_ratio, vix_pctile, rsi)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        r["ticker"], p_rally_pct, r.get("p_rally_raw", 0),
-                        r.get("comp_score", 0), r.get("fail_dn", 0),
-                        r.get("close", 0), r.get("size", 0), r.get("trend", 0),
-                        r.get("golden_cross", 0), r.get("hmm_compressed", 0),
-                        r.get("rv_pctile", 0), r.get("atr_pct", 0),
-                        r.get("macd_hist", 0), r.get("vol_ratio", 1),
-                        r.get("vix_pctile", 0), r.get("rsi", 0),
-                    ),
-                )
+                _insert_watchlist_snapshot_row(cur, r, p_rally_pct)
 
 
 def load_current_signals() -> list[dict]:

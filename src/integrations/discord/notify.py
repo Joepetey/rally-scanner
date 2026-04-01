@@ -13,6 +13,31 @@ from config import PARAMS as _P
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Shared constants
+# ---------------------------------------------------------------------------
+
+_GREEN = 0x00FF00
+_RED = 0xFF0000
+_ORANGE = 0xFF8C00
+_RED_ORANGE = 0xFF4500
+_SKY = 0x87CEEB
+_GOLD = 0xFFD700
+_GRAY = 0x95A5A6
+_BLUE = 0x0099FF
+
+_EMOJI_STOP = "\u26a0\ufe0f"   # ⚠️
+_EMOJI_TARGET = "\u2705"        # ✅
+_EMOJI_CLOSE = "\u274c"         # ❌
+_EMOJI_WARN = "\u26a0\ufe0f"   # ⚠️
+
+_FOOTER_INTRADAY = "Intraday alert \u2014 daily scan handles exits"
+_FOOTER_INTRADAY_WARN = "Intraday warning \u2014 daily scan handles exits"
+
+
+def _pnl_sign(pnl: float) -> str:
+    return "+" if pnl >= 0 else ""
+
 
 def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
@@ -89,7 +114,7 @@ def _signal_embed(signals: list[dict]) -> dict:
         })
     return {
         "title": f"New Signals ({len(signals)})",
-        "color": 0x00FF00,
+        "color": _GREEN,
         "fields": fields[:25],  # Discord limit
     }
 
@@ -99,12 +124,11 @@ def _exit_embed(closed: list[dict]) -> dict:
     fields = []
     for c in closed:
         pnl = c.get("realized_pnl_pct") or 0
-        sign = "+" if pnl >= 0 else ""
         fields.append({
             "name": c.get("ticker", "?"),
             "value": (
                 f"Reason: {c.get('exit_reason', '?')}\n"
-                f"PnL: **{sign}{pnl:.2f}%**\n"
+                f"PnL: **{_pnl_sign(pnl)}{pnl:.2f}%**\n"
                 f"Bars held: {c.get('bars_held') or 0}"
             ),
             "inline": True,
@@ -113,7 +137,7 @@ def _exit_embed(closed: list[dict]) -> dict:
     any_loss = any((c.get("realized_pnl_pct") or 0) < 0 for c in closed)
     return {
         "title": f"Position Exits ({len(closed)})",
-        "color": 0xFF0000 if any_loss else 0x00FF00,
+        "color": _RED if any_loss else _GREEN,
         "fields": fields[:25],
     }
 
@@ -122,7 +146,7 @@ def _retrain_embed(health: dict, elapsed: float) -> dict:
     """Build a Discord embed for retrain completion."""
     return {
         "title": "Retrain Complete",
-        "color": 0x0099FF,
+        "color": _BLUE,
         "fields": [
             {"name": "Models", "value": (
                 f"{health.get('fresh_count', 0)}/{health.get('total_count', 0)} fresh"
@@ -144,8 +168,7 @@ def _price_alert_embed(alerts: list[dict]) -> dict:
     fields = []
     for a in alerts:
         pnl = a.get("pnl_pct", 0)
-        sign = "+" if pnl >= 0 else ""
-        emoji = "\u26a0\ufe0f" if "stop" in a["alert_type"] else "\u2705"
+        emoji = _EMOJI_STOP if "stop" in a["alert_type"] else _EMOJI_TARGET
         fields.append({
             "name": f"{emoji} {a['ticker']}",
             "value": (
@@ -153,16 +176,16 @@ def _price_alert_embed(alerts: list[dict]) -> dict:
                 f"Level: ${a['level_price']:.2f}\n"
                 f"Current: ${a['current_price']:.2f}\n"
                 f"Entry: ${a['entry_price']:.2f}\n"
-                f"PnL: {sign}{pnl:.2f}%"
+                f"PnL: {_pnl_sign(pnl)}{pnl:.2f}%"
             ),
             "inline": True,
         })
     any_stop = any("stop" in a["alert_type"] for a in alerts)
     return {
         "title": f"Price Alert ({len(alerts)})",
-        "color": 0xFF0000 if any_stop else 0x00FF00,
+        "color": _RED if any_stop else _GREEN,
         "fields": fields[:25],
-        "footer": {"text": "Intraday alert \u2014 daily scan handles exits"},
+        "footer": {"text": _FOOTER_INTRADAY},
     }
 
 
@@ -175,22 +198,21 @@ def _approaching_alert_embed(alerts: list[dict]) -> dict:
     fields = []
     for a in alerts:
         pnl = a.get("pnl_pct", 0)
-        sign = "+" if pnl >= 0 else ""
         fields.append({
             "name": a["ticker"],
             "value": (
                 f"Approaching **{a['level_name']}**\n"
                 f"Level: ${a['level_price']:.2f} ({a['distance_pct']:.1f}% away)\n"
                 f"Current: ${a['current_price']:.2f}\n"
-                f"PnL: {sign}{pnl:.2f}%"
+                f"PnL: {_pnl_sign(pnl)}{pnl:.2f}%"
             ),
             "inline": True,
         })
     return {
         "title": f"Price Warning ({len(alerts)})",
-        "color": 0xFF8C00,
+        "color": _ORANGE,
         "fields": fields[:25],
-        "footer": {"text": "Intraday warning \u2014 daily scan handles exits"},
+        "footer": {"text": _FOOTER_INTRADAY_WARN},
     }
 
 
@@ -210,7 +232,7 @@ def _order_embed(results: list, equity: float) -> dict:
         })
     return {
         "title": f"Alpaca Orders ({len(results)})",
-        "color": 0x87CEEB,
+        "color": _SKY,
         "fields": fields[:25],
         "footer": {"text": f"Account equity: ${equity:,.0f}"},
     }
@@ -234,7 +256,7 @@ def _fill_confirmation_embed(fills: list[dict]) -> dict:
         })
     return {
         "title": f"Entry Fills Confirmed ({len(fills)})",
-        "color": 0x87CEEB,
+        "color": _SKY,
         "fields": fields[:25],
         "footer": {"text": "Intraday fill confirmation"},
     }
@@ -251,7 +273,7 @@ def _order_failure_embed(results: list) -> dict:
         })
     return {
         "title": f"Alpaca Order Failures ({len(results)})",
-        "color": 0xFF4500,
+        "color": _RED_ORANGE,
         "fields": fields[:25],
         "footer": {"text": "System positions unaffected"},
     }
@@ -277,7 +299,7 @@ def _regime_shift_embed(transitions: list[dict]) -> dict:
     any_expanding = any(t["new_regime"] == "expanding" for t in transitions)
     return {
         "title": f"Regime Shift ({len(transitions)})",
-        "color": 0xFF0000 if any_expanding else 0xFF8C00,
+        "color": _RED if any_expanding else _ORANGE,
         "fields": fields[:25],
         "footer": {"text": "HMM volatility regime transition detected"},
     }
@@ -294,12 +316,11 @@ def _risk_action_embed(results: list[dict]) -> dict:
             continue
         if r["action"] == "close":
             pnl = r.get("pnl_pct", 0)
-            sign = "+" if pnl >= 0 else ""
             fields.append({
-                "name": f"\u274c {r['ticker']}",
+                "name": f"{_EMOJI_CLOSE} {r['ticker']}",
                 "value": (
                     f"**CLOSED** (risk reduction)\n"
-                    f"PnL: {sign}{pnl:.2f}%\n"
+                    f"PnL: {_pnl_sign(pnl)}{pnl:.2f}%\n"
                     f"Reason: {r['reason']}"
                 ),
                 "inline": True,
@@ -308,7 +329,7 @@ def _risk_action_embed(results: list[dict]) -> dict:
             old = r.get("old_stop", 0)
             new = r.get("new_stop", 0)
             fields.append({
-                "name": f"\u26a0\ufe0f {r['ticker']}",
+                "name": f"{_EMOJI_WARN} {r['ticker']}",
                 "value": (
                     f"**Stop tightened**\n"
                     f"${old:.2f} \u2192 ${new:.2f}\n"
@@ -317,12 +338,11 @@ def _risk_action_embed(results: list[dict]) -> dict:
                 "inline": True,
             })
     if not fields:
-        return {"title": "Risk Actions", "color": 0x95A5A6,
-                "description": "No actions needed"}
+        return {"title": "Risk Actions", "color": _GRAY, "description": "No actions needed"}
     any_close = any(r["action"] == "close" for r in results if not r.get("skipped"))
     return {
         "title": f"Proactive Risk Actions ({len(fields)})",
-        "color": 0xFF0000 if any_close else 0xFF8C00,
+        "color": _RED if any_close else _ORANGE,
         "fields": fields[:25],
         "footer": {"text": "Automated risk management"},
     }
@@ -333,7 +353,7 @@ def _positions_embed(positions: list[dict]) -> dict:
     if not positions:
         return {
             "title": "Open Positions (0)",
-            "color": 0x95A5A6,
+            "color": _GRAY,
             "description": "No open positions",
         }
 
@@ -360,7 +380,7 @@ def _positions_embed(positions: list[dict]) -> dict:
     any_loss = any(p.get("unrealized_pnl_pct", 0) < 0 for p in positions)
     return {
         "title": f"Open Positions ({len(positions)})",
-        "color": 0xFF8C00 if any_loss else 0x00FF00,
+        "color": _ORANGE if any_loss else _GREEN,
         "description": "\n".join(lines),
     }
 
@@ -382,7 +402,7 @@ def _cash_parking_embed(action: str, result, equity: float, idle_fraction: float
     title = "SGOV Parked — Cash Management" if action == "park" else "SGOV Sold — Capital Freed"
     return {
         "title": title,
-        "color": 0xFFD700,  # gold — neutral, not a signal trade
+        "color": _GOLD,
         "description": "\n".join(parts),
         "footer": {"text": f"Account equity: ${equity:,.0f}"},
     }
@@ -392,7 +412,7 @@ def _error_embed(title: str, details: str) -> dict:
     """Build a Discord embed for error alerts."""
     return {
         "title": f"Error: {title}",
-        "color": 0xFF0000,
+        "color": _RED,
         "description": details[:4096],  # Discord limit
     }
 
@@ -401,7 +421,7 @@ def _stream_degraded_embed(disconnected_minutes: int) -> dict:
     """Build a Discord embed for stream degradation (polling-only fallback)."""
     return {
         "title": "Stream Degraded — Polling-Only Mode",
-        "color": 0xFF8C00,
+        "color": _ORANGE,
         "description": (
             f"The Alpaca WebSocket stream has been disconnected for **{disconnected_minutes} min**.\n"  # noqa: E501
             "Price alert latency has degraded from seconds to ~15 minutes.\n"
@@ -414,7 +434,7 @@ def _stream_recovered_embed(downtime_minutes: int) -> dict:
     """Build a Discord embed for stream recovery after a degradation period."""
     return {
         "title": "Stream Recovered",
-        "color": 0x00FF00,
+        "color": _GREEN,
         "description": (
             f"The Alpaca WebSocket stream has reconnected after **{downtime_minutes} min** of downtime.\n"  # noqa: E501
             "Real-time price alerts are active again."

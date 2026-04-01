@@ -48,6 +48,14 @@ from trading.risk_manager import is_circuit_breaker_active
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Alpaca error code constants (MIC-120)
+# ---------------------------------------------------------------------------
+
+_ERR_NOT_TRADABLE = "42210000"     # symbol not supported on Alpaca
+_ERR_SHARES_HELD = "40310000"      # shares held by another open order
+_ERR_POSITION_CLOSED = "40410000"  # position already closed (trailing stop triggered)
+
 
 class OrderResult(BaseModel):
     ticker: str
@@ -279,6 +287,65 @@ def _compute_limit_price(fallback_price: float, ticker: str) -> float:
     return round(fallback_price * (1 + buffer), 2)
 
 
+def _compute_entry_qty(
+    equity: float, size: float, price: float, is_crypto: bool,
+) -> float | int | None:
+    """Compute order quantity from allocation size. Returns None if insufficient."""
+    if is_crypto:
+        qty = round(equity * size / price, 8)
+        return qty if qty > 0 else None
+    qty = int(equity * size / price)
+    return qty if qty >= 1 else None
+
+
+async def _compute_entry_size(
+    sig: dict,
+    current_exposure: float,
+    max_exposure: float,
+    min_size: float,
+    open_positions: list[dict],
+    open_tickers: set[str],
+    results: list[OrderResult],
+) -> tuple[float, float, list[dict], set[str]]:
+    """Resolve effective entry size after partial sizing or rotation.
+
+    Returns (size, current_exposure, open_positions, open_tickers).
+    Returns size=0.0 if the position must be skipped (caller should continue).
+    """
+    size = sig["size"]
+    available = max_exposure - current_exposure
+
+    if current_exposure + size <= max_exposure:
+        return size, current_exposure, open_positions, open_tickers
+
+    if config.PARAMS.partial_sizing_enabled and available >= min_size:
+        logger.info(
+            "%s: partial size %.1f%% → %.1f%% (capital limited)",
+            sig["ticker"], size * 100, available * 100,
+        )
+        return available, current_exposure, open_positions, open_tickers
+
+    if config.PARAMS.rotation_enabled and open_positions:
+        size, current_exposure, open_positions, open_tickers, rotated = (
+            await _attempt_rotation(
+                sig, open_positions, open_tickers, current_exposure, max_exposure, min_size,
+                results,
+            )
+        )
+        if rotated:
+            return size, current_exposure, open_positions, open_tickers
+
+    ticker = sig["ticker"]
+    enqueue_signal(sig, "capital")
+    log_skipped_signal(sig, "capital")
+    logger.info("Queued %s: no capital available", ticker)
+    results.append(OrderResult(
+        ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+        error=f"Portfolio exposure cap ({max_exposure:.0%}) exceeded — queued",
+    ))
+    return 0.0, current_exposure, open_positions, open_tickers
+
+
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
     results: list[OrderResult] = []
 
@@ -308,37 +375,12 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
 
         is_crypto = ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto"
         price = sig.get("entry_price") or sig["close"]
-        size = sig["size"]
-        available = max_exposure - current_exposure
 
-        # --- Partial sizing: scale down to available capital ---
-        if current_exposure + size > max_exposure:
-            if config.PARAMS.partial_sizing_enabled and available >= min_size:
-                logger.info(
-                    "%s: partial size %.1f%% → %.1f%% (capital limited)",
-                    ticker, size * 100, available * 100,
-                )
-                size = available
-            else:
-                # --- Position rotation: exit weakest to fund stronger signal ---
-                rotated = False
-                if config.PARAMS.rotation_enabled and open_positions:
-                    size, current_exposure, open_positions, open_tickers, rotated = (
-                        await _attempt_rotation(
-                            sig, open_positions, open_tickers,
-                            current_exposure, max_exposure, min_size, results,
-                        )
-                    )
-
-                if not rotated:
-                    enqueue_signal(sig, "capital")
-                    log_skipped_signal(sig, "capital")
-                    logger.info("Queued %s: no capital available", ticker)
-                    results.append(OrderResult(
-                        ticker=ticker, side="buy", qty=0, success=False, skipped=True,
-                        error=f"Portfolio exposure cap ({max_exposure:.0%}) exceeded — queued",
-                    ))
-                    continue
+        size, current_exposure, open_positions, open_tickers = await _compute_entry_size(
+            sig, current_exposure, max_exposure, min_size, open_positions, open_tickers, results,
+        )
+        if size == 0.0:
+            continue
 
         # Group concentration check
         group_skip = _check_group_constraints(ticker, size, sig)
@@ -346,23 +388,16 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             results.append(group_skip)
             continue
 
-        # Crypto supports fractional shares; equity requires whole shares
-        if is_crypto:
-            qty = round(equity * size / price, 8)
-            if qty <= 0:
-                results.append(OrderResult(
-                    ticker=ticker, side="buy", qty=0, success=False,
-                    error="Insufficient equity for fractional crypto order",
-                ))
-                continue
-        else:
-            qty = int(equity * size / price)
-            if qty < 1:
-                results.append(OrderResult(
-                    ticker=ticker, side="buy", qty=0, success=False,
-                    error="Insufficient equity for 1 share",
-                ))
-                continue
+        qty = _compute_entry_qty(equity, size, price, is_crypto)
+        if qty is None:
+            results.append(OrderResult(
+                ticker=ticker, side="buy", qty=0, success=False,
+                error=(
+                    "Insufficient equity for fractional crypto order"
+                    if is_crypto else "Insufficient equity for 1 share"
+                ),
+            ))
+            continue
 
         try:
             # Compute limit price from bid/ask midpoint + buffer to avoid
@@ -395,7 +430,7 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             current_exposure += size
         except Exception as e:
             err_str = str(e)
-            if "42210000" in err_str:
+            if _ERR_NOT_TRADABLE in err_str:
                 logger.info("Skipping %s: not tradable on Alpaca", ticker)
                 results.append(OrderResult(
                     ticker=ticker, side="buy", qty=0, success=False, skipped=True,
@@ -420,11 +455,76 @@ async def cancel_order(order_id: str) -> bool:
         return True
     except Exception as e:
         # 42210000: order already filled — benign, the exit we wanted happened
-        if "42210000" in str(e):
+        if _ERR_NOT_TRADABLE in str(e):
             logger.debug("Order %s already filled, cancel skipped", order_id)
         else:
             logger.warning("Failed to cancel order %s: %s", order_id, e)
         return False
+
+
+def _retry_close_position(
+    client: "TradingClient", alpaca_sym: str, ticker: str,
+) -> OrderResult:
+    """Try up to 3 times to close a position, handling held-shares delays."""
+    last_err = None
+    for attempt in range(3):
+        try:
+            order = client.close_position(symbol_or_asset_id=alpaca_sym)
+            fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
+            raw_qty = order.qty or order.filled_qty or 0
+            qty = _safe_qty(raw_qty)
+            return OrderResult(
+                ticker=ticker, side="sell", qty=qty, success=True,
+                order_id=str(order.id), fill_price=fill_price,
+            )
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            if _ERR_SHARES_HELD in err_str and attempt < 2:
+                logger.info(
+                    "Shares still held for %s, retrying in 1s (attempt %d/3)",
+                    ticker, attempt + 1,
+                )
+                time.sleep(1)
+            elif _ERR_POSITION_CLOSED in err_str:
+                logger.info(
+                    "Position %s already closed in Alpaca (trailing stop triggered)", ticker,
+                )
+                return OrderResult(
+                    ticker=ticker, side="sell", qty=0, success=True, already_closed=True,
+                )
+            else:
+                raise
+    raise last_err  # unreachable, but satisfies type checker
+
+
+def _recover_from_shares_held(
+    client: "TradingClient", ticker: str, err_str: str,
+) -> tuple[str | None, str | None]:
+    """Recover existing OCO order IDs from a held-shares (_ERR_SHARES_HELD) error body."""
+    import json as _json
+    try:
+        body_start = err_str.find("{")
+        body = _json.loads(err_str[body_start:]) if body_start >= 0 else {}
+        related = body.get("related_orders", [])
+        if related:
+            parent_oid = str(related[0])
+            order = client.get_order_by_id(parent_oid)
+            legs = order.legs or []
+            target_oid = str(order.id)
+            stop_oid = str(legs[0].id) if legs else target_oid
+            logger.info(
+                "Recovered existing OCO for %s from held-shares error: "
+                "target_order=%s stop_order=%s",
+                ticker, target_oid, stop_oid,
+            )
+            return target_oid, stop_oid
+    except Exception as recover_err:
+        logger.error(
+            "Could not recover OCO IDs for %s after %s: %s",
+            ticker, _ERR_SHARES_HELD, recover_err,
+        )
+    return None, None
 
 
 def _execute_exit_sync(
@@ -433,20 +533,18 @@ def _execute_exit_sync(
 ) -> OrderResult:
     """Execute a single exit using an existing client (synchronous)."""
     # Cancel OCO exit orders before closing. OCO orders hold shares until cancelled —
-    # skipping this causes close_position() to fail with error 40310000 (shares held).
+    # skipping this causes close_position() to fail with _ERR_SHARES_HELD.
     # Cancelling one OCO leg auto-cancels the other on Alpaca, but we cancel both
     # explicitly for robustness. target_order_id is the limit-sell (parent); cancelling
     # it also releases the stop leg even if trail_order_id is stale or missing.
-    order_ids_to_cancel = {
-        oid for oid in (trail_order_id, target_order_id) if oid
-    }
+    order_ids_to_cancel = {oid for oid in (trail_order_id, target_order_id) if oid}
     if order_ids_to_cancel:
         for oid in order_ids_to_cancel:
             try:
                 client.cancel_order_by_id(oid)
                 logger.info("Cancelled OCO order %s for %s", oid, ticker)
             except Exception as e:
-                if "42210000" in str(e):
+                if _ERR_NOT_TRADABLE in str(e):
                     logger.debug("Order %s for %s already filled, cancel skipped", oid, ticker)
                 else:
                     logger.warning("Could not cancel order %s for %s: %s", oid, ticker, e)
@@ -457,42 +555,7 @@ def _execute_exit_sync(
     # the SDK doesn't URL-encode them. Alpaca stores crypto positions as "BTCUSD"
     # (no slash), so strip "/" for the close call. Equity symbols are unaffected.
     alpaca_sym = _alpaca_symbol(ticker).replace("/", "")
-
-    # Retry close in case cancel hasn't fully released held shares
-    last_err = None
-    for attempt in range(3):
-        try:
-            order = client.close_position(symbol_or_asset_id=alpaca_sym)
-            fill_price = (
-                float(order.filled_avg_price) if order.filled_avg_price else None
-            )
-            raw_qty = order.qty or order.filled_qty or 0
-            qty = _safe_qty(raw_qty)
-            return OrderResult(
-                ticker=ticker, side="sell", qty=qty, success=True,
-                order_id=str(order.id),
-                fill_price=fill_price,
-            )
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            if "40310000" in err_str and attempt < 2:
-                logger.info(
-                    "Shares still held for %s, retrying in 1s (attempt %d/3)",
-                    ticker, attempt + 1,
-                )
-                time.sleep(1)
-            elif "40410000" in err_str:
-                # Trailing stop already closed the position — treat as success
-                logger.info(
-                    "Position %s already closed in Alpaca (trailing stop triggered)", ticker,
-                )
-                return OrderResult(
-                    ticker=ticker, side="sell", qty=0, success=True, already_closed=True,
-                )
-            else:
-                raise
-    raise last_err  # unreachable, but satisfies type checker
+    return _retry_close_position(client, alpaca_sym, ticker)
 
 
 async def execute_exit(ticker: str, trail_order_id: str | None = None) -> OrderResult:
@@ -604,35 +667,10 @@ async def place_exit_orders(
             return target_oid, stop_oid
         except Exception as e:
             err_str = str(e)
-            # 40310000: shares already held for an existing OCO order.
-            # Parse the related_orders from the error body and recover those IDs
-            # so we stop retrying placement and treat the existing order as ours.
-            if "40310000" in err_str:
-                import json as _json
-                try:
-                    # Error body is the JSON dict portion of the exception string
-                    body_start = err_str.find("{")
-                    body = _json.loads(err_str[body_start:]) if body_start >= 0 else {}
-                    related = body.get("related_orders", [])
-                    if related:
-                        parent_oid = str(related[0])
-                        order = client.get_order_by_id(parent_oid)
-                        legs = order.legs or []
-                        target_oid = str(order.id)
-                        stop_oid = str(legs[0].id) if legs else target_oid
-                        logger.info(
-                            "Recovered existing OCO for %s from held-shares error: "
-                            "target_order=%s stop_order=%s",
-                            ticker, target_oid, stop_oid,
-                        )
-                        return target_oid, stop_oid
-                except Exception as recover_err:
-                    logger.error(
-                        "Could not recover OCO IDs for %s after 40310000: %s",
-                        ticker, recover_err,
-                    )
-            else:
-                logger.error("Failed to place OCO exit for %s: %s", ticker, e)
+            if _ERR_SHARES_HELD in err_str:
+                # Shares held by existing OCO — recover its IDs instead of retrying placement.
+                return _recover_from_shares_held(client, ticker, err_str)
+            logger.error("Failed to place OCO exit for %s: %s", ticker, e)
             return None, None
 
     return await asyncio.to_thread(_sync)

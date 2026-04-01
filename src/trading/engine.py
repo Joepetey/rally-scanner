@@ -136,6 +136,62 @@ class AlertEngine:
         market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
         return market_open <= now <= market_close
 
+    def _check_breach(
+        self, ticker: str, price: float, pos: dict, today: str,
+        effective_stop: float, target: float, entry: float, pnl_pct: float,
+        stop: float, trailing: float,
+    ) -> AlertEvent | None:
+        """Check hard stop/target breach conditions. Returns event or None."""
+        if effective_stop > 0 and price <= effective_stop:
+            if log_price_alert(  # noqa: E501
+                today, ticker, "stop_breached", price, effective_stop, entry, pnl_pct
+            ):
+                level_name = "Trailing Stop" if trailing > stop else "Stop"
+                return AlertEvent(
+                    ticker=ticker, alert_type="stop_breached", current_price=price,
+                    level_price=effective_stop, level_name=level_name,
+                    entry_price=entry, pnl_pct=pnl_pct,
+                )
+        elif target > 0 and price >= target:
+            if log_price_alert(today, ticker, "target_breached", price, target, entry, pnl_pct):
+                return AlertEvent(
+                    ticker=ticker, alert_type="target_breached", current_price=price,
+                    level_price=target, level_name="Target",
+                    entry_price=entry, pnl_pct=pnl_pct,
+                )
+        return None
+
+    def _check_proximity(
+        self, ticker: str, price: float, pos: dict, today: str,
+        effective_stop: float, target: float, entry: float, pnl_pct: float,
+        stop: float, trailing: float,
+    ) -> AlertEvent | None:
+        """Check near-stop and near-target proximity conditions. Returns event or None."""
+        if self._proximity_pct <= 0:
+            return None
+        if effective_stop > 0:
+            distance = (price / effective_stop - 1) * 100
+            if 0 < distance <= self._proximity_pct:
+                if log_price_alert(  # noqa: E501
+                    today, ticker, "near_stop", price, effective_stop, entry, pnl_pct
+                ):
+                    level_name = "Trailing Stop" if trailing > stop else "Stop"
+                    return AlertEvent(
+                        ticker=ticker, alert_type="near_stop", current_price=price,
+                        level_price=effective_stop, level_name=level_name,
+                        entry_price=entry, pnl_pct=pnl_pct, distance_pct=round(distance, 2),
+                    )
+        if target > 0:
+            distance = (target / price - 1) * 100
+            if 0 < distance <= self._proximity_pct:
+                if log_price_alert(today, ticker, "near_target", price, target, entry, pnl_pct):
+                    return AlertEvent(
+                        ticker=ticker, alert_type="near_target", current_price=price,
+                        level_price=target, level_name="Target",
+                        entry_price=entry, pnl_pct=pnl_pct, distance_pct=round(distance, 2),
+                    )
+        return None
+
     def evaluate_single_ticker(
         self, ticker: str, price: float, pos: dict,
     ) -> AlertEvent | None:
@@ -151,85 +207,16 @@ class AlertEngine:
         target = pos.get("target_price", 0)
         trailing = pos.get("trailing_stop", 0)
         pnl_pct = round((price / entry - 1) * 100, 2) if entry else 0
-
         effective_stop = max(stop, trailing)
 
-        if effective_stop > 0 and price <= effective_stop:
-            if log_price_alert(
-                today, ticker, "stop_breached", price, effective_stop, entry, pnl_pct
-            ):
-                level_name = "Trailing Stop" if trailing > stop else "Stop"
-                return AlertEvent(
-                    ticker=ticker,
-                    alert_type="stop_breached",
-                    current_price=price,
-                    level_price=effective_stop,
-                    level_name=level_name,
-                    entry_price=entry,
-                    pnl_pct=pnl_pct,
-                )
-
-        elif target > 0 and price >= target:
-            if log_price_alert(today, ticker, "target_breached", price, target, entry, pnl_pct):
-                return AlertEvent(
-                    ticker=ticker,
-                    alert_type="target_breached",
-                    current_price=price,
-                    level_price=target,
-                    level_name="Target",
-                    entry_price=entry,
-                    pnl_pct=pnl_pct,
-                )
-
-        elif self._proximity_pct > 0 and effective_stop > 0:
-            distance = (price / effective_stop - 1) * 100
-            if 0 < distance <= self._proximity_pct:
-                if log_price_alert(
-                    today, ticker, "near_stop", price, effective_stop, entry, pnl_pct
-                ):
-                    level_name = "Trailing Stop" if trailing > stop else "Stop"
-                    return AlertEvent(
-                        ticker=ticker,
-                        alert_type="near_stop",
-                        current_price=price,
-                        level_price=effective_stop,
-                        level_name=level_name,
-                        entry_price=entry,
-                        pnl_pct=pnl_pct,
-                        distance_pct=round(distance, 2),
-                    )
-            # Not near stop — still check near_target
-            if target > 0:
-                distance = (target / price - 1) * 100
-                if 0 < distance <= self._proximity_pct:
-                    if log_price_alert(today, ticker, "near_target", price, target, entry, pnl_pct):
-                        return AlertEvent(
-                            ticker=ticker,
-                            alert_type="near_target",
-                            current_price=price,
-                            level_price=target,
-                            level_name="Target",
-                            entry_price=entry,
-                            pnl_pct=pnl_pct,
-                            distance_pct=round(distance, 2),
-                        )
-
-        elif self._proximity_pct > 0 and target > 0:
-            distance = (target / price - 1) * 100
-            if 0 < distance <= self._proximity_pct:
-                if log_price_alert(today, ticker, "near_target", price, target, entry, pnl_pct):
-                    return AlertEvent(
-                        ticker=ticker,
-                        alert_type="near_target",
-                        current_price=price,
-                        level_price=target,
-                        level_name="Target",
-                        entry_price=entry,
-                        pnl_pct=pnl_pct,
-                        distance_pct=round(distance, 2),
-                    )
-
-        return None
+        return (
+            self._check_breach(
+                ticker, price, pos, today, effective_stop, target, entry, pnl_pct, stop, trailing,
+            )
+            or self._check_proximity(
+                ticker, price, pos, today, effective_stop, target, entry, pnl_pct, stop, trailing,
+            )
+        )
 
     async def check_prices(
         self, positions: list[dict], quotes: dict[str, dict],
@@ -288,6 +275,73 @@ class AlertEngine:
             logger.exception("Alpaca exit failed for %s", ticker)
             return None
 
+    async def _confirm_pending_fills(
+        self, positions: list[dict],
+    ) -> list[FillNotification]:
+        """Check pending entry orders and update fill prices. Returns confirmed fills."""
+        pending_ids = [p.get("order_id") for p in positions if p.get("order_id")]
+        if not pending_ids:
+            return []
+        fills = await check_pending_fills(pending_ids)
+        if not fills:
+            return []
+
+        from db.events import update_order_fill
+        for oid, fp in fills.items():
+            update_order_fill(oid, fp)
+        n_filled = await update_fill_prices(fills)
+        if n_filled:
+            logger.info("Updated %d fill prices from Alpaca", n_filled)
+        return [
+            FillNotification(
+                ticker=p["ticker"],
+                fill_price=fills[p["order_id"]],
+                qty=p.get("qty"),
+                stop_price=p.get("stop_price", 0.0),
+                target_price=p.get("target_price", 0.0),
+            )
+            for p in positions
+            if p.get("order_id") in fills
+        ]
+
+    async def _place_exit_orders_for_fills(self) -> list[dict]:
+        """Place OCO exit orders for newly filled entries. Returns orders placed."""
+        # Crypto positions excluded: Alpaca doesn't support OCO for crypto.
+        orders_placed: list[dict] = []
+        fresh_state = load_positions()
+        for pos in fresh_state.get("positions", []):
+            ticker = pos["ticker"]
+            is_crypto = (
+                ticker in config.ASSETS
+                and config.ASSETS[ticker].asset_class == "crypto"
+            )
+            if (not is_crypto
+                    and not pos.get("order_id")
+                    and not pos.get("target_order_id")
+                    and not pos.get("trail_order_id")
+                    and pos.get("target_price") and pos.get("stop_price")
+                    and pos.get("qty")):
+                effective_stop = max(pos.get("stop_price", 0), pos.get("trailing_stop", 0))
+                t_oid, s_oid = await place_exit_orders(
+                    ticker, pos["qty"], pos["target_price"], effective_stop,
+                )
+                if t_oid or s_oid:
+                    pos["target_order_id"] = t_oid
+                    pos["trail_order_id"] = s_oid
+                    if t_oid:
+                        log_order(ticker, "sell", "limit", pos["qty"], "exit_target", t_oid, "pending")  # noqa: E501
+                    if s_oid:
+                        log_order(ticker, "sell", "stop", pos["qty"], "exit_stop", s_oid, "pending")
+                    logger.info("Exit orders placed for %s: target=%s stop=%s", ticker, t_oid, s_oid)  # noqa: E501
+                    orders_placed.append({
+                        "ticker": ticker,
+                        "target_order_id": t_oid,
+                        "stop_order_id": s_oid,
+                    })
+        if orders_placed:
+            await async_save_positions(fresh_state)
+        return orders_placed
+
     async def run_housekeeping(self, positions: list[dict]) -> HousekeepingResult:
         """Sync positions, check pending fills, place exit orders for new fills."""
         fills_confirmed: list[FillNotification] = []
@@ -299,72 +353,8 @@ class AlertEngine:
             except Exception:
                 logger.exception("Housekeeping: Alpaca sync failed")
 
-        if alpaca_enabled():
-            pending_ids = [p.get("order_id") for p in positions if p.get("order_id")]
-            if pending_ids:
-                fills = await check_pending_fills(pending_ids)
-                if fills:
-                    from db.events import update_order_fill
-                    for oid, fp in fills.items():
-                        update_order_fill(oid, fp)
-                    n_filled = await update_fill_prices(fills)
-                    if n_filled:
-                        logger.info("Updated %d fill prices from Alpaca", n_filled)
-                        fills_confirmed = [
-                            FillNotification(
-                                ticker=p["ticker"],
-                                fill_price=fills[p["order_id"]],
-                                qty=p.get("qty"),
-                                stop_price=p.get("stop_price", 0.0),
-                                target_price=p.get("target_price", 0.0),
-                            )
-                            for p in positions
-                            if p.get("order_id") in fills
-                        ]
-
-            # Place exit orders for newly filled entries (no order_id → fill confirmed)
-            # Crypto positions are excluded: Alpaca doesn't support OCO for crypto;
-            # their exits are handled entirely by the monitoring loop.
-            fresh_state = load_positions()
-            for pos in fresh_state.get("positions", []):
-                ticker = pos["ticker"]
-                is_crypto = (
-                    ticker in config.ASSETS
-                    and config.ASSETS[ticker].asset_class == "crypto"
-                )
-                if (not is_crypto
-                        and not pos.get("order_id")
-                        and not pos.get("target_order_id")
-                        and not pos.get("trail_order_id")
-                        and pos.get("target_price") and pos.get("stop_price")
-                        and pos.get("qty")):
-                    effective_stop = max(
-                        pos.get("stop_price", 0), pos.get("trailing_stop", 0),
-                    )
-                    t_oid, s_oid = await place_exit_orders(
-                        pos["ticker"], pos["qty"],
-                        pos["target_price"], effective_stop,
-                    )
-                    if t_oid or s_oid:
-                        pos["target_order_id"] = t_oid
-                        pos["trail_order_id"] = s_oid
-                        if t_oid:
-                            log_order(pos["ticker"], "sell", "limit",
-                                      pos["qty"], "exit_target", t_oid, "pending")
-                        if s_oid:
-                            log_order(pos["ticker"], "sell", "stop",
-                                      pos["qty"], "exit_stop", s_oid, "pending")
-                        logger.info(
-                            "Exit orders placed for %s: target=%s stop=%s",
-                            pos["ticker"], t_oid, s_oid,
-                        )
-                        orders_placed.append({
-                            "ticker": pos["ticker"],
-                            "target_order_id": t_oid,
-                            "stop_order_id": s_oid,
-                        })
-            if orders_placed:
-                await async_save_positions(fresh_state)
+            fills_confirmed = await self._confirm_pending_fills(positions)
+            orders_placed = await self._place_exit_orders_for_fills()
 
         return HousekeepingResult(
             fills_confirmed=fills_confirmed,
