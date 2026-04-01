@@ -33,8 +33,9 @@ except ImportError:
     _ALPACA_AVAILABLE = False
 
 # local
-import config
-from core.data import fetch_quotes
+import rally_ml.config as config
+from rally_ml.core.data import fetch_quotes
+
 from db.positions import (
     enqueue_signal,
     load_all_position_meta,

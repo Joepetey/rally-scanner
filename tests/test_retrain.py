@@ -48,14 +48,14 @@ def _mock_artifacts(ticker: str) -> dict:
 
 class TestRetrainAll:
 
-    @patch("pipeline.retrain.save_model")
-    @patch("pipeline.retrain.load_manifest", return_value={})
-    @patch("pipeline.retrain.fetch_vix_safe", return_value=None)
-    @patch("pipeline.retrain.fetch_daily_batch")
+    @patch("rally_ml.pipeline.retrain.save_model")
+    @patch("rally_ml.pipeline.retrain.load_manifest", return_value={})
+    @patch("rally_ml.pipeline.retrain.fetch_vix_safe", return_value=None)
+    @patch("rally_ml.pipeline.retrain.fetch_daily_batch")
     def test_happy_path_trains_all_tickers(
         self, mock_batch, mock_vix, mock_manifest, mock_save,
     ):
-        from pipeline.retrain import retrain_all
+        from rally_ml.pipeline.retrain import retrain_all
 
         df = _make_ohlcv(600)
         mock_batch.return_value = {"AAPL": df.copy(), "MSFT": df.copy()}
@@ -68,15 +68,15 @@ class TestRetrainAll:
         # Both should train successfully with 600 bars
         assert set(saved_tickers) == {"AAPL", "MSFT"}
 
-    @patch("pipeline.retrain.save_model")
-    @patch("pipeline.retrain.load_manifest", return_value={})
-    @patch("pipeline.retrain.fetch_vix_safe", return_value=None)
-    @patch("pipeline.retrain.fetch_daily_batch")
+    @patch("rally_ml.pipeline.retrain.save_model")
+    @patch("rally_ml.pipeline.retrain.load_manifest", return_value={})
+    @patch("rally_ml.pipeline.retrain.fetch_vix_safe", return_value=None)
+    @patch("rally_ml.pipeline.retrain.fetch_daily_batch")
     def test_insufficient_data_ticker_skipped(
         self, mock_batch, mock_vix, mock_manifest, mock_save,
     ):
         """Tickers with < 500 bars are skipped."""
-        from pipeline.retrain import retrain_all
+        from rally_ml.pipeline.retrain import retrain_all
 
         df_short = _make_ohlcv(n=100, seed=1)  # too short
         df_long = _make_ohlcv(n=600, seed=2)
@@ -88,15 +88,15 @@ class TestRetrainAll:
         assert "SHORT" not in saved_tickers
         assert "LONG" in saved_tickers
 
-    @patch("pipeline.retrain.save_model")
-    @patch("pipeline.retrain.load_manifest", return_value={})
-    @patch("pipeline.retrain.fetch_vix_safe", return_value=None)
-    @patch("pipeline.retrain.fetch_daily_batch")
+    @patch("rally_ml.pipeline.retrain.save_model")
+    @patch("rally_ml.pipeline.retrain.load_manifest", return_value={})
+    @patch("rally_ml.pipeline.retrain.fetch_vix_safe", return_value=None)
+    @patch("rally_ml.pipeline.retrain.fetch_daily_batch")
     def test_training_error_does_not_crash(
         self, mock_batch, mock_vix, mock_manifest, mock_save,
     ):
         """If one ticker has bad data, others still train."""
-        from pipeline.retrain import retrain_all
+        from rally_ml.pipeline.retrain import retrain_all
 
         df_good = _make_ohlcv(600, seed=2)
         # BAD ticker: too short to train (< 500 bars) but long enough to not
@@ -122,13 +122,13 @@ class TestIsFresh:
     def test_fresh_model_detected(self):
         from datetime import datetime
 
-        from pipeline.retrain import _is_fresh
+        from rally_ml.pipeline.retrain import _is_fresh
 
         entry = {"saved_at": datetime.now().isoformat()}
         assert _is_fresh(entry, max_age_days=7) is True
 
     def test_stale_model_detected(self):
-        from pipeline.retrain import _is_fresh
+        from rally_ml.pipeline.retrain import _is_fresh
 
         entry = {"saved_at": "2020-01-01T00:00:00"}
         assert _is_fresh(entry, max_age_days=7) is False

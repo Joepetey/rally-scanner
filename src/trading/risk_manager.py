@@ -10,7 +10,8 @@ Three tiers of escalating intervention based on drawdown, regime state, and VIX:
 import logging
 from dataclasses import dataclass
 
-from config import PARAMS
+from rally_ml.config import PARAMS
+
 from db.portfolio import get_high_water_mark, set_high_water_mark
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def check_vix_spike() -> dict:
     try:
         from datetime import datetime, timedelta
 
-        from core.data import fetch_vix
+        from rally_ml.core.data import fetch_vix
 
         start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
         vix = fetch_vix(start=start)

@@ -1,8 +1,7 @@
 """Tests for feature engineering pipeline."""
 
 import numpy as np
-
-from core.features import (
+from rally_ml.core.features import (
     FEATURE_COLS,
     build_features,
     compute_compression,

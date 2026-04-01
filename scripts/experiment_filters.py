@@ -10,14 +10,13 @@ import pickle
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from backtest.common import generate_signals_fast, simulate_portfolio, simulate_trades_fast
-from config import CONFIGS, CONFIGS_BY_NAME, TradingConfig
+from rally_ml.backtest.common import generate_signals_fast, simulate_portfolio, simulate_trades_fast
+from rally_ml.config import CONFIGS, CONFIGS_BY_NAME, TradingConfig
 
 CACHE = ROOT / "backtest_cache" / "predictions.pkl"
 

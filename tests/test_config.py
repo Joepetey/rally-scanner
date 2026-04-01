@@ -1,6 +1,6 @@
 """Tests for config dataclass defaults and invariants."""
 
-from config import ASSETS, PARAMS, PIPELINE, AssetConfig
+from rally_ml.config import ASSETS, PARAMS, PIPELINE, AssetConfig
 
 
 def test_asset_config_fields():

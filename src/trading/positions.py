@@ -9,7 +9,8 @@ import asyncio
 import logging
 from datetime import datetime
 
-from config import PARAMS, TICKER_TO_GROUP
+from rally_ml.config import PARAMS, TICKER_TO_GROUP
+
 from db.positions import (
     clear_expired_queue,
     delete_position_meta,

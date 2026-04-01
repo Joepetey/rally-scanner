@@ -9,7 +9,7 @@ import logging
 import os
 from urllib.request import Request, urlopen
 
-from config import PARAMS as _P
+from rally_ml.config import PARAMS as _P
 
 logger = logging.getLogger(__name__)
 

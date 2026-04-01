@@ -19,20 +19,20 @@ from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
-
-from config import CONFIGS_BY_NAME, PARAMS, AssetConfig
+from rally_ml.config import CONFIGS_BY_NAME, PARAMS, AssetConfig
 
 logger = logging.getLogger(__name__)
-from core.data import (
+from rally_ml.core.data import (
     fetch_daily,
     fetch_daily_batch,
     fetch_quotes,
     fetch_vix_safe,
     merge_vix,
 )
-from core.features import build_features
-from core.hmm import predict_hmm_probs
-from core.persistence import load_manifest, load_model
+from rally_ml.core.features import build_features
+from rally_ml.core.hmm import predict_hmm_probs
+from rally_ml.core.persistence import load_manifest, load_model
+
 from trading.positions import (
     get_merged_positions_sync,
     print_positions,

@@ -7,11 +7,12 @@ on significant transitions (e.g. compressed → expanding).
 import logging
 from datetime import datetime, timedelta
 
-from config import PARAMS
-from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
-from core.features import build_features
-from core.hmm import predict_hmm_probs
-from core.persistence import load_manifest, load_model
+from rally_ml.config import PARAMS
+from rally_ml.core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
+from rally_ml.core.features import build_features
+from rally_ml.core.hmm import predict_hmm_probs
+from rally_ml.core.persistence import load_manifest, load_model
+
 from db.models import load_regime_states as _db_load_regime_states
 from db.models import save_regime_states as _db_save_regime_states
 

@@ -30,8 +30,9 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import config
-from config import PARAMS
+import rally_ml.config as config
+from rally_ml.config import PARAMS
+
 from db import close_pool, init_pool, init_schema
 from db.positions import (
     delete_position_meta,

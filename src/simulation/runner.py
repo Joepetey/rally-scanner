@@ -26,8 +26,8 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from pydantic import BaseModel
+from rally_ml.config import PARAMS
 
-from config import PARAMS
 from db.events import clear_price_alerts
 from db.positions import load_position_meta, save_position_meta
 from integrations.alpaca.executor import (

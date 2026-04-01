@@ -12,7 +12,8 @@ except ImportError:
     pass
 
 # local
-from config import PARAMS
+from rally_ml.config import PARAMS
+
 from integrations.alpaca.broker import _data_client, _trading_client
 from integrations.alpaca.executor import OrderResult
 

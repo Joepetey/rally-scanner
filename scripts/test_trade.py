@@ -26,7 +26,7 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from db import close_pool, init_pool, init_schema
-from db.positions import delete_position_meta, load_positions, save_position_meta
+from db.positions import delete_position_meta, load_positions
 from integrations.alpaca.executor import (
     execute_entries,
     execute_exit,

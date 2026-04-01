@@ -2,16 +2,16 @@
 
 import numpy as np
 import pandas as pd
-
-from config import PARAMS
-from core.features import (
+from rally_ml.config import PARAMS
+from rally_ml.core.features import (
     FEATURE_COLS,
     _rsi,
     build_features,
     compute_compression,
     compute_range,
 )
-from core.train import fit_model
+from rally_ml.core.train import fit_model
+
 from trading.signals import compute_position_size, generate_signals
 
 # Warmup: percentile_window (252) is the bottleneck; use 253 as safe cutoff
@@ -108,8 +108,8 @@ def _prepare_training_df(ohlcv_with_vix: pd.DataFrame) -> pd.DataFrame:
 class TestModelTraining:
 
     def test_trained_model_produces_probabilities_in_unit_interval(self, ohlcv_with_vix):
-        from core.features import ALL_FEATURE_COLS
-        from core.hmm import predict_hmm_probs
+        from rally_ml.core.features import ALL_FEATURE_COLS
+        from rally_ml.core.hmm import predict_hmm_probs
 
         df = _prepare_training_df(ohlcv_with_vix)
         artifacts = fit_model(df, ALL_FEATURE_COLS, target_col="RALLY_ST")
@@ -138,7 +138,7 @@ class TestModelTraining:
         assert np.all(cal_probs <= 1.0)
 
     def test_model_artifacts_contain_required_keys(self, ohlcv_with_vix):
-        from core.features import ALL_FEATURE_COLS
+        from rally_ml.core.features import ALL_FEATURE_COLS
 
         df = _prepare_training_df(ohlcv_with_vix)
         artifacts = fit_model(df, ALL_FEATURE_COLS, target_col="RALLY_ST")
@@ -228,7 +228,7 @@ class TestPipelineIntegration:
         }, index=dates)
 
         # Minimal artifacts dict — scan_single checks len(df) before using them
-        from config import AssetConfig
+        from rally_ml.config import AssetConfig
 
         artifacts = {
             "asset_config": AssetConfig(
@@ -245,8 +245,9 @@ class TestPipelineIntegration:
 
     def test_pipeline_output_schema_is_stable(self, ohlcv_with_vix):
         """Train a model, run scan_single, verify output keys."""
-        from config import AssetConfig
-        from core.features import ALL_FEATURE_COLS
+        from rally_ml.config import AssetConfig
+        from rally_ml.core.features import ALL_FEATURE_COLS
+
         from pipeline.scanner import scan_single
 
         df = _prepare_training_df(ohlcv_with_vix)

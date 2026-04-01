@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from config import ASSETS, PARAMS
+from rally_ml.config import ASSETS, PARAMS
 
 logger = logging.getLogger(__name__)
 

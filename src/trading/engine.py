@@ -12,9 +12,9 @@ import zoneinfo
 from datetime import datetime
 from typing import Literal
 
+import rally_ml.config as config
 from pydantic import BaseModel
 
-import config
 from db.events import log_order, log_price_alert
 from db.positions import load_positions, save_position_meta
 from integrations.alpaca.executor import (

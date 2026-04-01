@@ -3,8 +3,8 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from rally_ml.config import PARAMS
 
-from config import PARAMS
 from db.positions import load_positions, save_positions, tighten_trailing_stop
 from trading.positions import (
     add_signal_positions,

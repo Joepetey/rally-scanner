@@ -9,10 +9,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
-from config import PARAMS
-from core.hmm import N_STATES, fit_hmm, predict_hmm_probs
-from core.train import fit_model
+from rally_ml.config import PARAMS
+from rally_ml.core.hmm import N_STATES, fit_hmm, predict_hmm_probs
+from rally_ml.core.train import fit_model
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,7 +59,7 @@ def _make_training_df(n: int = 600, seed: int = 42) -> pd.DataFrame:
 
 def _make_full_training_df(n: int = 600, seed: int = 42) -> pd.DataFrame:
     """Build features + synthetic labels for fit_model testing."""
-    from core.features import build_features
+    from rally_ml.core.features import build_features
 
     np.random.seed(seed)
     dates = pd.bdate_range("2020-01-02", periods=n)
@@ -183,7 +182,7 @@ class TestPredictHmmProbs:
 class TestFitModel:
 
     def test_artifacts_contain_all_required_keys(self):
-        from core.features import ALL_FEATURE_COLS
+        from rally_ml.core.features import ALL_FEATURE_COLS
 
         df = _make_full_training_df()
         artifacts = fit_model(df, ALL_FEATURE_COLS, target_col="RALLY_ST")
@@ -198,7 +197,7 @@ class TestFitModel:
 
     def test_artifact_keys_match_scanner_expectations(self):
         """Scanner accesses specific keys — verify they exist."""
-        from core.features import ALL_FEATURE_COLS
+        from rally_ml.core.features import ALL_FEATURE_COLS
 
         df = _make_full_training_df()
         artifacts = fit_model(df, ALL_FEATURE_COLS, target_col="RALLY_ST")
@@ -257,8 +256,7 @@ class TestModelRoundTrip:
     def test_save_load_produces_same_predictions(self):
         """Train, save, load → predictions must match."""
         import joblib
-
-        from core.features import ALL_FEATURE_COLS
+        from rally_ml.core.features import ALL_FEATURE_COLS
 
         df = _make_full_training_df()
         artifacts = fit_model(df, ALL_FEATURE_COLS, target_col="RALLY_ST")

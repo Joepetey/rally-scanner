@@ -14,10 +14,11 @@ from datetime import date as _date
 from datetime import datetime
 
 import sentry_sdk
+from rally_ml.config import ASSETS, PARAMS
+from rally_ml.core.data import fetch_quotes
+from rally_ml.core.persistence import load_manifest
+from rally_ml.pipeline.retrain import retrain_all
 
-from config import ASSETS, PARAMS
-from core.data import fetch_quotes
-from core.persistence import load_manifest
 from db.events import finish_scheduler_event, log_order, log_scheduler_event
 from db.portfolio import record_closed_trades, update_daily_snapshot
 from db.positions import (
@@ -65,7 +66,6 @@ from integrations.alpaca.executor import (
     is_enabled as alpaca_enabled,
 )
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
-from pipeline.retrain import retrain_all
 from pipeline.scanner import scan_all, scan_watchlist
 from trading.engine import (
     AlertEngine,
@@ -1060,7 +1060,7 @@ class TradingScheduler:
 
     async def _maybe_run_weekend_crypto_scan(self, now: datetime, today: str) -> None:
         """Run a crypto-only scan every 6 hours on weekends."""
-        from config import ASSETS
+        from rally_ml.config import ASSETS
 
         # Fire at hours 0, 6, 12, 18 ET within a 5-minute window
         if now.hour % 6 != 0 or now.minute >= 5:
@@ -1246,7 +1246,7 @@ class TradingScheduler:
 
     def _has_open_crypto_positions(self) -> bool:
         """True if any open position is a crypto asset."""
-        from config import ASSETS
+        from rally_ml.config import ASSETS
         positions = load_positions().get("positions", [])
         return any(
             ASSETS.get(p["ticker"]) and ASSETS[p["ticker"]].asset_class == "crypto"

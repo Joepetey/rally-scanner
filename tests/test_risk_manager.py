@@ -1,6 +1,7 @@
 """Tests for proactive risk management."""
 
-from config import PARAMS
+from rally_ml.config import PARAMS
+
 from trading.risk_manager import evaluate
 
 

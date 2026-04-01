@@ -1,4 +1,4 @@
-"""Shared model-fitting pipeline: HMM → logistic regression → isotonic calibration.
+"""Shared model-fitting pipeline: HMM -> logistic regression -> isotonic calibration.
 
 Used by both pipeline/retrain.py (train the latest fold) and
 backtest/common.py (walk-forward folds). Any change to the model
@@ -13,7 +13,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from core.hmm import fit_hmm, predict_hmm_probs
+from .hmm import fit_hmm, predict_hmm_probs
 
 logger = logging.getLogger(__name__)
 
