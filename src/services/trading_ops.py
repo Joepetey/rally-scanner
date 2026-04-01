@@ -456,7 +456,7 @@ def run_scan(config: str = "conservative") -> dict:
     """Run the market scanner and return results."""
     try:
         logger.info("Running market scan with config: %s", config)
-        results = scan_all(tickers=None, show_positions=False, config_name=config)
+        results = scan_all(tickers=None, config_name=config)
 
         if not results:
             return {

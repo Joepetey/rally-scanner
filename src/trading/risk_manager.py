@@ -17,24 +17,31 @@ from db.portfolio import get_high_water_mark, set_high_water_mark
 logger = logging.getLogger(__name__)
 
 
+def compute_drawdown_pure(equity: float, hwm: float) -> tuple[float, float]:
+    """Pure math: compute drawdown from equity and high-water mark.
+
+    Returns (drawdown_pct, new_hwm) where drawdown_pct is a positive fraction.
+    """
+    if equity <= 0:
+        return 0.0, hwm
+    if hwm <= 0:
+        return 0.0, equity
+    if equity >= hwm:
+        return 0.0, equity
+    return (hwm - equity) / hwm, hwm
+
+
 def compute_drawdown(equity: float) -> float:
     """Compute current drawdown from equity high-water mark.
 
     Returns drawdown as a positive fraction (e.g. 0.10 = 10% drawdown).
     Returns 0.0 if equity is at/above the high-water mark.
     """
-    if equity <= 0:
-        return 0.0
-
     hwm = get_high_water_mark()
-    if hwm <= 0:
-        hwm = equity
-
-    if equity >= hwm:
-        set_high_water_mark(equity)
-        return 0.0
-
-    return (hwm - equity) / hwm
+    dd, new_hwm = compute_drawdown_pure(equity, hwm)
+    if new_hwm != hwm:
+        set_high_water_mark(new_hwm)
+    return dd
 
 
 def is_circuit_breaker_active(equity: float) -> bool:
@@ -96,6 +103,7 @@ def evaluate(
     positions: list[dict],
     regime_states: dict | None = None,
     drawdown: float | None = None,
+    vix_info: dict | None = None,
 ) -> list[RiskAction]:
     """Evaluate portfolio risk and return list of actions to take.
 
@@ -104,6 +112,7 @@ def evaluate(
         positions: List of open position dicts from positions.json
         regime_states: {ticker: {p_expanding, ...}} from regime monitor
         drawdown: Current drawdown fraction (0.0-1.0). If None, computed.
+        vix_info: {is_spike, change_pct, vix_level}. If None, fetched live.
 
     Returns:
         List of RiskAction to execute
@@ -166,7 +175,8 @@ def evaluate(
                         break
 
     # --- VIX spike: tighten all by 30% ---
-    vix_info = check_vix_spike()
+    if vix_info is None:
+        vix_info = check_vix_spike()
     if vix_info["is_spike"]:
         for pos in positions:
             ticker = pos["ticker"]
@@ -207,125 +217,131 @@ def evaluate(
     return deduped
 
 
+async def _default_close_fn(ticker: str, pos: dict) -> float:
+    """Default close implementation using Alpaca + DB."""
+    from integrations.alpaca.executor import execute_exit
+    from integrations.alpaca.executor import is_enabled as alpaca_enabled
+
+    from .positions import async_close_position
+
+    price = pos.get("current_price", pos.get("entry_price", 0))
+    if alpaca_enabled():
+        trail_oid = pos.get("trail_order_id")
+        order_result = await execute_exit(ticker, trail_order_id=trail_oid)
+        if order_result.fill_price:
+            price = order_result.fill_price
+
+    closed = await async_close_position(ticker, price, "risk_reduction")
+    return closed.get("realized_pnl_pct", 0) if closed else 0
+
+
+async def _default_tighten_fn(ticker: str, new_trail: float) -> bool:
+    """Default tighten implementation using DB."""
+    from db.positions import tighten_trailing_stop
+
+    return tighten_trailing_stop(ticker, new_trail)
+
+
 async def execute_actions(
     actions: list[RiskAction],
     positions: list[dict],
+    close_fn=None,
+    tighten_fn=None,
 ) -> list[dict]:
     """Execute risk actions (close positions, tighten stops).
 
+    Args:
+        close_fn: async (ticker, pos) -> pnl_pct. Defaults to Alpaca + DB.
+        tighten_fn: async (ticker, new_trail) -> bool. Defaults to DB.
+
     Returns list of result dicts for alerting.
     """
-    results: list[dict] = []
+    if close_fn is None:
+        close_fn = _default_close_fn
+    if tighten_fn is None:
+        tighten_fn = _default_tighten_fn
 
+    results: list[dict] = []
     for action in actions:
         if action.action_type == "close_position":
-            result = await _execute_close(action, positions)
+            result = await _execute_close(action, positions, close_fn)
             results.append(result)
         elif action.action_type == "tighten_stop":
-            result = await _execute_tighten(action, positions)
+            result = await _execute_tighten(action, positions, tighten_fn)
             results.append(result)
 
     return results
 
 
-async def _execute_close(action: RiskAction, positions: list[dict]) -> dict:
+async def _execute_close(
+    action: RiskAction, positions: list[dict], close_fn,
+) -> dict:
     """Close a position for risk reduction."""
     ticker = action.ticker
     pos = next((p for p in positions if p["ticker"] == ticker), None)
     if not pos:
         return {
-            "ticker": ticker,
-            "action": "close",
-            "success": False,
-            "error": "Position not found",
-            "reason": action.reason,
+            "ticker": ticker, "action": "close", "success": False,
+            "error": "Position not found", "reason": action.reason,
         }
 
-    price = pos.get("current_price", pos.get("entry_price", 0))
-
     try:
-        from integrations.alpaca.executor import is_enabled as alpaca_enabled
-
-        if alpaca_enabled():
-            from integrations.alpaca.executor import execute_exit
-            trail_oid = pos.get("trail_order_id")
-            order_result = await execute_exit(ticker, trail_order_id=trail_oid)
-            if order_result.fill_price:
-                price = order_result.fill_price
-
-        from .positions import async_close_position
-        closed = await async_close_position(ticker, price, "risk_reduction")
-
+        pnl_pct = await close_fn(ticker, pos)
+        price = pos.get("current_price", pos.get("entry_price", 0))
         return {
-            "ticker": ticker,
-            "action": "close",
-            "success": True,
-            "price": price,
-            "pnl_pct": closed.get("realized_pnl_pct", 0) if closed else 0,
-            "reason": action.reason,
+            "ticker": ticker, "action": "close", "success": True,
+            "price": price, "pnl_pct": pnl_pct, "reason": action.reason,
         }
     except Exception as e:
         logger.exception("Risk close failed for %s", ticker)
         return {
-            "ticker": ticker,
-            "action": "close",
-            "success": False,
-            "error": str(e),
-            "reason": action.reason,
+            "ticker": ticker, "action": "close", "success": False,
+            "error": str(e), "reason": action.reason,
         }
 
 
-async def _execute_tighten(action: RiskAction, positions: list[dict]) -> dict:
+async def _execute_tighten(
+    action: RiskAction, positions: list[dict], tighten_fn,
+) -> dict:
     """Tighten a position's trailing stop."""
     ticker = action.ticker
     pos = next((p for p in positions if p["ticker"] == ticker), None)
     if not pos:
         return {
-            "ticker": ticker,
-            "action": "tighten",
-            "success": False,
-            "error": "Position not found",
-            "reason": action.reason,
+            "ticker": ticker, "action": "tighten", "success": False,
+            "error": "Position not found", "reason": action.reason,
         }
 
     atr = pos.get("atr", 0)
-    highest = pos.get("highest_close", pos.get("current_price", pos.get("entry_price", 0)))
+    highest = pos.get(
+        "highest_close", pos.get("current_price", pos.get("entry_price", 0)),
+    )
     new_trail = round(highest - action.new_trail_atr_mult * atr, 2) if atr else 0
     old_trail = pos.get("trailing_stop", 0)
 
     # Only tighten (never loosen)
     if new_trail <= old_trail:
         return {
-            "ticker": ticker,
-            "action": "tighten",
-            "success": True,
-            "skipped": True,
-            "reason": action.reason,
-            "old_stop": old_trail,
-            "new_stop": new_trail,
+            "ticker": ticker, "action": "tighten", "success": True,
+            "skipped": True, "reason": action.reason,
+            "old_stop": old_trail, "new_stop": new_trail,
         }
 
     try:
-        from db.positions import tighten_trailing_stop
-        updated = tighten_trailing_stop(ticker, new_trail)
+        updated = await tighten_fn(ticker, new_trail)
         if not updated:
             return {
-                "ticker": ticker,
-                "action": "tighten",
-                "success": False,
-                "error": "Position not found in state",
-                "reason": action.reason,
+                "ticker": ticker, "action": "tighten", "success": False,
+                "error": "Position not found in state", "reason": action.reason,
             }
-
-        return {"ticker": ticker, "action": "tighten", "success": True,
-                "old_stop": old_trail, "new_stop": new_trail,
-                "reason": action.reason}
+        return {
+            "ticker": ticker, "action": "tighten", "success": True,
+            "old_stop": old_trail, "new_stop": new_trail,
+            "reason": action.reason,
+        }
     except Exception as e:
         logger.exception("Risk tighten failed for %s", ticker)
         return {
-            "ticker": ticker,
-            "action": "tighten",
-            "success": False,
-            "error": str(e),
-            "reason": action.reason,
+            "ticker": ticker, "action": "tighten", "success": False,
+            "error": str(e), "reason": action.reason,
         }

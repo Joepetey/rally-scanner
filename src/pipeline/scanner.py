@@ -236,7 +236,7 @@ def _compute_breadth(ok_results: list[dict]) -> None:
 
 
 def scan_all(
-    tickers: list[str] | None = None, show_positions: bool = False,
+    tickers: list[str] | None = None,
     config_name: str = "conservative",
 ) -> list[dict]:
     # Apply config
@@ -343,12 +343,6 @@ def scan_all(
         print(f"\n  ERRORS ({len(errors)}):")
         for r in errors:
             print(f"    {r['ticker']}: {r['status']}")
-
-    # --- POSITIONS ---
-    if show_positions:
-        positions = get_merged_positions_sync()
-        positions = update_existing_positions(positions, results)
-        print_positions(positions)
 
     # Summary
     ok_count = sum(1 for r in results if r.get("status") == "ok")
@@ -500,7 +494,11 @@ def main() -> None:
                         choices=["conservative", "baseline", "aggressive", "concentrated"],
                         help="Trading config: conservative, baseline, aggressive, concentrated")
     args = parser.parse_args()
-    scan_all(tickers=args.tickers, show_positions=args.positions, config_name=args.config)
+    results = scan_all(tickers=args.tickers, config_name=args.config)
+    if args.positions:
+        positions = get_merged_positions_sync()
+        positions = update_existing_positions(positions, results)
+        print_positions(positions)
 
 
 if __name__ == "__main__":

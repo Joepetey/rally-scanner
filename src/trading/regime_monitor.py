@@ -39,37 +39,16 @@ def _save_regime_states(states: dict) -> None:
     _db_save_regime_states(states)
 
 
-def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
-    """Check HMM regime states for all trained assets, detect transitions.
+def analyze_regime_states(
+    check_tickers: list[str],
+    ohlcv_cache: dict,
+    vix_data,
+    prev_states: dict,
+) -> tuple[dict, list[dict]]:
+    """Pure analysis: compute regime states from pre-fetched data.
 
-    Returns list of transition events:
-        {ticker, prev_regime, new_regime, p_compressed, p_normal, p_expanding}
+    Returns (new_states, transitions). No data fetching or DB calls.
     """
-    manifest = load_manifest()
-    if not manifest:
-        return []
-
-    if tickers:
-        check_tickers = [t for t in tickers if t in manifest]
-    else:
-        check_tickers = sorted(manifest.keys())
-
-    if not check_tickers:
-        return []
-
-    # Fetch data (need ~300 bars for features + HMM)
-    lookback_days = 500
-    start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-
-    vix_data = fetch_vix_safe(start=start, verbose=False)
-
-    try:
-        ohlcv_cache = fetch_daily_batch(check_tickers, start=start)
-    except Exception:
-        logger.warning("Regime monitor: batch OHLCV fetch failed", exc_info=True)
-        ohlcv_cache = {}
-
-    prev_states = _load_regime_states()
     new_states = {}
     transitions = []
 
@@ -108,7 +87,6 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
                 "timestamp": datetime.now().isoformat(),
             }
 
-            # Compare to previous state
             prev = prev_states.get(ticker)
             if prev:
                 prev_regime = prev["dominant_regime"]
@@ -127,14 +105,52 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
         except Exception as e:
             logger.warning("Regime check failed for %s: %s", ticker, e)
 
-    # Merge new states into previous (preserve tickers we didn't check)
+    return new_states, transitions
+
+
+def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
+    """Check HMM regime states for all trained assets, detect transitions.
+
+    Returns list of transition events:
+        {ticker, prev_regime, new_regime, p_compressed, p_normal, p_expanding}
+    """
+    manifest = load_manifest()
+    if not manifest:
+        return []
+
+    if tickers:
+        check_tickers = [t for t in tickers if t in manifest]
+    else:
+        check_tickers = sorted(manifest.keys())
+
+    if not check_tickers:
+        return []
+
+    lookback_days = 500
+    start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    vix_data = fetch_vix_safe(start=start, verbose=False)
+
+    try:
+        ohlcv_cache = fetch_daily_batch(check_tickers, start=start)
+    except Exception:
+        logger.warning("Regime monitor: batch OHLCV fetch failed", exc_info=True)
+        ohlcv_cache = {}
+
+    prev_states = _load_regime_states()
+    new_states, transitions = analyze_regime_states(
+        check_tickers, ohlcv_cache, vix_data, prev_states,
+    )
+
     prev_states.update(new_states)
     _save_regime_states(prev_states)
 
     if transitions:
         logger.info(
             "Regime shifts detected: %s",
-            ", ".join(f"{t['ticker']} {t['prev_regime']}→{t['new_regime']}" for t in transitions),
+            ", ".join(
+                f"{t['ticker']} {t['prev_regime']}→{t['new_regime']}"
+                for t in transitions
+            ),
         )
 
     return transitions
