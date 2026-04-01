@@ -73,6 +73,15 @@ class OrderResult(BaseModel):
     actual_size: float | None = None
 
 
+class EntryPlan(BaseModel):
+    """Pre-computed entry order — everything needed to submit without re-checking."""
+    ticker: str
+    qty: float | int
+    size: float
+    price: float
+    is_crypto: bool
+
+
 def is_enabled() -> bool:
     return os.environ.get("ALPACA_AUTO_EXECUTE") == "1"
 
@@ -172,37 +181,29 @@ async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
 
 
 
-def _check_group_constraints(
-    ticker: str, size: float, sig: dict,
-) -> OrderResult | None:
-    """Check group position count and exposure limits. Returns skip result or None."""
+def check_group_constraints(
+    ticker: str,
+    size: float,
+    group_count: int,
+    group_exposure: float,
+    max_positions: int,
+    max_exposure: float,
+) -> str | None:
+    """Pure check: group position count and exposure limits.
+
+    Returns a skip reason string, or None if within limits.
+    """
     group = config.TICKER_TO_GROUP.get(ticker)
     if not group:
         return None
 
-    g_count, g_exp = get_group_exposure(group)
-    if g_count >= config.PARAMS.max_group_positions:
-        logger.warning(
-            "Skipping %s: group '%s' at %d/%d positions",
-            ticker, group, g_count, config.PARAMS.max_group_positions,
+    if group_count >= max_positions:
+        return (
+            f"Group '{group}' at max positions ({max_positions})"
         )
-        log_skipped_signal(sig, f"group_cap:{group}")
-        return OrderResult(
-            ticker=ticker, side="buy", qty=0, success=False, skipped=True,
-            error=f"Group '{group}' at max positions"
-                  f" ({config.PARAMS.max_group_positions})",
-        )
-    if g_exp + size > config.PARAMS.max_group_exposure:
-        logger.warning(
-            "Skipping %s: group '%s' exposure %.1f%% + %.1f%% > %.0f%%",
-            ticker, group, g_exp * 100, size * 100,
-            config.PARAMS.max_group_exposure * 100,
-        )
-        log_skipped_signal(sig, f"group_exposure:{group}")
-        return OrderResult(
-            ticker=ticker, side="buy", qty=0, success=False, skipped=True,
-            error=f"Group '{group}' exposure cap"
-                  f" ({config.PARAMS.max_group_exposure:.0%})",
+    if group_exposure + size > max_exposure:
+        return (
+            f"Group '{group}' exposure cap ({max_exposure:.0%})"
         )
     return None
 
@@ -299,6 +300,28 @@ def _compute_entry_qty(
     return qty if qty >= 1 else None
 
 
+def compute_available_size(
+    sig_size: float,
+    current_exposure: float,
+    max_exposure: float,
+    min_size: float,
+    partial_enabled: bool,
+) -> float | None:
+    """Pure math: resolve effective entry size given capital constraints.
+
+    Returns the usable size, or None if no capital is available
+    (caller decides whether to rotate or queue).
+    """
+    if current_exposure + sig_size <= max_exposure:
+        return sig_size
+
+    available = max_exposure - current_exposure
+    if partial_enabled and available >= min_size:
+        return available
+
+    return None
+
+
 async def _compute_entry_size(
     sig: dict,
     current_exposure: float,
@@ -313,28 +336,27 @@ async def _compute_entry_size(
     Returns (size, current_exposure, open_positions, open_tickers).
     Returns size=0.0 if the position must be skipped (caller should continue).
     """
-    size = sig["size"]
-    available = max_exposure - current_exposure
-
-    if current_exposure + size <= max_exposure:
+    size = compute_available_size(
+        sig["size"], current_exposure, max_exposure, min_size,
+        config.PARAMS.partial_sizing_enabled,
+    )
+    if size is not None:
+        if size < sig["size"]:
+            logger.info(
+                "%s: partial size %.1f%% → %.1f%% (capital limited)",
+                sig["ticker"], sig["size"] * 100, size * 100,
+            )
         return size, current_exposure, open_positions, open_tickers
 
-    if config.PARAMS.partial_sizing_enabled and available >= min_size:
-        logger.info(
-            "%s: partial size %.1f%% → %.1f%% (capital limited)",
-            sig["ticker"], size * 100, available * 100,
-        )
-        return available, current_exposure, open_positions, open_tickers
-
     if config.PARAMS.rotation_enabled and open_positions:
-        size, current_exposure, open_positions, open_tickers, rotated = (
+        rot_size, current_exposure, open_positions, open_tickers, rotated = (
             await _attempt_rotation(
                 sig, open_positions, open_tickers, current_exposure, max_exposure, min_size,
                 results,
             )
         )
         if rotated:
-            return size, current_exposure, open_positions, open_tickers
+            return rot_size, current_exposure, open_positions, open_tickers
 
     ticker = sig["ticker"]
     enqueue_signal(sig, "capital")
@@ -347,29 +369,36 @@ async def _compute_entry_size(
     return 0.0, current_exposure, open_positions, open_tickers
 
 
-async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
-    results: list[OrderResult] = []
+async def prepare_entry_plan(
+    signals: list[dict],
+    equity: float,
+) -> tuple[list[EntryPlan], list[OrderResult]]:
+    """Compute what to order without touching the broker.
 
-    # Circuit breaker check
+    Returns (plans, skipped_results). Handles circuit breaker, sizing,
+    group constraints, and qty computation. Rotation may trigger broker
+    calls via ``_compute_entry_size`` but no new orders are placed.
+    """
+    skipped: list[OrderResult] = []
+
     if is_circuit_breaker_active(equity):
         for sig in signals:
-            results.append(OrderResult(
+            skipped.append(OrderResult(
                 ticker=sig["ticker"], side="buy", qty=0, success=False,
                 error="Circuit breaker active — drawdown exceeds threshold",
             ))
-        return results
+        return [], skipped
 
     current_exposure = get_total_exposure()
     max_exposure = config.PARAMS.max_portfolio_exposure
     min_size = config.PARAMS.min_position_size
     open_positions = load_all_position_meta()
     open_tickers = {p["ticker"] for p in load_positions().get("positions", [])}
-    client = _trading_client()
 
+    plans: list[EntryPlan] = []
     for sig in signals:
         ticker = sig["ticker"]
 
-        # Skip tickers we already hold
         if ticker in open_tickers:
             logger.info("Skipping %s: already in open positions", ticker)
             continue
@@ -378,20 +407,32 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
         price = sig.get("entry_price") or sig["close"]
 
         size, current_exposure, open_positions, open_tickers = await _compute_entry_size(
-            sig, current_exposure, max_exposure, min_size, open_positions, open_tickers, results,
+            sig, current_exposure, max_exposure, min_size, open_positions, open_tickers, skipped,
         )
         if size == 0.0:
             continue
 
-        # Group concentration check
-        group_skip = _check_group_constraints(ticker, size, sig)
-        if group_skip:
-            results.append(group_skip)
+        group = config.TICKER_TO_GROUP.get(ticker)
+        if group:
+            g_count, g_exp = get_group_exposure(group)
+        else:
+            g_count, g_exp = 0, 0.0
+        group_reason = check_group_constraints(
+            ticker, size, g_count, g_exp,
+            config.PARAMS.max_group_positions,
+            config.PARAMS.max_group_exposure,
+        )
+        if group_reason:
+            log_skipped_signal(sig, f"group:{group}")
+            skipped.append(OrderResult(
+                ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+                error=group_reason,
+            ))
             continue
 
         qty = _compute_entry_qty(equity, size, price, is_crypto)
         if qty is None:
-            results.append(OrderResult(
+            skipped.append(OrderResult(
                 ticker=ticker, side="buy", qty=0, success=False,
                 error=(
                     "Insufficient equity for fractional crypto order"
@@ -400,46 +441,54 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
             ))
             continue
 
-        try:
-            # Compute limit price from bid/ask midpoint + buffer to avoid
-            # market-order slippage (MIC-107)
-            limit_price = await asyncio.to_thread(_compute_limit_price, price, ticker)
+        plans.append(EntryPlan(
+            ticker=ticker, qty=qty, size=size, price=price, is_crypto=is_crypto,
+        ))
+        current_exposure += size
 
+    return plans, skipped
+
+
+async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
+    plans, results = await prepare_entry_plan(signals, equity)
+    if not plans:
+        return results
+
+    client = _trading_client()
+    for plan in plans:
+        try:
+            limit_price = await asyncio.to_thread(
+                _compute_limit_price, plan.price, plan.ticker,
+            )
             order = await asyncio.to_thread(
                 client.submit_order,
                 LimitOrderRequest(
-                    symbol=_alpaca_symbol(ticker),
-                    qty=qty,
+                    symbol=_alpaca_symbol(plan.ticker),
+                    qty=plan.qty,
                     side=OrderSide.BUY,
                     limit_price=limit_price,
-                    time_in_force=TimeInForce.GTC if is_crypto else TimeInForce.DAY,
+                    time_in_force=TimeInForce.GTC if plan.is_crypto else TimeInForce.DAY,
                 ),
             )
             fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
-
-            # Remove from queue if it was waiting
-            remove_from_queue(ticker)
-
-            # Trailing stop is deferred until fill is confirmed
-            # (handled by _check_price_alerts in discord_bot.py)
+            remove_from_queue(plan.ticker)
             results.append(OrderResult(
-                ticker=ticker, side="buy", qty=qty, success=True,
+                ticker=plan.ticker, side="buy", qty=plan.qty, success=True,
                 order_id=str(order.id),
                 fill_price=fill_price,
-                actual_size=size,
+                actual_size=plan.size,
             ))
-            current_exposure += size
         except Exception as e:
             err_str = str(e)
             if _ERR_NOT_TRADABLE in err_str:
-                logger.info("Skipping %s: not tradable on Alpaca", ticker)
+                logger.info("Skipping %s: not tradable on Alpaca", plan.ticker)
                 results.append(OrderResult(
-                    ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+                    ticker=plan.ticker, side="buy", qty=0, success=False, skipped=True,
                     error=err_str,
                 ))
             else:
                 results.append(OrderResult(
-                    ticker=ticker, side="buy", qty=qty, success=False,
+                    ticker=plan.ticker, side="buy", qty=plan.qty, success=False,
                     error=err_str,
                 ))
 
