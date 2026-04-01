@@ -38,9 +38,20 @@ py-modules = ["app", "api", "log", "monitoring"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[project.optional-dependencies]
+dev = ["pytest-cov>=5.0"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/backtest/*", "src/simulation/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
 
 [tool.ruff]
 target-version = "py311"
