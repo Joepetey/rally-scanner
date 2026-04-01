@@ -67,29 +67,68 @@ class AlertEngine:
         market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
         return market_open <= now <= market_close
 
+    @staticmethod
+    def evaluate_breach(
+        ticker: str, price: float,
+        effective_stop: float, target: float, entry: float, pnl_pct: float,
+        stop: float, trailing: float,
+    ) -> AlertEvent | None:
+        """Pure evaluator: check hard stop/target breach. No DB calls."""
+        if effective_stop > 0 and price <= effective_stop:
+            level_name = "Trailing Stop" if trailing > stop else "Stop"
+            return AlertEvent(
+                ticker=ticker, alert_type="stop_breached", current_price=price,
+                level_price=effective_stop, level_name=level_name,
+                entry_price=entry, pnl_pct=pnl_pct,
+            )
+        if target > 0 and price >= target:
+            return AlertEvent(
+                ticker=ticker, alert_type="target_breached", current_price=price,
+                level_price=target, level_name="Target",
+                entry_price=entry, pnl_pct=pnl_pct,
+            )
+        return None
+
+    def evaluate_proximity(
+        self, ticker: str, price: float,
+        effective_stop: float, target: float, entry: float, pnl_pct: float,
+        stop: float, trailing: float,
+    ) -> AlertEvent | None:
+        """Pure evaluator: check near-stop/near-target proximity. No DB calls."""
+        if self._proximity_pct <= 0:
+            return None
+        if effective_stop > 0:
+            distance = (price / effective_stop - 1) * 100
+            if 0 < distance <= self._proximity_pct:
+                level_name = "Trailing Stop" if trailing > stop else "Stop"
+                return AlertEvent(
+                    ticker=ticker, alert_type="near_stop", current_price=price,
+                    level_price=effective_stop, level_name=level_name,
+                    entry_price=entry, pnl_pct=pnl_pct, distance_pct=round(distance, 2),
+                )
+        if target > 0:
+            distance = (target / price - 1) * 100
+            if 0 < distance <= self._proximity_pct:
+                return AlertEvent(
+                    ticker=ticker, alert_type="near_target", current_price=price,
+                    level_price=target, level_name="Target",
+                    entry_price=entry, pnl_pct=pnl_pct, distance_pct=round(distance, 2),
+                )
+        return None
+
     def _check_breach(
         self, ticker: str, price: float, pos: dict, today: str,
         effective_stop: float, target: float, entry: float, pnl_pct: float,
         stop: float, trailing: float,
     ) -> AlertEvent | None:
-        """Check hard stop/target breach conditions. Returns event or None."""
-        if effective_stop > 0 and price <= effective_stop:
-            if log_price_alert(  # noqa: E501
-                today, ticker, "stop_breached", price, effective_stop, entry, pnl_pct
-            ):
-                level_name = "Trailing Stop" if trailing > stop else "Stop"
-                return AlertEvent(
-                    ticker=ticker, alert_type="stop_breached", current_price=price,
-                    level_price=effective_stop, level_name=level_name,
-                    entry_price=entry, pnl_pct=pnl_pct,
-                )
-        elif target > 0 and price >= target:
-            if log_price_alert(today, ticker, "target_breached", price, target, entry, pnl_pct):
-                return AlertEvent(
-                    ticker=ticker, alert_type="target_breached", current_price=price,
-                    level_price=target, level_name="Target",
-                    entry_price=entry, pnl_pct=pnl_pct,
-                )
+        """Evaluate breach + dedup via DB log."""
+        event = self.evaluate_breach(
+            ticker, price, effective_stop, target, entry, pnl_pct, stop, trailing,
+        )
+        if event and log_price_alert(
+            today, ticker, event.alert_type, price, event.level_price, entry, pnl_pct,
+        ):
+            return event
         return None
 
     def _check_proximity(
@@ -97,30 +136,14 @@ class AlertEngine:
         effective_stop: float, target: float, entry: float, pnl_pct: float,
         stop: float, trailing: float,
     ) -> AlertEvent | None:
-        """Check near-stop and near-target proximity conditions. Returns event or None."""
-        if self._proximity_pct <= 0:
-            return None
-        if effective_stop > 0:
-            distance = (price / effective_stop - 1) * 100
-            if 0 < distance <= self._proximity_pct:
-                if log_price_alert(  # noqa: E501
-                    today, ticker, "near_stop", price, effective_stop, entry, pnl_pct
-                ):
-                    level_name = "Trailing Stop" if trailing > stop else "Stop"
-                    return AlertEvent(
-                        ticker=ticker, alert_type="near_stop", current_price=price,
-                        level_price=effective_stop, level_name=level_name,
-                        entry_price=entry, pnl_pct=pnl_pct, distance_pct=round(distance, 2),
-                    )
-        if target > 0:
-            distance = (target / price - 1) * 100
-            if 0 < distance <= self._proximity_pct:
-                if log_price_alert(today, ticker, "near_target", price, target, entry, pnl_pct):
-                    return AlertEvent(
-                        ticker=ticker, alert_type="near_target", current_price=price,
-                        level_price=target, level_name="Target",
-                        entry_price=entry, pnl_pct=pnl_pct, distance_pct=round(distance, 2),
-                    )
+        """Evaluate proximity + dedup via DB log."""
+        event = self.evaluate_proximity(
+            ticker, price, effective_stop, target, entry, pnl_pct, stop, trailing,
+        )
+        if event and log_price_alert(
+            today, ticker, event.alert_type, price, event.level_price, entry, pnl_pct,
+        ):
+            return event
         return None
 
     def evaluate_single_ticker(
@@ -152,8 +175,22 @@ class AlertEngine:
     async def check_prices(
         self, positions: list[dict], quotes: dict[str, dict],
     ) -> list[AlertEvent]:
-        """Evaluate all positions for alert conditions. Applies profit lock."""
+        """Evaluate all positions for alert conditions. Applies profit lock.
+
+        Persists changed positions inline. For callers that need to control
+        persistence, use evaluate_prices() instead.
+        """
+        events, changed = self.evaluate_prices(positions, quotes)
+        for pos in changed:
+            await asyncio.to_thread(save_position_meta, pos)
+        return events
+
+    def evaluate_prices(
+        self, positions: list[dict], quotes: dict[str, dict],
+    ) -> tuple[list[AlertEvent], list[dict]]:
+        """Pure evaluation: returns (events, positions_to_save). No DB calls."""
         events: list[AlertEvent] = []
+        changed: list[dict] = []
 
         for pos in positions:
             ticker = pos["ticker"]
@@ -164,13 +201,13 @@ class AlertEngine:
             price = quote["price"]
 
             if update_position_for_price(pos, price):
-                await asyncio.to_thread(save_position_meta, pos)
+                changed.append(pos)
 
             event = self.evaluate_single_ticker(ticker, price, pos)
             if event:
                 events.append(event)
 
-        return events
+        return events, changed
 
     async def execute_breach(
         self, ticker: str, pos: dict, price: float, reason: str,
