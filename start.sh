@@ -39,5 +39,4 @@ echo "✓ Models directory created/verified"
 echo ""
 echo "=== Starting rally-scanner ==="
 echo "✓ API server will listen on port ${PORT:-8080}"
-export PYTHONPATH="/app/src:${PYTHONPATH:-}"
-exec python -c "from app import main_sync; main_sync()"
+exec /app/.venv/bin/rally-scanner
