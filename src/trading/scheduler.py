@@ -353,38 +353,8 @@ class TradingScheduler:
                     orders.extend([r.model_dump() for r in entry_results])
 
                 if closed:
-                    exit_results = await execute_exits(closed)
-                    ok_exit = [r for r in exit_results if r.success]
-                    for r in exit_results:
-                        log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok_exit:
-                        ok_tickers = {r.ticker for r in ok_exit}
-                        # Confirm at the broker level before deleting DB records.
-                        # success=True only means the close_position() API call succeeded;
-                        # if an OCO leg still held the shares, the position may still be
-                        # open at Alpaca. Ghost positions would be re-inserted by
-                        # sync_positions_from_alpaca() with wrong risk params.
-                        broker_positions = await get_all_positions()
-                        still_open = {p["ticker"] for p in broker_positions}
-                        ghost_tickers = ok_tickers & still_open
-                        if ghost_tickers:
-                            logger.warning(
-                                "Exit API success but position still open at broker "
-                                "— skipping DB delete to avoid ghost position: %s",
-                                ghost_tickers,
-                            )
-                        confirmed_exits = [
-                            p for p in closed
-                            if p["ticker"] in ok_tickers and p["ticker"] not in still_open
-                        ]
-                        for pos in confirmed_exits:
-                            _del_meta(pos["ticker"])
-                            _rec_closed(pos)
-                        record_closed_trades(confirmed_exits)
-
-                    orders.extend([r.model_dump() for r in exit_results])
+                    confirmed_exits, exit_dicts = await self._execute_and_log_exits(closed)
+                    orders.extend(exit_dicts)
 
                 # Re-attempt queued signals freed by today's closes
                 queued = await asyncio.to_thread(process_signal_queue)
@@ -1282,3 +1252,43 @@ class TradingScheduler:
                 "signal": bool(r.get("signal")),
             })
         _db_save_watchlist(watchlist, scan_date=_date.today())
+
+    async def _execute_and_log_exits(
+        self, closed: list[dict]
+    ) -> tuple[list[dict], list[dict]]:
+        """Execute exits, log orders, confirm non-ghost closes at broker level.
+
+        Returns (confirmed_exits, order_dicts).
+        """
+        exit_results = await execute_exits(closed)
+        ok_exit = [r for r in exit_results if r.success]
+        for r in exit_results:
+            log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
+                      r.order_id, "filled" if r.success else "failed",
+                      r.fill_price, r.error)
+        confirmed_exits: list[dict] = []
+        if ok_exit:
+            ok_tickers = {r.ticker for r in ok_exit}
+            # Confirm at the broker level before deleting DB records.
+            # success=True only means the close_position() API call succeeded;
+            # if an OCO leg still held the shares, the position may still be
+            # open at Alpaca. Ghost positions would be re-inserted by
+            # sync_positions_from_alpaca() with wrong risk params.
+            broker_positions = await get_all_positions()
+            still_open = {p["ticker"] for p in broker_positions}
+            ghost_tickers = ok_tickers & still_open
+            if ghost_tickers:
+                logger.warning(
+                    "Exit API success but position still open at broker "
+                    "— skipping DB delete to avoid ghost position: %s",
+                    ghost_tickers,
+                )
+            confirmed_exits = [
+                p for p in closed
+                if p["ticker"] in ok_tickers and p["ticker"] not in still_open
+            ]
+            for pos in confirmed_exits:
+                _del_meta(pos["ticker"])
+                _rec_closed(pos)
+            record_closed_trades(confirmed_exits)
+        return confirmed_exits, [r.model_dump() for r in exit_results]
