@@ -1,26 +1,19 @@
 # stdlib
 import asyncio
 import logging
-import os
 import time
-from datetime import UTC, datetime, timedelta
 
 # third-party
-from pydantic import BaseModel
-
 try:
     from alpaca.data.requests import StockSnapshotRequest
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderClass as AlpacaOrderClass
     from alpaca.trading.enums import (
         OrderSide,
-        OrderStatus,
         OrderType,
-        QueryOrderStatus,
         TimeInForce,
     )
     from alpaca.trading.requests import (
-        GetOrdersRequest,
         LimitOrderRequest,
         OrderRequest,
         StopLossRequest,
@@ -34,7 +27,6 @@ except ImportError:
 
 # local
 import config
-from core.data import fetch_quotes
 from db.positions import (
     enqueue_signal,
     load_all_position_meta,
@@ -43,58 +35,31 @@ from db.positions import (
     remove_from_queue,
 )
 from integrations.alpaca.broker import _data_client, _safe_qty, _trading_client
+from integrations.alpaca.fills import (  # noqa: F401 — re-export
+    cancel_exit_orders,
+    cancel_order,
+    check_exit_fills,
+    check_pending_fills,
+    check_trail_stop_fills,
+    get_recent_sell_fills,
+)
+from integrations.alpaca.models import (  # noqa: F401 — re-export
+    _ERR_NOT_TRADABLE,
+    _ERR_POSITION_CLOSED,
+    _ERR_SHARES_HELD,
+    OrderResult,
+    _alpaca_symbol,
+    has_alpaca_keys,
+    is_enabled,
+)
+from integrations.alpaca.snapshots import (  # noqa: F401 — re-export
+    get_account_equity,
+    get_snapshots,
+)
 from trading.positions import async_close_position, get_group_exposure, get_total_exposure
 from trading.risk_manager import is_circuit_breaker_active
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Alpaca error code constants (MIC-120)
-# ---------------------------------------------------------------------------
-
-_ERR_NOT_TRADABLE = "42210000"     # symbol not supported on Alpaca
-_ERR_SHARES_HELD = "40310000"      # shares held by another open order
-_ERR_POSITION_CLOSED = "40410000"  # position already closed (trailing stop triggered)
-
-
-class OrderResult(BaseModel):
-    ticker: str
-    side: str
-    qty: float
-    success: bool
-    order_id: str | None = None
-    fill_price: float | None = None
-    trail_order_id: str | None = None
-    error: str | None = None
-    already_closed: bool = False
-    skipped: bool = False  # intentional non-execution (risk cap, non-tradable, etc.)
-    # actual allocated fraction (may differ from signal size after partial sizing)
-    actual_size: float | None = None
-
-
-def is_enabled() -> bool:
-    return os.environ.get("ALPACA_AUTO_EXECUTE") == "1"
-
-
-def has_alpaca_keys() -> bool:
-    """True if Alpaca API keys are configured (regardless of auto-execute)."""
-    return bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
-
-
-def _alpaca_symbol(ticker: str) -> str:
-    """Convert internal ticker key to Alpaca symbol format (e.g. BTC → BTC/USD)."""
-    if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
-        return config.ASSETS[ticker].ticker.replace("-", "/")
-    return ticker
-
-
-async def get_account_equity() -> float:
-    def _sync():
-        client = _trading_client()
-        account = client.get_account()
-        return float(account.equity)
-
-    return await asyncio.to_thread(_sync)
 
 
 async def get_all_positions() -> list[dict]:
@@ -113,62 +78,6 @@ async def get_all_positions() -> list[dict]:
         ]
 
     return await asyncio.to_thread(_sync)
-
-
-async def get_snapshots(tickers: list[str]) -> dict[str, dict]:
-    equity_tickers = [
-        t for t in tickers
-        if t in config.ASSETS and config.ASSETS[t].asset_class == "equity"
-    ]
-    crypto_tickers = [
-        t for t in tickers
-        if t in config.ASSETS and config.ASSETS[t].asset_class == "crypto"
-    ]
-
-    result: dict[str, dict] = {}
-
-    if equity_tickers:
-        def _sync():
-            client = _data_client()
-            snapshots = client.get_stock_snapshot(
-                StockSnapshotRequest(symbol_or_symbols=equity_tickers)
-            )
-            equity_result: dict[str, dict] = {}
-            for ticker in equity_tickers:
-                snap = snapshots.get(ticker)
-                if not snap:
-                    continue
-                trade = snap.latest_trade
-                quote = snap.latest_quote
-                equity_result[ticker] = {
-                    "price": float(trade.price) if trade else 0,
-                    "bid": float(quote.bid_price) if quote else 0,
-                    "ask": float(quote.ask_price) if quote else 0,
-                    "bid_size": float(quote.bid_size) if quote else 0,
-                    "ask_size": float(quote.ask_size) if quote else 0,
-                }
-            return equity_result
-
-        result.update(await asyncio.to_thread(_sync))
-
-    if crypto_tickers:
-        # Use yfinance for crypto (BTC-USD format)
-        yf_tickers = [config.ASSETS[t].ticker for t in crypto_tickers]
-        yf_data = await asyncio.to_thread(fetch_quotes, yf_tickers)
-        for t in crypto_tickers:
-            yf_ticker = config.ASSETS[t].ticker.upper()
-            data = yf_data.get(yf_ticker)
-            if data and "error" not in data:
-                result[t] = {
-                    "price": data["price"],
-                    "bid": 0,
-                    "ask": 0,
-                    "bid_size": 0,
-                    "ask_size": 0,
-                }
-
-    return result
-
 
 
 def _check_group_constraints(
@@ -445,23 +354,6 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
     return results
 
 
-async def cancel_order(order_id: str) -> bool:
-    """Cancel an open order by ID. Returns True if cancelled successfully."""
-    try:
-        await asyncio.to_thread(
-            lambda: _trading_client().cancel_order_by_id(order_id),
-        )
-        logger.info("Cancelled order %s", order_id)
-        return True
-    except Exception as e:
-        # 42210000: order already filled — benign, the exit we wanted happened
-        if _ERR_NOT_TRADABLE in str(e):
-            logger.debug("Order %s already filled, cancel skipped", order_id)
-        else:
-            logger.warning("Failed to cancel order %s: %s", order_id, e)
-        return False
-
-
 def _retry_close_position(
     client: "TradingClient", alpaca_sym: str, ticker: str,
 ) -> OrderResult:
@@ -672,144 +564,5 @@ async def place_exit_orders(
                 return _recover_from_shares_held(client, ticker, err_str)
             logger.error("Failed to place OCO exit for %s: %s", ticker, e)
             return None, None
-
-    return await asyncio.to_thread(_sync)
-
-
-async def cancel_exit_orders(
-    target_order_id: str | None, stop_order_id: str | None,
-) -> None:
-    """Cancel OCO exit orders. Cancels each unique ID once; ignores errors."""
-    ids = {oid for oid in (target_order_id, stop_order_id) if oid}
-    await asyncio.gather(*[cancel_order(oid) for oid in ids])
-
-
-async def check_exit_fills(
-    positions: list[dict],
-) -> list[dict]:
-    """Check whether any exit orders (target or stop) have filled on the broker.
-
-    Args:
-        positions: list of position dicts with 'ticker', 'target_order_id', 'trail_order_id'
-
-    Returns:
-        list of {ticker, fill_price, exit_reason} for positions whose exit order filled.
-    """
-    order_ids: dict[str, tuple[str, str]] = {}  # order_id -> (ticker, "target"|"stop")
-    for pos in positions:
-        t_oid = pos.get("target_order_id")
-        s_oid = pos.get("trail_order_id")
-        ticker = pos["ticker"]
-        if t_oid:
-            order_ids[t_oid] = (ticker, "profit_target")
-        if s_oid:
-            order_ids[s_oid] = (ticker, "stop")
-
-    if not order_ids:
-        return []
-
-    def _sync():
-        client = _trading_client()
-        orders = client.get_orders(filter=GetOrdersRequest(
-            status=QueryOrderStatus.CLOSED,
-        ))
-        filled = []
-        for order in orders:
-            oid = str(order.id)
-            if oid not in order_ids:
-                continue
-            if order.status != OrderStatus.FILLED:
-                continue
-            ticker, reason = order_ids[oid]
-            fill_price = float(order.filled_avg_price) if order.filled_avg_price else 0
-            filled.append({"ticker": ticker, "fill_price": fill_price, "exit_reason": reason})
-        return filled
-
-    return await asyncio.to_thread(_sync)
-
-
-async def check_pending_fills(order_ids: list[str]) -> dict[str, float]:
-    """Check which pending orders have filled. Returns {order_id: fill_price}."""
-    if not order_ids:
-        return {}
-
-    def _sync():
-        client = _trading_client()
-        orders = client.get_orders(filter=GetOrdersRequest(
-            status=QueryOrderStatus.CLOSED,
-        ))
-        id_set = set(order_ids)
-        today = datetime.now(tz=UTC).date()
-        fills: dict[str, float] = {}
-        for order in orders:
-            if order.status != OrderStatus.FILLED:
-                continue
-            if order.filled_at and order.filled_at.date() != today:
-                continue
-            oid = str(order.id)
-            if oid in id_set and order.filled_avg_price:
-                fills[oid] = float(order.filled_avg_price)
-        return fills
-
-    return await asyncio.to_thread(_sync)
-
-
-async def check_trail_stop_fills(
-    trail_order_ids: dict[str, str],
-) -> dict[str, float]:
-    """Check if any trailing stop orders have filled.
-
-    Args:
-        trail_order_ids: {ticker: trail_order_id} mapping
-
-    Returns:
-        {ticker: fill_price} for filled trailing stops
-    """
-    if not trail_order_ids:
-        return {}
-
-    def _sync():
-        client = _trading_client()
-        orders = client.get_orders(filter=GetOrdersRequest(
-            status=QueryOrderStatus.CLOSED,
-        ))
-        oid_to_ticker = {oid: t for t, oid in trail_order_ids.items()}
-        fills: dict[str, float] = {}
-        for order in orders:
-            if order.status != OrderStatus.FILLED:
-                continue
-            oid = str(order.id)
-            if oid in oid_to_ticker and order.filled_avg_price:
-                fills[oid_to_ticker[oid]] = float(order.filled_avg_price)
-        return fills
-
-    return await asyncio.to_thread(_sync)
-
-
-async def get_recent_sell_fills(tickers: list[str]) -> dict[str, float]:
-    """Return {ticker: fill_price} for sell orders filled in the last 24h."""
-    if not tickers:
-        return {}
-
-    def _sync() -> dict[str, float]:
-        client = _trading_client()
-        after = datetime.now(UTC) - timedelta(hours=24)
-        orders = client.get_orders(filter=GetOrdersRequest(
-            status=QueryOrderStatus.CLOSED,
-            after=after,
-        ))
-        tickers_set = set(tickers)
-        fills: dict[str, float] = {}
-        for order in orders:
-            if order.status != OrderStatus.FILLED:
-                continue
-            if order.side != OrderSide.SELL:
-                continue
-            raw_sym = str(order.symbol)
-            # Normalize Alpaca crypto symbols (BTC/USD → BTC)
-            sym = raw_sym.split("/")[0] if "/" in raw_sym else raw_sym
-            if sym in tickers_set and order.filled_avg_price:
-                fills[sym] = float(order.filled_avg_price)
-        return fills
 
     return await asyncio.to_thread(_sync)

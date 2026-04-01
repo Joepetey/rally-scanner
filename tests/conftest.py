@@ -112,6 +112,8 @@ def alpaca_mock(monkeypatch):
     mock = AlpacaMock()
     monkeypatch.setattr("integrations.alpaca.executor._trading_client", lambda: mock)
     monkeypatch.setattr("integrations.alpaca.broker._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.fills._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.snapshots._trading_client", lambda: mock)
     return mock
 
 
