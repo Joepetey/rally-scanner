@@ -195,7 +195,7 @@ class TestScanAll:
     @patch("pipeline.scanner.fetch_daily_batch")
     @patch("pipeline.scanner.fetch_vix_safe")
     @patch("pipeline.scanner.load_manifest")
-    @patch("pipeline.scanner.load_model")
+    @patch("pipeline.scan_worker.load_model")
     def test_scan_all_returns_results(
         self, mock_load_model, mock_manifest, mock_vix, mock_batch, mock_quotes,
     ):
@@ -246,7 +246,7 @@ class TestScanAll:
     @patch("pipeline.scanner.fetch_daily_batch")
     @patch("pipeline.scanner.fetch_vix_safe")
     @patch("pipeline.scanner.load_manifest")
-    @patch("pipeline.scanner.load_model")
+    @patch("pipeline.scan_worker.load_model")
     def test_scan_all_batch_fetch_failure_falls_back(
         self, mock_load_model, mock_manifest, mock_vix, mock_batch, mock_quotes,
     ):
