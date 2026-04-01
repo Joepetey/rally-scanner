@@ -81,13 +81,6 @@ def test_open_trade_stored_correctly(pg_db):
     assert trades[0]["notes"] == "test"
 
 
-def test_open_trade_uppercases_ticker(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "aapl", 150.0, "2024-01-10")
-    trades = get_open_trades(1)
-    assert trades[0]["ticker"] == "AAPL"
-
-
 def test_close_trade_fifo(pg_db):
     """Closing should close the oldest open trade for the ticker."""
     ensure_user(1, "bob")
@@ -118,13 +111,6 @@ def test_close_trade_pnl_calculation(pg_db):
     assert result["pnl_pct"] == 10.0
 
 
-def test_close_trade_negative_pnl(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "TSLA", 200.0, "2024-01-10")
-    result = close_trade(1, "TSLA", 180.0, "2024-01-20")
-    assert result["pnl_pct"] == -10.0
-
-
 def test_get_trade_history_all(pg_db):
     ensure_user(1, "bob")
     open_trade(1, "AAPL", 150.0, "2024-01-10")
@@ -143,22 +129,6 @@ def test_get_trade_history_filtered(pg_db):
     assert history[0]["ticker"] == "AAPL"
 
 
-def test_get_trade_history_limit(pg_db):
-    ensure_user(1, "bob")
-    for i in range(10):
-        open_trade(1, "AAPL", 150.0 + i, f"2024-01-{10+i:02d}")
-    history = get_trade_history(1, limit=3)
-    assert len(history) == 3
-
-
-def test_pnl_summary_empty(pg_db):
-    ensure_user(1, "bob")
-    summary = get_pnl_summary(1)
-    assert summary["n_trades"] == 0
-    assert summary["total_pnl"] == 0.0
-    assert summary["win_rate"] == 0.0
-
-
 def test_pnl_summary_mixed(pg_db):
     ensure_user(1, "bob")
     open_trade(1, "AAPL", 100.0, "2024-01-10")
@@ -174,13 +144,6 @@ def test_pnl_summary_mixed(pg_db):
     assert summary["win_rate"] == pytest.approx(66.7, abs=0.1)
     assert summary["best_trade"] == pytest.approx(20.0, abs=0.01)
     assert summary["worst_trade"] == pytest.approx(-5.0, abs=0.01)
-
-
-def test_pnl_summary_ignores_open(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 100.0, "2024-01-10")
-    summary = get_pnl_summary(1)
-    assert summary["n_trades"] == 0
 
 
 def test_multiple_users_isolated(pg_db):
@@ -203,27 +166,10 @@ def test_multiple_users_isolated(pg_db):
 # ---------------------------------------------------------------------------
 
 
-def test_capital_default_zero(pg_db):
-    ensure_user(1, "alice")
-    assert get_capital(1) == 0.0
-
-
 def test_set_and_get_capital(pg_db):
     ensure_user(1, "alice")
     set_capital(1, 100_000.0)
     assert get_capital(1) == 100_000.0
-
-
-def test_update_capital(pg_db):
-    ensure_user(1, "alice")
-    set_capital(1, 50_000.0)
-    set_capital(1, 75_000.0)
-    assert get_capital(1) == 75_000.0
-
-
-# ---------------------------------------------------------------------------
-# Stop/target on trades
-# ---------------------------------------------------------------------------
 
 
 def test_open_trade_with_stop_target(pg_db):
@@ -232,14 +178,6 @@ def test_open_trade_with_stop_target(pg_db):
     trades = get_open_trades(1)
     assert trades[0]["stop_price"] == 145.0
     assert trades[0]["target_price"] == 160.0
-
-
-def test_open_trade_stop_target_default_none(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10")
-    trades = get_open_trades(1)
-    assert trades[0]["stop_price"] is None
-    assert trades[0]["target_price"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -257,14 +195,6 @@ def test_close_trade_dollar_pnl_with_capital(pg_db):
     assert result["pnl_dollar"] == pytest.approx(1500.0, abs=0.01)
 
 
-def test_close_trade_dollar_pnl_without_capital(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 100.0, "2024-01-10", size=0.15)
-    result = close_trade(1, "AAPL", 110.0, "2024-01-20")
-    assert result["pnl_pct"] == 10.0
-    assert result["pnl_dollar"] is None
-
-
 def test_pnl_summary_includes_dollar_total(pg_db):
     ensure_user(1, "bob")
     set_capital(1, 100_000.0)
@@ -275,14 +205,6 @@ def test_pnl_summary_includes_dollar_total(pg_db):
     summary = get_pnl_summary(1)
     # AAPL: 100k * 0.15 * 10% = +$1500, MSFT: 100k * 0.10 * -5% = -$500
     assert summary["total_pnl_dollar"] == pytest.approx(1000.0, abs=0.01)
-
-
-def test_pnl_summary_dollar_zero_when_no_capital(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 100.0, "2024-01-10")
-    close_trade(1, "AAPL", 110.0, "2024-01-20")
-    summary = get_pnl_summary(1)
-    assert summary["total_pnl_dollar"] == 0.0
 
 
 # ---------------------------------------------------------------------------

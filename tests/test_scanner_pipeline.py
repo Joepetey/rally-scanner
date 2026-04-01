@@ -174,6 +174,23 @@ class TestApplyConfig:
 
 class TestScanAll:
 
+    @staticmethod
+    def _mock_pool():
+        """Return a patched ProcessPoolExecutor that runs synchronously."""
+        from concurrent.futures import Future
+        from unittest.mock import MagicMock
+
+        def mock_submit(fn, item):
+            f = Future()
+            f.set_result(fn(item))
+            return f
+
+        mock_pool = MagicMock()
+        mock_pool.__enter__ = lambda s: s
+        mock_pool.__exit__ = lambda s, *a: None
+        mock_pool.submit = mock_submit
+        return patch("pipeline.scanner.ProcessPoolExecutor", return_value=mock_pool)
+
     @patch("pipeline.scanner.fetch_quotes")
     @patch("pipeline.scanner.fetch_daily_batch")
     @patch("pipeline.scanner.fetch_vix_safe")
@@ -200,7 +217,8 @@ class TestScanAll:
             "max_risk_frac", "profit_atr_mult", "time_stop_bars",
         ]}
         try:
-            results = scan_all(tickers=["TEST"], config_name="conservative")
+            with self._mock_pool():
+                results = scan_all(tickers=["TEST"], config_name="conservative")
             assert isinstance(results, list)
             assert len(results) == 1
             assert results[0]["ticker"] == "TEST"
@@ -251,10 +269,8 @@ class TestScanAll:
             "max_risk_frac", "profit_atr_mult", "time_stop_bars",
         ]}
         try:
-            # scan_all catches batch failure and falls back to individual fetches
-            # _scan_one will try load_model + fetch_daily (which isn't mocked here)
-            # so the ticker will likely error, but scan_all shouldn't crash
-            results = scan_all(tickers=["TEST"], config_name="conservative")
+            with self._mock_pool():
+                results = scan_all(tickers=["TEST"], config_name="conservative")
             assert isinstance(results, list)
         finally:
             for k, v in original.items():

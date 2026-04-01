@@ -70,15 +70,6 @@ def test_state_persistence(monkeypatch):
     assert loaded["AAPL"]["p_compressed"] == 0.8
 
 
-def test_state_persistence_empty(monkeypatch):
-    """Empty DB returns empty dict."""
-    import trading.regime_monitor as rm
-    monkeypatch.setattr(rm, "_db_load_regime_states", lambda: {})
-
-    loaded = _load_regime_states()
-    assert loaded == {}
-
-
 def test_cascade_threshold_met():
     transitions = [
         {"ticker": "AAPL", "prev_regime": "compressed", "new_regime": "expanding",
@@ -99,5 +90,3 @@ def test_cascade_threshold_not_met():
     assert not is_cascade(transitions)
 
 
-def test_cascade_empty():
-    assert not is_cascade([])

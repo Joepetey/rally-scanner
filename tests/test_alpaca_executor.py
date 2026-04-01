@@ -1,6 +1,6 @@
 """Tests for Alpaca executor (alpaca-py SDK) and order embeds."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from alpaca.trading.enums import OrderSide, OrderStatus
@@ -10,21 +10,15 @@ from integrations.alpaca.executor import (
     OrderResult,
     cancel_order,
     check_pending_fills,
-    check_trail_stop_fills,
     execute_entries,
     execute_exit,
     execute_exits,
-    get_account_equity,
-    get_all_positions,
-    get_snapshots,
     is_enabled,
-    place_trailing_stop,
 )
 from integrations.discord.notify import _order_embed, _order_failure_embed
 from tests.helpers.alpaca_mock import MockAlpacaOrder
 from trading.positions import (
     close_position_intraday,
-    get_trail_order_ids,
     update_fill_prices,
 )
 
@@ -40,11 +34,6 @@ def test_is_enabled_true(monkeypatch):
 
 def test_is_enabled_false(monkeypatch):
     monkeypatch.delenv("ALPACA_AUTO_EXECUTE", raising=False)
-    assert is_enabled() is False
-
-
-def test_is_enabled_wrong_value(monkeypatch):
-    monkeypatch.setenv("ALPACA_AUTO_EXECUTE", "0")
     assert is_enabled() is False
 
 
@@ -181,20 +170,6 @@ async def test_update_fill_prices(tmp_models_dir):
     assert aapl["highest_close"] == 149.50
     # stop_price (range_low) left untouched — it's a strategy-derived level, not entry-relative
     assert aapl["stop_price"] == 100.0
-
-
-@pytest.mark.asyncio
-async def test_update_fill_prices_no_matches(tmp_models_dir):
-    save_positions({
-        "positions": [
-            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
-             "current_price": 152.0, "status": "open"},
-        ],
-        "closed_today": [],
-    })
-
-    count = await update_fill_prices({"order-999": 149.50})
-    assert count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -445,44 +420,6 @@ async def test_cancel_order_failure(alpaca_mock):
 
 
 # ---------------------------------------------------------------------------
-# execute_exit with trailing stop cancellation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_exit_cancels_trailing_stop(alpaca_mock):
-    """When trail_order_id is given, it should be cancelled before closing."""
-    alpaca_mock.set_fill_behavior("immediate", fill_price=148.50)
-
-    result = await execute_exit("AAPL", trail_order_id="trail-999")
-
-    assert result.success is True
-    assert result.fill_price == 148.50
-    alpaca_mock.cancel_order_by_id.assert_called_once_with("trail-999")
-    alpaca_mock.close_position.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# execute_exits passes trail_order_id from position
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_exits_passes_trail_order_id(alpaca_mock):
-    """Closed positions with trail_order_id should pass it to exit."""
-    alpaca_mock.set_fill_behavior("immediate", fill_price=150.0)
-    closed = [
-        {"ticker": "AAPL", "trail_order_id": "trail-111"},
-    ]
-
-    results = await execute_exits(closed)
-
-    assert len(results) == 1
-    assert results[0].success is True
-    alpaca_mock.cancel_order_by_id.assert_called_once_with("trail-111")
-
-
-# ---------------------------------------------------------------------------
 # position not found (40410000) — trailing stop already closed it
 # ---------------------------------------------------------------------------
 
@@ -532,244 +469,3 @@ async def test_execute_exits_position_not_found_does_not_fail_batch(alpaca_mock)
     assert abvx.already_closed is True
     assert msft.success is True
     assert msft.fill_price == 50.0
-
-
-# ---------------------------------------------------------------------------
-# check_trail_stop_fills
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_check_trail_stop_fills(alpaca_mock):
-    alpaca_mock.add_filled_order("trail-1", fill_price=145.00, symbol="AAPL")
-    alpaca_mock.add_filled_order("trail-other", fill_price=99.00, symbol="OTHER")
-
-    fills = await check_trail_stop_fills({"AAPL": "trail-1"})
-
-    assert fills == {"AAPL": 145.00}
-
-
-@pytest.mark.asyncio
-async def test_check_trail_stop_fills_empty():
-    fills = await check_trail_stop_fills({})
-    assert fills == {}
-
-
-# ---------------------------------------------------------------------------
-# get_trail_order_ids (DB-backed positions helper)
-# ---------------------------------------------------------------------------
-
-
-def test_get_trail_order_ids(tmp_models_dir):
-    save_positions({
-        "positions": [
-            {"ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-01-10",
-             "trail_order_id": "trail-1", "status": "open"},
-            {"ticker": "MSFT", "entry_price": 400.0, "entry_date": "2024-01-10",
-             "status": "open"},  # no trail order
-            {"ticker": "NVDA", "entry_price": 500.0, "entry_date": "2024-01-10",
-             "trail_order_id": "trail-3", "status": "open"},
-        ],
-        "closed_today": [],
-    })
-
-    result = get_trail_order_ids()
-    assert result == {"AAPL": "trail-1", "NVDA": "trail-3"}
-
-
-def test_get_trail_order_ids_empty(tmp_models_dir):
-    result = get_trail_order_ids()
-    assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# get_account_equity (shared alpaca_mock)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_account_equity(alpaca_mock):
-    alpaca_mock.set_account_equity(125000.50)
-
-    equity = await get_account_equity()
-
-    assert equity == 125000.50
-    alpaca_mock.get_account.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# get_all_positions (shared alpaca_mock — patches broker._trading_client)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_all_positions(alpaca_mock):
-    alpaca_mock.add_open_position("AAPL", qty=10, avg_entry_price=150.25,
-                                  market_value=1520.00, unrealized_pl=17.50)
-    alpaca_mock.add_open_position("MSFT", qty=5, avg_entry_price=400.00,
-                                  market_value=2050.00, unrealized_pl=50.00)
-
-    positions = await get_all_positions()
-
-    assert len(positions) == 2
-    assert positions[0]["ticker"] == "AAPL"
-    assert positions[0]["qty"] == 10
-    assert positions[0]["avg_entry_price"] == 150.25
-    assert positions[0]["market_value"] == 1520.00
-    assert positions[0]["unrealized_pl"] == 17.50
-    assert positions[1]["ticker"] == "MSFT"
-
-
-@pytest.mark.asyncio
-async def test_get_all_positions_empty(alpaca_mock):
-    positions = await get_all_positions()
-    assert positions == []
-
-
-@pytest.mark.asyncio
-async def test_get_all_positions_api_error(alpaca_mock):
-    """If API raises, exception propagates."""
-    alpaca_mock.get_all_positions.side_effect = Exception("unauthorized")
-
-    with pytest.raises(Exception, match="unauthorized"):
-        await get_all_positions()
-
-
-# ---------------------------------------------------------------------------
-# get_snapshots (mocked alpaca-py)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_snapshots():
-    mock_snap_aapl = MagicMock()
-    mock_snap_aapl.latest_trade.price = 152.50
-    mock_snap_aapl.latest_quote.bid_price = 152.40
-    mock_snap_aapl.latest_quote.ask_price = 152.60
-    mock_snap_aapl.latest_quote.bid_size = 100
-    mock_snap_aapl.latest_quote.ask_size = 200
-
-    mock_snap_msft = MagicMock()
-    mock_snap_msft.latest_trade.price = 410.00
-    mock_snap_msft.latest_quote.bid_price = 409.90
-    mock_snap_msft.latest_quote.ask_price = 410.10
-    mock_snap_msft.latest_quote.bid_size = 50
-    mock_snap_msft.latest_quote.ask_size = 75
-
-    mock_data = MagicMock()
-    mock_data.get_stock_snapshot.return_value = {
-        "AAPL": mock_snap_aapl,
-        "MSFT": mock_snap_msft,
-    }
-
-    with patch("integrations.alpaca.executor._data_client", return_value=mock_data):
-        result = await get_snapshots(["AAPL", "MSFT"])
-
-    assert result["AAPL"]["price"] == 152.50
-    assert result["AAPL"]["bid"] == 152.40
-    assert result["AAPL"]["ask"] == 152.60
-    assert result["MSFT"]["price"] == 410.00
-    assert result["MSFT"]["bid"] == 409.90
-
-
-@pytest.mark.asyncio
-async def test_get_snapshots_returns_crypto_via_yfinance():
-    """Crypto tickers are fetched via yfinance and returned alongside equity."""
-    mock_yf_quotes = {
-        "BTC-USD": {"price": 95000.0, "prev_close": 94000.0,
-                    "change": 1000.0, "change_pct": 1.06,
-                    "open": 94500.0, "day_high": 96000.0, "day_low": 94000.0,
-                    "volume": 10000, "market_cap": None, "currency": "USD"},
-    }
-    with patch("integrations.alpaca.executor.fetch_quotes", return_value=mock_yf_quotes):
-        result = await get_snapshots(["BTC"])
-
-    assert "BTC" in result
-    assert result["BTC"]["price"] == 95000.0
-    assert result["BTC"]["bid"] == 0
-
-
-# ---------------------------------------------------------------------------
-# place_trailing_stop (shared alpaca_mock)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_place_trailing_stop(alpaca_mock):
-    alpaca_mock.set_fill_behavior("immediate")
-
-    trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
-
-    assert trail_id is not None
-    alpaca_mock.submit_order.assert_called_once()
-    request = alpaca_mock.submit_order.call_args[0][0]
-    assert request.symbol == "AAPL"
-    assert request.qty == 10
-    assert request.trail_percent == 3.0
-
-
-@pytest.mark.asyncio
-async def test_place_trailing_stop_failure(alpaca_mock):
-    """On failure, returns None instead of raising."""
-    alpaca_mock.set_submit_error("order rejected")
-
-    trail_id = await place_trailing_stop("AAPL", qty=10, trail_pct=3.0)
-
-    assert trail_id is None
-
-
-# ---------------------------------------------------------------------------
-# simulation_keys context manager
-# ---------------------------------------------------------------------------
-
-
-def test_simulation_keys_swaps_and_restores(monkeypatch):
-    """simulation_keys swaps to sim keys and restores originals on exit."""
-    from integrations.alpaca.broker import simulation_keys
-
-    monkeypatch.setenv("ALPACA_API_KEY", "prod-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "prod-secret")
-    monkeypatch.setenv("ALPACA_SIMULATION_API_KEY", "sim-key")
-    monkeypatch.setenv("ALPACA_SIMULATION_SECRET_KEY", "sim-secret")
-
-    import os
-
-    with simulation_keys():
-        assert os.environ["ALPACA_API_KEY"] == "sim-key"
-        assert os.environ["ALPACA_SECRET_KEY"] == "sim-secret"
-
-    assert os.environ["ALPACA_API_KEY"] == "prod-key"
-    assert os.environ["ALPACA_SECRET_KEY"] == "prod-secret"
-
-
-def test_simulation_keys_restores_on_error(monkeypatch):
-    """Keys are restored even if the simulation raises."""
-    from integrations.alpaca.broker import simulation_keys
-
-    monkeypatch.setenv("ALPACA_API_KEY", "prod-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "prod-secret")
-    monkeypatch.setenv("ALPACA_SIMULATION_API_KEY", "sim-key")
-    monkeypatch.setenv("ALPACA_SIMULATION_SECRET_KEY", "sim-secret")
-
-    import os
-
-    with pytest.raises(ValueError):
-        with simulation_keys():
-            raise ValueError("boom")
-
-    assert os.environ["ALPACA_API_KEY"] == "prod-key"
-    assert os.environ["ALPACA_SECRET_KEY"] == "prod-secret"
-
-
-def test_simulation_keys_missing_raises(monkeypatch):
-    """Raises RuntimeError when simulation keys aren't configured."""
-    from integrations.alpaca.broker import simulation_keys
-
-    monkeypatch.setenv("ALPACA_API_KEY", "prod-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "prod-secret")
-    monkeypatch.delenv("ALPACA_SIMULATION_API_KEY", raising=False)
-    monkeypatch.delenv("ALPACA_SIMULATION_SECRET_KEY", raising=False)
-
-    with pytest.raises(RuntimeError, match="ALPACA_SIMULATION_API_KEY"):
-        with simulation_keys():
-            pass

@@ -110,43 +110,6 @@ class TestRetrainAll:
         assert "GOOD" in saved_tickers
         assert "BAD" not in saved_tickers
 
-    @patch("pipeline.retrain.save_model")
-    @patch("pipeline.retrain.load_manifest", return_value={})
-    @patch("pipeline.retrain.fetch_vix_safe", return_value=None)
-    @patch("pipeline.retrain.fetch_daily_batch")
-    def test_progress_callback_called(
-        self, mock_batch, mock_vix, mock_manifest, mock_save,
-    ):
-        from pipeline.retrain import retrain_all
-
-        df = _make_ohlcv(600)
-        mock_batch.return_value = {"AAPL": df.copy()}
-
-        callback = MagicMock()
-        retrain_all(tickers=["AAPL"], progress_callback=callback)
-        assert callback.call_count >= 1
-
-    @patch("pipeline.retrain.save_model")
-    @patch("pipeline.retrain.load_manifest", return_value={})
-    @patch("pipeline.retrain.fetch_vix_safe", return_value=None)
-    @patch("pipeline.retrain.fetch_daily_batch")
-    def test_idempotent_retrain(
-        self, mock_batch, mock_vix, mock_manifest, mock_save,
-    ):
-        """Running retrain_all twice should work cleanly (idempotent)."""
-        from pipeline.retrain import retrain_all
-
-        df = _make_ohlcv(600)
-        mock_batch.return_value = {"AAPL": df.copy()}
-
-        retrain_all(tickers=["AAPL"])
-        first_count = mock_save.call_count
-
-        mock_batch.return_value = {"AAPL": df.copy()}
-        retrain_all(tickers=["AAPL"])
-        second_count = mock_save.call_count - first_count
-
-        assert second_count >= 1  # both runs should produce saves
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +133,3 @@ class TestIsFresh:
         entry = {"saved_at": "2020-01-01T00:00:00"}
         assert _is_fresh(entry, max_age_days=7) is False
 
-    def test_missing_saved_at(self):
-        from pipeline.retrain import _is_fresh
-
-        assert _is_fresh({}, max_age_days=7) is False

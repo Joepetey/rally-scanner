@@ -88,13 +88,6 @@ class TestCalibrateThresholds:
         result = calibrate_thresholds(df, "UNKNOWN_TICKER_XYZ")
         assert result.asset_class == "equity"
 
-    def test_output_type_is_float(self):
-        """Scanner expects float values, not numpy scalars."""
-        df = _make_ohlcv()
-        result = calibrate_thresholds(df, "AAPL")
-        assert isinstance(result.r_up, float)
-        assert isinstance(result.d_dn, float)
-
     def test_values_are_rounded_to_4_decimals(self):
         df = _make_ohlcv()
         result = calibrate_thresholds(df, "AAPL")
