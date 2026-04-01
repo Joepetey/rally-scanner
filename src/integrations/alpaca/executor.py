@@ -21,7 +21,7 @@ try:
     )
     from alpaca.trading.requests import (
         GetOrdersRequest,
-        MarketOrderRequest,
+        LimitOrderRequest,
         OrderRequest,
         StopLossRequest,
         TakeProfitRequest,
@@ -253,6 +253,32 @@ async def _attempt_rotation(
     return size, current_exposure, open_positions, open_tickers, False
 
 
+def _compute_limit_price(fallback_price: float, ticker: str) -> float:
+    """Return a limit price slightly above the bid/ask midpoint.
+
+    Fetches the latest snapshot synchronously. Falls back to
+    fallback_price * (1 + buffer) when bid/ask is unavailable (e.g. crypto).
+    """
+    buffer = config.PARAMS.limit_order_buffer_pct
+    is_crypto = ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto"
+    if not is_crypto:
+        try:
+            client = _data_client()
+            snaps = client.get_stock_snapshot(
+                StockSnapshotRequest(symbol_or_symbols=[ticker])
+            )
+            snap = snaps.get(ticker)
+            if snap and snap.latest_quote:
+                bid = float(snap.latest_quote.bid_price)
+                ask = float(snap.latest_quote.ask_price)
+                if bid > 0 and ask > 0:
+                    midpoint = (bid + ask) / 2
+                    return round(midpoint * (1 + buffer), 2)
+        except Exception as e:
+            logger.debug("Could not fetch snapshot for %s limit price: %s", ticker, e)
+    return round(fallback_price * (1 + buffer), 2)
+
+
 async def execute_entries(signals: list[dict], equity: float) -> list[OrderResult]:
     results: list[OrderResult] = []
 
@@ -339,14 +365,17 @@ async def execute_entries(signals: list[dict], equity: float) -> list[OrderResul
                 continue
 
         try:
-            # Place market buy entry
+            # Compute limit price from bid/ask midpoint + buffer to avoid
+            # market-order slippage (MIC-107)
+            limit_price = await asyncio.to_thread(_compute_limit_price, price, ticker)
+
             order = await asyncio.to_thread(
                 client.submit_order,
-                MarketOrderRequest(
+                LimitOrderRequest(
                     symbol=_alpaca_symbol(ticker),
                     qty=qty,
                     side=OrderSide.BUY,
-                    # Crypto trades 24/7 — use GTC; equities use DAY
+                    limit_price=limit_price,
                     time_in_force=TimeInForce.GTC if is_crypto else TimeInForce.DAY,
                 ),
             )

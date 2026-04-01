@@ -1,6 +1,6 @@
 """Tests for Alpaca executor (alpaca-py SDK) and order embeds."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from alpaca.trading.enums import OrderSide, OrderStatus
@@ -187,6 +187,9 @@ _ENTRY_PATCHES = [
     patch("integrations.alpaca.executor.enqueue_signal"),
     patch("integrations.alpaca.executor.log_skipped_signal"),
     patch("integrations.alpaca.executor.remove_from_queue"),
+    # Avoid real Alpaca data API calls in tests — return fallback-based limit price
+    patch("integrations.alpaca.executor._compute_limit_price",
+          side_effect=lambda price, ticker: round(price * 1.002, 2)),
 ]
 
 
@@ -217,6 +220,9 @@ async def test_execute_entries_crypto_uses_slash_symbol(alpaca_mock):
     # Alpaca symbol must use slash format
     submitted = alpaca_mock.submit_order.call_args[0][0]
     assert submitted.symbol == "BTC/USD"
+    # Must be a limit order, not market (MIC-107)
+    from alpaca.trading.requests import LimitOrderRequest
+    assert isinstance(submitted, LimitOrderRequest)
 
 
 @pytest.mark.asyncio
@@ -241,8 +247,11 @@ async def test_execute_entries_qty(alpaca_mock):
     # Trailing stop is deferred — no trail_order_id yet
     assert r.trail_order_id is None
 
-    # Only market buy call
+    # Only one limit buy call (MIC-107: no more market orders)
     alpaca_mock.submit_order.assert_called_once()
+    from alpaca.trading.requests import LimitOrderRequest
+    submitted = alpaca_mock.submit_order.call_args[0][0]
+    assert isinstance(submitted, LimitOrderRequest)
 
 
 @pytest.mark.asyncio
@@ -469,3 +478,45 @@ async def test_execute_exits_position_not_found_does_not_fail_batch(alpaca_mock)
     assert abvx.already_closed is True
     assert msft.success is True
     assert msft.fill_price == 50.0
+
+
+# ---------------------------------------------------------------------------
+# _compute_limit_price (MIC-107)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_limit_price_with_snapshot():
+    """Uses bid/ask midpoint + buffer when snapshot is available."""
+    from dataclasses import dataclass
+    from integrations.alpaca.executor import _compute_limit_price
+
+    @dataclass
+    class FakeQuote:
+        bid_price: float
+        ask_price: float
+
+    @dataclass
+    class FakeSnap:
+        latest_quote: FakeQuote
+        latest_trade: None = None
+
+    fake_client = MagicMock()
+    fake_client.get_stock_snapshot.return_value = {
+        "AAPL": FakeSnap(latest_quote=FakeQuote(bid_price=149.90, ask_price=150.10)),
+    }
+
+    with patch("integrations.alpaca.executor._data_client", return_value=fake_client):
+        price = _compute_limit_price(150.0, "AAPL")
+
+    # midpoint = 150.0, buffer = 0.2% → 150.0 * 1.002 = 150.30
+    assert price == 150.30
+
+
+def test_compute_limit_price_fallback():
+    """Falls back to signal price + buffer when snapshot fails."""
+    from integrations.alpaca.executor import _compute_limit_price
+
+    with patch("integrations.alpaca.executor._data_client", side_effect=Exception("no keys")):
+        price = _compute_limit_price(100.0, "AAPL")
+
+    assert price == 100.20  # 100 * 1.002
