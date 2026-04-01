@@ -50,8 +50,13 @@ class AlpacaStreamManager:
         mgr.stop()
     """
 
-    def __init__(self, on_trade: Callable[[str, float], None]) -> None:
+    def __init__(
+        self,
+        on_trade: Callable[[str, float], None],
+        excluded: set[str] | None = None,
+    ) -> None:
         self._on_trade = on_trade
+        self._excluded = excluded or set()
         self._throttle = float(
             os.environ.get(
                 "STREAM_EVAL_THROTTLE_SECONDS",
@@ -93,6 +98,7 @@ class AlpacaStreamManager:
 
     def start(self, symbols: set[str]) -> None:
         """Launch equity and/or crypto streams in daemon threads. Thread-safe."""
+        symbols = symbols - self._excluded
         with self._lock:
             equity = {s for s in symbols if not self._is_crypto(s)}
             crypto = {s for s in symbols if self._is_crypto(s)}
@@ -142,7 +148,12 @@ class AlpacaStreamManager:
         logger.info("Streams stopped")
 
     def update_subscriptions(self, symbols: set[str]) -> None:
-        """Diff the symbol set and subscribe/unsubscribe as needed. Thread-safe."""
+        """Diff the symbol set and subscribe/unsubscribe as needed. Thread-safe.
+
+        Automatically excludes non-signal tickers (e.g. SGOV cash parking) that
+        don't need real-time streaming.
+        """
+        symbols = symbols - self._excluded
         equity_symbols = {s for s in symbols if not self._is_crypto(s)}
         crypto_symbols = {s for s in symbols if self._is_crypto(s)}
 
@@ -202,29 +213,37 @@ class AlpacaStreamManager:
                     except Exception as e:
                         logger.warning("Failed to unsubscribe crypto %s: %s", cr_remove, e)
 
-    def get_stale_tickers(self, stale_seconds: float = 300.0) -> tuple[list[str], list[str]]:
-        """Return (new_stale, known_stale) for tickers with no trade event in stale_seconds.
+    def get_stale_tickers(
+        self, stale_seconds: float = 300.0,
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Return (new_stale, known_stale, never_traded) for tickers with no trade event.
 
-        new_stale  — first occurrence since last fresh trade; callers should log WARNING.
-        known_stale — already reported and still stale; callers should log DEBUG only.
+        new_stale     — previously received trades but went silent; callers should log WARNING.
+        known_stale   — already reported and still stale; callers should log DEBUG only.
+        never_traded  — never received a single trade since subscription; expected for
+                        low-volume tickers. Callers should log INFO, not WARNING.
 
-        Side effect: new_stale tickers are added to the internal _known_stale set so
-        subsequent calls demote them to known_stale until a fresh trade clears them.
+        Side effect: new_stale and never_traded tickers are added to the internal
+        _known_stale set so subsequent calls demote them to known_stale.
         """
         now = time.monotonic()
         with self._lock:
             symbols = set(self._symbols) | set(self._crypto_symbols)
         new_stale: list[str] = []
         known_stale: list[str] = []
+        never_traded: list[str] = []
         for ticker in symbols:
             last = self._last_trade_time.get(ticker)
             if last is None or (now - last) > stale_seconds:
                 if ticker in self._known_stale:
                     known_stale.append(ticker)
+                elif last is None:
+                    never_traded.append(ticker)
+                    self._known_stale.add(ticker)
                 else:
                     new_stale.append(ticker)
                     self._known_stale.add(ticker)
-        return new_stale, known_stale
+        return new_stale, known_stale, never_traded
 
     def inject_trade(self, ticker: str, price: float) -> None:
         """Fire _on_trade directly, bypassing WebSocket and throttle.

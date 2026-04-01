@@ -45,6 +45,9 @@ from db.positions import (
 )
 from integrations.alpaca.broker import get_all_positions
 from integrations.alpaca.cash_parking import (
+    _TICKER as PARKING_TICKER,
+)
+from integrations.alpaca.cash_parking import (
     buy_sgov,
     sell_sgov,
 )
@@ -179,7 +182,10 @@ class TradingScheduler:
             try:
                 positions = load_positions()
                 tickers = {p["ticker"] for p in positions.get("positions", [])}
-                self._stream = AlpacaStreamManager(on_trade=self._on_stream_trade)
+                self._stream = AlpacaStreamManager(
+                    on_trade=self._on_stream_trade,
+                    excluded={PARKING_TICKER},
+                )
                 self._stream.start(tickers)
                 logger.info("AlpacaStreamManager started")
             except Exception as e:
@@ -804,17 +810,25 @@ class TradingScheduler:
                     self._stream and self._stream.is_connected
                     and self._housekeeping_cycles % 2 == 0
                 ):
-                    new_stale, known_stale = self._stream.get_stale_tickers(stale_seconds=300.0)
-                    stale = new_stale + known_stale
+                    new_stale, known_stale, never_traded = self._stream.get_stale_tickers(
+                        stale_seconds=300.0,
+                    )
+                    stale = new_stale + known_stale + never_traded
                     if new_stale:
                         logger.warning(
                             "No stream trade in 5 min for %d ticker(s): %s — "
-                            "possible low-volume or subscription issue",
+                            "possible subscription issue",
                             len(new_stale), sorted(new_stale),
+                        )
+                    if never_traded:
+                        logger.info(
+                            "No stream trade yet for %d ticker(s): %s — "
+                            "likely low-volume",
+                            len(never_traded), sorted(never_traded),
                         )
                     if known_stale:
                         logger.debug(
-                            "Still stale (IEX low-volume expected): %s",
+                            "Still stale (low-volume expected): %s",
                             sorted(known_stale),
                         )
                     # IEX fallback: evaluate stale tickers via REST snapshot

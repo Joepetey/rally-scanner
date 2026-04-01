@@ -160,9 +160,11 @@ class TestAlpacaStreamManager:
         mgr._crypto_symbols = {"BTC"}
         # Neither has had a trade
 
-        new_stale, _ = mgr.get_stale_tickers(stale_seconds=300.0)
-        assert "AAPL" in new_stale
-        assert "BTC" in new_stale
+        new_stale, _, never_traded = mgr.get_stale_tickers(stale_seconds=300.0)
+        # Never received a trade → categorized as never_traded, not new_stale
+        assert "AAPL" in never_traded
+        assert "BTC" in never_traded
+        assert new_stale == []
 
     def test_is_stream_enabled_true(self, monkeypatch):
         monkeypatch.setenv("ALPACA_API_KEY", "k")
@@ -358,7 +360,7 @@ class TestStreamHealthMonitoring:
 
         mock_stream = MagicMock()
         mock_stream.is_connected = False
-        mock_stream.get_stale_tickers.return_value = ([], [])
+        mock_stream.get_stale_tickers.return_value = ([], [], [])
         scheduler._stream = mock_stream
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
@@ -388,7 +390,7 @@ class TestStreamHealthMonitoring:
 
         mock_stream = MagicMock()
         mock_stream.is_connected = False
-        mock_stream.get_stale_tickers.return_value = ([], [])
+        mock_stream.get_stale_tickers.return_value = ([], [], [])
         scheduler._stream = mock_stream
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
@@ -424,7 +426,7 @@ class TestStreamHealthMonitoring:
 
         # Stream is now connected (recovered)
         mock_stream.is_connected = True
-        mock_stream.get_stale_tickers.return_value = ([], [])
+        mock_stream.get_stale_tickers.return_value = ([], [], [])
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
@@ -454,7 +456,7 @@ class TestStreamHealthMonitoring:
 
         mock_stream = MagicMock()
         mock_stream.is_connected = False
-        mock_stream.get_stale_tickers.return_value = ([], [])
+        mock_stream.get_stale_tickers.return_value = ([], [], [])
         scheduler._stream = mock_stream
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
