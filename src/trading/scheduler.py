@@ -665,7 +665,11 @@ class TradingScheduler:
                         event.alert_type in ("stop_breached", "target_breached")
                         and alpaca_enabled()
                     ):
-                        pos = next((p for p in positions if p["ticker"] == event.ticker), None)
+                        # Reload from DB so execute_breach sees current
+                        # exit order IDs (MIC-102).
+                        pos = _load_position_meta(event.ticker)
+                        if not pos:
+                            pos = next((p for p in positions if p["ticker"] == event.ticker), None)
                         if pos:
                             await self._execute_breach_guarded(
                                 event.ticker, pos, event.current_price, event.alert_type,
@@ -875,8 +879,16 @@ class TradingScheduler:
                 # async_close_position (event loop) may have deleted it between
                 # our cache read above and this point — without this check the
                 # UPSERT would resurrect a position that was intentionally closed.
-                if _load_position_meta(ticker) is not None:
-                    _save_position_meta(pos)
+                db_pos = _load_position_meta(ticker)
+                if db_pos is not None:
+                    # Merge only the price-related fields that update_position_for_price
+                    # may have changed. Writing the full cached pos would overwrite
+                    # target_order_id / trail_order_id set by housekeeping (MIC-102).
+                    for key in ("highest_close", "trailing_stop", "stop_price",
+                                "current_price", "unrealized_pnl_pct"):
+                        if key in pos:
+                            db_pos[key] = pos[key]
+                    _save_position_meta(db_pos)
                     self._invalidate_positions_cache()
 
         event = self._engine.evaluate_single_ticker(ticker, price, pos)
@@ -893,6 +905,11 @@ class TradingScheduler:
         await self._on_event(event)
 
         if event.alert_type in ("stop_breached", "target_breached") and alpaca_enabled():
+            # Reload from DB so execute_breach sees current exit order IDs
+            # (the cached pos may be stale and missing target_order_id / trail_order_id).
+            fresh = _load_position_meta(event.ticker)
+            if fresh is not None:
+                pos = fresh
             await self._execute_breach_guarded(event.ticker, pos, price, event.alert_type)
             # run_risk_evaluation inside _execute_breach_guarded can mutate DB
             # (tighten stops, close positions) after re-populating the cache —

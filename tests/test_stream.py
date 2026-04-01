@@ -506,6 +506,7 @@ class TestAlertEngineEvaluateSingleTicker:
         quotes = {"AAPL": {"price": 102.5}}  # above 2% lock level
 
         with patch("trading.engine.save_position_meta") as mock_save, \
+             patch("trading.engine.load_position_meta", return_value=pos), \
              patch("trading.engine.log_price_alert", return_value=False):
             _ = await self.engine.check_prices([pos], quotes)
 
@@ -642,6 +643,42 @@ class TestTradingSchedulerIntegration:
             scheduler._on_stream_trade("AAPL", 94.0)
 
         mock_save.assert_called_once_with(pos)
+
+    def test_stream_write_preserves_exit_order_ids(self):
+        """MIC-102: stream callback must not overwrite target_order_id / trail_order_id.
+
+        The cached position may lack exit order IDs that housekeeping just saved.
+        The stream callback must merge price updates onto the DB-fresh position
+        so exit order IDs are preserved.
+        """
+        from trading.scheduler import TradingScheduler
+
+        scheduler = TradingScheduler(on_event=AsyncMock())
+        scheduler._loop = MagicMock()
+
+        # Cached position has NO exit order IDs (stale cache)
+        cached_pos = _make_pos(entry=100.0, stop=95.0, target=110.0)
+        cached_pos["highest_close"] = 105.0  # price update from stream
+
+        # DB position has exit order IDs (set by housekeeping)
+        db_pos = _make_pos(entry=100.0, stop=95.0, target=110.0)
+        db_pos["target_order_id"] = "target-order-123"
+        db_pos["trail_order_id"] = "trail-order-456"
+
+        with patch("trading.scheduler.load_positions", return_value={"positions": [cached_pos]}), \
+             patch("trading.scheduler.update_position_for_price", return_value=True), \
+             patch("trading.scheduler._load_position_meta", return_value=db_pos), \
+             patch("trading.scheduler._save_position_meta") as mock_save, \
+             patch.object(scheduler._engine, "is_market_open", return_value=True), \
+             patch.object(scheduler._engine, "evaluate_single_ticker", return_value=None):
+            scheduler._on_stream_trade("AAPL", 94.0)
+
+        mock_save.assert_called_once_with(db_pos)
+        # Exit order IDs must be preserved from DB, not overwritten to None
+        assert db_pos["target_order_id"] == "target-order-123"
+        assert db_pos["trail_order_id"] == "trail-order-456"
+        # Price update from cache must be merged onto DB position
+        assert db_pos["highest_close"] == 105.0
 
     @pytest.mark.asyncio
     async def test_concurrent_exit_guard_prevents_double_exit(self):

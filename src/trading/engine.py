@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 import config
 from db.events import log_order, log_price_alert
-from db.positions import load_positions, save_position_meta
+from db.positions import load_position_meta, load_positions, save_position_meta
 from integrations.alpaca.executor import (
     cancel_exit_orders,
     check_pending_fills,
@@ -246,7 +246,19 @@ class AlertEngine:
             price = quote["price"]
 
             if update_position_for_price(pos, price):
-                await asyncio.to_thread(save_position_meta, pos)
+                # Merge price updates onto DB-fresh position to avoid
+                # overwriting exit order IDs set by housekeeping (MIC-102).
+                def _merge_and_save(ticker: str, pos: dict) -> None:
+                    db_pos = load_position_meta(ticker)
+                    if db_pos is None:
+                        return
+                    for key in ("highest_close", "trailing_stop", "stop_price",
+                                "current_price", "unrealized_pnl_pct"):
+                        if key in pos:
+                            db_pos[key] = pos[key]
+                    save_position_meta(db_pos)
+
+                await asyncio.to_thread(_merge_and_save, ticker, pos)
 
             event = self.evaluate_single_ticker(ticker, price, pos)
             if event:
