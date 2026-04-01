@@ -1,4 +1,4 @@
-"""Tests for Discord agent tool validation — integrations/discord/agent.py (MIC-99).
+"""Tests for trading ops service layer — services/trading_ops.py (MIC-99).
 
 Tests tool execution functions, dollar metrics, capital validation, and tool schema.
 """
@@ -6,74 +6,74 @@ Tests tool execution functions, dollar metrics, capital validation, and tool sch
 import sys
 from unittest.mock import MagicMock, patch
 
+from services.trading_ops import (
+    dollar_metrics,
+    set_capital_amount,
+)
+
 # Stub anthropic before importing agent (it imports at module level)
 sys.modules.setdefault("anthropic", MagicMock())
-
-from integrations.discord.agent import (  # noqa: E402
-    TOOLS,
-    _dollar_metrics,
-    _set_capital,
-)
+from integrations.discord.agent import TOOLS  # noqa: E402
 
 DISCORD_ID = 12345
 
 
 # ---------------------------------------------------------------------------
-# _dollar_metrics
+# dollar_metrics
 # ---------------------------------------------------------------------------
 
 
 class TestDollarMetrics:
 
     def test_basic_calculation(self):
-        metrics = _dollar_metrics(capital=10000, size=0.05, entry=100.0)
+        metrics = dollar_metrics(capital=10000, size=0.05, entry=100.0)
         assert metrics["dollar_allocation"] == 500.0
 
     def test_with_stop(self):
-        metrics = _dollar_metrics(capital=10000, size=0.05, entry=100.0, stop=95.0)
+        metrics = dollar_metrics(capital=10000, size=0.05, entry=100.0, stop=95.0)
         assert metrics["dollar_allocation"] == 500.0
         # dollar_risk = 500 * (100-95)/100 = 25
         assert metrics["dollar_risk"] == 25.0
 
 
 # ---------------------------------------------------------------------------
-# _set_capital
+# set_capital_amount
 # ---------------------------------------------------------------------------
 
 
 class TestSetCapital:
 
     def test_zero_capital_rejected(self):
-        result = _set_capital(DISCORD_ID, 0)
+        result = set_capital_amount(DISCORD_ID, 0)
         assert "error" in result
 
     def test_negative_capital_rejected(self):
-        result = _set_capital(DISCORD_ID, -5000)
+        result = set_capital_amount(DISCORD_ID, -5000)
         assert "error" in result
 
 
 # ---------------------------------------------------------------------------
-# _enter_trade
+# enter_trade
 # ---------------------------------------------------------------------------
 
 
 class TestEnterTrade:
 
-    @patch("integrations.discord.agent.get_merged_positions_sync")
-    @patch("integrations.discord.agent.open_trade", return_value=1)
+    @patch("services.trading_ops.get_merged_positions_sync")
+    @patch("services.trading_ops.open_trade", return_value=1)
     def test_basic_entry(self, mock_open, mock_positions):
-        from integrations.discord.agent import _enter_trade
+        from services.trading_ops import enter_trade
 
         mock_positions.return_value = {"positions": []}
-        result = _enter_trade(DISCORD_ID, {"ticker": "aapl", "price": 150.0}, 10000.0)
+        result = enter_trade(DISCORD_ID, {"ticker": "aapl", "price": 150.0}, 10000.0)
         assert result["ticker"] == "AAPL"
         assert result["entry_price"] == 150.0
         assert result["trade_id"] == 1
 
-    @patch("integrations.discord.agent.get_merged_positions_sync")
-    @patch("integrations.discord.agent.open_trade", return_value=2)
+    @patch("services.trading_ops.get_merged_positions_sync")
+    @patch("services.trading_ops.open_trade", return_value=2)
     def test_auto_fills_from_system_signal(self, mock_open, mock_positions):
-        from integrations.discord.agent import _enter_trade
+        from services.trading_ops import enter_trade
 
         mock_positions.return_value = {
             "positions": [{
@@ -81,7 +81,7 @@ class TestEnterTrade:
                 "stop_price": 140.0, "target_price": 170.0,
             }],
         }
-        result = _enter_trade(
+        result = enter_trade(
             DISCORD_ID,
             {"ticker": "nvda", "price": 155.0},
             10000.0,
@@ -96,43 +96,43 @@ class TestEnterTrade:
 
 
 # ---------------------------------------------------------------------------
-# _exit_trade
+# exit_trade
 # ---------------------------------------------------------------------------
 
 
 class TestExitTrade:
 
-    @patch("integrations.discord.agent.close_trade")
+    @patch("services.trading_ops.close_trade")
     def test_successful_exit(self, mock_close):
-        from integrations.discord.agent import _exit_trade
+        from services.trading_ops import exit_trade
 
         mock_close.return_value = {
             "ticker": "AAPL", "entry_price": 100.0, "exit_price": 110.0,
             "pnl_pct": 10.0, "size": 0.10, "entry_date": "2024-01-10",
             "exit_date": "2024-01-20",
         }
-        result = _exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
+        result = exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
         assert result["pnl_pct"] == 10.0
         assert result["ticker"] == "AAPL"
 
-    @patch("integrations.discord.agent.close_trade", return_value=None)
+    @patch("services.trading_ops.close_trade", return_value=None)
     def test_no_open_trade(self, mock_close):
-        from integrations.discord.agent import _exit_trade
+        from services.trading_ops import exit_trade
 
-        result = _exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
+        result = exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
         assert "error" in result
 
 
 # ---------------------------------------------------------------------------
-# _get_system_positions
+# get_system_positions
 # ---------------------------------------------------------------------------
 
 
 class TestGetSystemPositions:
 
-    @patch("integrations.discord.agent.get_merged_positions_sync")
+    @patch("services.trading_ops.get_merged_positions_sync")
     def test_with_positions(self, mock_positions):
-        from integrations.discord.agent import _get_system_positions
+        from services.trading_ops import get_system_positions
 
         mock_positions.return_value = {
             "positions": [
@@ -144,7 +144,7 @@ class TestGetSystemPositions:
                  "unrealized_pnl_pct": -2.5, "bars_held": 1},
             ],
         }
-        result = _get_system_positions(DISCORD_ID, 10000.0)
+        result = get_system_positions(DISCORD_ID, 10000.0)
         assert result["count"] == 2
         assert len(result["positions"]) == 2
         # Dollar metrics calculated

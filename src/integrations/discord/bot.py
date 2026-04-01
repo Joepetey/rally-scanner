@@ -7,19 +7,16 @@ Receives typed events, converts them to Discord embeds, and sends them.
 import asyncio
 import logging
 import os
-import queue
-import time as _time
 import traceback
 from collections.abc import Awaitable, Callable
 
 import discord
 from discord.ext import commands
 
-from core.persistence import load_manifest
 from db.conversations import get_conversation_history, save_conversation_history
 from db.events import log_discord_message
 from db.users import ensure_user
-from pipeline.retrain import retrain_all
+from services.async_tasks import run_retrain, run_simulation
 from trading.engine import (
     AlertEvent,
     ExitResult,
@@ -71,153 +68,6 @@ def _ensure_caller(interaction: discord.Interaction) -> None:
 def _ensure_caller_from_message(message: discord.Message) -> None:
     """Auto-register user from message (not interaction)."""
     ensure_user(message.author.id, str(message.author))
-
-
-# ---------------------------------------------------------------------------
-# Module-level task helpers (MIC-129, MIC-130)
-# ---------------------------------------------------------------------------
-
-async def _run_retrain_task(
-    channel: discord.abc.Messageable,
-    tickers: list[str] | None = None,
-) -> None:
-    """Run model retraining with live progress updates."""
-    try:
-        await channel.send(
-            "🔄 **Starting model retraining...**\n"
-            "This will take 10-30+ minutes depending on the number of tickers."
-        )
-
-        start_time = _time.time()
-        progress_queue: queue.Queue[tuple[int, int, int, int]] = queue.Queue()
-
-        def on_progress(done: int, total: int, success: int, failed: int) -> None:
-            try:
-                progress_queue.get_nowait()
-            except queue.Empty:
-                pass
-            progress_queue.put((done, total, success, failed))
-
-        async def send_updates() -> None:
-            while True:
-                await asyncio.sleep(300)
-                elapsed_min = int((_time.time() - start_time) / 60)
-                try:
-                    done, total, success, failed = progress_queue.get_nowait()
-                    pct = int(done / total * 100) if total else 0
-                    await channel.send(
-                        f"⏳ **Retraining... {elapsed_min}m elapsed**\n"
-                        f"• Progress: {done}/{total} ({pct}%)\n"
-                        f"• Success: {success} | Failed: {failed}"
-                    )
-                except queue.Empty:
-                    await channel.send(
-                        f"⏳ **Retraining... {elapsed_min}m elapsed** (fetching data)"
-                    )
-
-        update_task = asyncio.create_task(send_updates())
-        try:
-            await asyncio.to_thread(retrain_all, tickers, False, on_progress)
-        finally:
-            update_task.cancel()
-            try:
-                await update_task
-            except asyncio.CancelledError:
-                pass
-
-        elapsed = _time.time() - start_time
-        minutes = int(elapsed / 60)
-        seconds = int(elapsed % 60)
-        try:
-            done, total, success, failed = progress_queue.get_nowait()
-        except queue.Empty:
-            manifest = load_manifest()
-            success = len(manifest) if manifest else 0
-            failed = 0
-            total = success
-
-        await channel.send(
-            f"✅ **Retraining complete!**\n"
-            f"• Trained: {success}/{total} models\n"
-            f"• Failed: {failed}\n"
-            f"• Time: {minutes}m {seconds}s\n"
-            f"• You can now run scans to find signals!"
-        )
-    except Exception as e:
-        logger.exception("Retrain task failed")
-        await channel.send(f"❌ **Retraining failed:** {str(e)}")
-
-
-async def _simulate_command(
-    ctx: commands.Context, scenario: str = "", *, rest: str = "",
-) -> None:
-    """Run a BTC-USD paper trading simulation: !simulate <target|stop|trail|time> [equity]."""  # noqa: E501
-    from integrations.alpaca.broker import simulation_keys
-    from simulation.runner import SimulationRunner
-
-    equity_override: float = 0.0
-    if rest.strip():
-        try:
-            equity_override = float(rest.strip())
-        except ValueError:
-            await ctx.send(f"⚠️ Invalid equity value: `{rest.strip()}` — must be a number.")
-            return
-
-    if not scenario:
-        await ctx.send(
-            "Usage: `!simulate <scenario> [equity]`\n"
-            "Scenarios: `target` `stop` `trail` `time`"
-        )
-        return
-
-    scheduler = ctx.bot.scheduler
-    if scheduler is None:
-        await ctx.send("⚠️ Scheduler not initialised — cannot run simulation.")
-        return
-
-    try:
-        sim_ctx = simulation_keys()
-        sim_ctx.__enter__()
-    except RuntimeError as e:
-        await ctx.send(f"⚠️ {e}")
-        return
-
-    try:
-        if equity_override > 0:
-            equity = equity_override
-        else:
-            try:
-                from integrations.alpaca.executor import get_account_equity
-                equity = await get_account_equity()
-            except Exception as e:
-                await ctx.send(f"⚠️ Could not fetch account equity: {e}")
-                return
-
-        inject_fn = scheduler._stream.inject_trade if scheduler._stream else None
-
-        async def send_embed(embed_dict: dict) -> None:
-            await ctx.send(embed=discord.Embed.from_dict(embed_dict))
-
-        runner = SimulationRunner(inject_fn=inject_fn)
-
-        await ctx.send(
-            f"▶️ **Simulation starting** — scenario: `{scenario}` | equity: `${equity:,.0f}`\n"
-            f"BTC paper order will be placed on simulation account. Results follow..."
-        )
-        result = await runner.run(scenario, equity, send_embed)
-
-        if result.success:
-            pnl = result.realized_pnl_pct or 0.0
-            sign = "+" if pnl >= 0 else ""
-            await ctx.send(
-                f"✅ **Simulation complete** — `{scenario}`\n"
-                f"Entry: `${result.entry_price:,.2f}` → Exit: `${result.exit_price:,.2f}`\n"
-                f"Reason: `{result.exit_reason}` | PnL: `{sign}{pnl:.2f}%`"
-            )
-        else:
-            await ctx.send(f"❌ **Simulation failed** — `{scenario}`\n{result.error}")
-    finally:
-        sim_ctx.__exit__(None, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +294,35 @@ def make_bot(token: str) -> RallyBot:
     """Create and configure the agentic Discord bot."""
     bot = RallyBot()
 
-    # Register simulate command
-    bot.command(name="simulate")(_simulate_command)
+    # Register simulate command — thin adapter to services layer
+    @bot.command(name="simulate")
+    async def _simulate_cmd(
+        ctx: commands.Context, scenario: str = "", *, rest: str = "",
+    ) -> None:
+        equity_override: float = 0.0
+        if rest.strip():
+            try:
+                equity_override = float(rest.strip())
+            except ValueError:
+                await ctx.send(
+                    f"\u26a0\ufe0f Invalid equity value: `{rest.strip()}` \u2014 must be a number."
+                )
+                return
+
+        scheduler = ctx.bot.scheduler
+        if scheduler is None:
+            await ctx.send("\u26a0\ufe0f Scheduler not initialised \u2014 cannot run simulation.")
+            return
+
+        inject_fn = scheduler._stream.inject_trade if scheduler._stream else None
+
+        async def send(text: str) -> None:
+            await ctx.send(text)
+
+        async def send_embed(embed_dict: dict) -> None:
+            await ctx.send(embed=discord.Embed.from_dict(embed_dict))
+
+        await run_simulation(scenario, equity_override, inject_fn, send, send_embed)
 
     # ------------------------------------------------------------------
     # Message handler for natural language interaction via Claude
@@ -504,9 +381,11 @@ def make_bot(token: str) -> RallyBot:
 
                 for task in async_tasks:
                     if task.get("_async_task") == "retrain":
-                        asyncio.create_task(_run_retrain_task(
-                            message.channel,
-                            task.get("tickers")
+                        async def _send(text: str, ch=message.channel) -> None:
+                            await ch.send(text)
+                        asyncio.create_task(run_retrain(
+                            _send,
+                            task.get("tickers"),
                         ))
 
             except Exception as e:
