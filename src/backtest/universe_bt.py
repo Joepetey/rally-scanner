@@ -18,6 +18,7 @@ Usage:
 import argparse
 import json
 import logging
+import multiprocessing
 import os
 import pickle
 import time
@@ -138,7 +139,10 @@ def cache_all_predictions(tickers: list[str], resume: bool = False) -> dict[str,
     success, failed = 0, 0
     t_start = time.time()
 
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=multiprocessing.get_context("forkserver"),
+    ) as executor:
         futures = {}
         for ticker in fetched:
             future = executor.submit(

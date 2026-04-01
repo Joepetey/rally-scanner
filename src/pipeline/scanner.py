@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import logging
+import multiprocessing
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -229,7 +230,10 @@ def scan_all(
     ]
 
     results = []
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=multiprocessing.get_context("forkserver"),
+    ) as pool:
         futures = {
             pool.submit(_scan_one, item): item[0]
             for item in work_items
@@ -452,7 +456,10 @@ def scan_watchlist(
     ]
 
     results = []
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=multiprocessing.get_context("forkserver"),
+    ) as pool:
         futures = {
             pool.submit(_scan_one, item): item[0]
             for item in work_items

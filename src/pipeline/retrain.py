@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import logging
+import multiprocessing
 import os
 import time
 import warnings
@@ -171,7 +172,10 @@ def retrain_all(
     success, failed = [], []
     t0_train = time.time()
 
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=multiprocessing.get_context("forkserver"),
+    ) as executor:
         futures = {}
         for ticker in fetched:
             future = executor.submit(
