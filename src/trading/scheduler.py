@@ -317,13 +317,7 @@ class TradingScheduler:
                 scan_equity = equity
 
                 # Sell SGOV to cover capital gap for new entries
-                if sgov_enabled() and signals:
-                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    _needed = sum(s.get("size", 0) for s in signals)
-                    _gap = max(_needed - _available, 0.0)
-                    sgov_sell = await sell_sgov(equity, _gap)
-                    if sgov_sell and sgov_sell.success:
-                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
+                await self._manage_sgov("sell", equity, orders, signals)
 
                 if signals:
                     entry_results = await execute_entries(signals, equity=equity)
@@ -406,11 +400,7 @@ class TradingScheduler:
                     orders.extend([r.model_dump() for r in q_results])
 
                 # Park idle capital in SGOV
-                if sgov_enabled():
-                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    sgov_buy = await buy_sgov(equity, idle)
-                    if sgov_buy and sgov_buy.success:
-                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
+                await self._manage_sgov("buy", equity, orders)
 
             except Exception:
                 logger.exception("Alpaca execution failed during %s scan", scan_type)
@@ -569,13 +559,7 @@ class TradingScheduler:
                 signals = [s for s in signals if s["ticker"] not in open_tickers]
 
                 # Sell SGOV to cover capital gap for new entries
-                if sgov_enabled() and signals:
-                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    _needed = sum(s.get("size", 0) for s in signals)
-                    _gap = max(_needed - _available, 0.0)
-                    sgov_sell = await sell_sgov(equity, _gap)
-                    if sgov_sell and sgov_sell.success:
-                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
+                await self._manage_sgov("sell", equity, orders, signals)
 
                 if signals:
                     entry_results = await execute_entries(signals, equity=equity)
@@ -652,11 +636,7 @@ class TradingScheduler:
                     orders.extend([r.model_dump() for r in q_results])
 
                 # Park idle capital in SGOV
-                if sgov_enabled():
-                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    sgov_buy = await buy_sgov(equity, idle)
-                    if sgov_buy and sgov_buy.success:
-                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
+                await self._manage_sgov("buy", equity, orders)
 
             except Exception:
                 logger.exception("Alpaca execution failed during market-open execute")
@@ -1282,3 +1262,30 @@ class TradingScheduler:
                 "signal": bool(r.get("signal")),
             })
         _db_save_watchlist(watchlist, scan_date=_date.today())
+
+    async def _manage_sgov(
+        self,
+        action: str,
+        equity: float,
+        orders: list[dict],
+        signals: list[dict] | None = None,
+    ) -> None:
+        """Sell or buy SGOV for capital management.
+
+        action: "sell" (before entries, gap-sized) | "buy" (after entries, idle capital).
+        """
+        if not sgov_enabled():
+            return
+        if action == "sell":
+            if not signals:
+                return
+            _available = PARAMS.max_portfolio_exposure - get_total_exposure()
+            _needed = sum(s.get("size", 0) for s in signals)
+            result = await sell_sgov(equity, max(_needed - _available, 0.0))
+            order_type = "sgov_sell"
+        else:
+            idle = PARAMS.max_portfolio_exposure - get_total_exposure()
+            result = await buy_sgov(equity, idle)
+            order_type = "sgov_buy"
+        if result and result.success:
+            orders.append({"type": order_type, "result": result.model_dump()})
