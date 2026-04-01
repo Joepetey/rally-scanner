@@ -5,9 +5,7 @@ DB persistence is handled by db.positions.
 Broker source of truth is Alpaca API.
 """
 
-import asyncio
 import logging
-from datetime import datetime
 
 from config import PARAMS, TICKER_TO_GROUP
 from db.positions import (
@@ -15,20 +13,28 @@ from db.positions import (
     delete_position_meta,
     dequeue_signals,
     get_unevaluated_skipped,
-    load_all_position_meta,
-    load_position_meta,
-    load_positions,
     record_closed_position,
     save_position_meta,
     save_positions,
     update_skipped_outcome,
 )
-from integrations.alpaca.broker import get_all_positions
+from trading.position_exits import (  # noqa: F401 — re-export
+    async_close_position,
+    close_position_by_trail_fill,
+    close_position_intraday,
+    get_group_exposure,
+    get_total_exposure,
+    get_trail_order_ids,
+    update_fill_prices,
+)
+from trading.position_sync import (  # noqa: F401 — re-export
+    _positions_lock,
+    get_merged_positions,
+    get_merged_positions_sync,
+    sync_positions_from_alpaca,
+)
 
 logger = logging.getLogger(__name__)
-
-# Async lock for concurrent position writes (scan + price alerts)
-_positions_lock = asyncio.Lock()
 
 __all__ = [
     "get_merged_positions",
@@ -50,129 +56,6 @@ __all__ = [
     "update_skipped_outcomes",
     "sync_positions_from_alpaca",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Alpaca merge — source of truth for which positions are open
-# ---------------------------------------------------------------------------
-
-async def get_merged_positions(equity: float = 0.0) -> dict:
-    """Sync with Alpaca broker state then return DB positions."""
-    await sync_positions_from_alpaca(equity=equity)
-    return load_positions()
-
-
-async def _sync_close_broker_exits(
-    closed_tickers: set[str], meta_map: dict,
-) -> None:
-    """Case 3: in DB but gone from Alpaca — broker closed the position."""
-    from integrations.alpaca.executor import get_recent_sell_fills
-
-    fills = await get_recent_sell_fills(list(closed_tickers)) if closed_tickers else {}
-    for ticker in closed_tickers:
-        pos = meta_map[ticker]
-        fill_price = fills.get(ticker, 0.0)
-        pnl = (
-            round((fill_price / pos["entry_price"] - 1) * 100, 2)
-            if fill_price and pos.get("entry_price") else 0.0
-        )
-        pos["exit_price"] = fill_price
-        pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
-        pos["exit_reason"] = "broker_closed"
-        pos["realized_pnl_pct"] = pnl
-        pos["status"] = "closed"
-        delete_position_meta(ticker)
-        record_closed_position(pos)
-        logger.info("sync: closed %s (broker_closed), fill=%.4f", ticker, fill_price)
-
-
-def _sync_insert_untracked(
-    inserted_tickers: set[str], broker_map: dict, equity: float,
-) -> None:
-    """Case 2: in Alpaca but not in DB — insert with PARAMS-derived stops."""
-    p = PARAMS
-    for ticker in inserted_tickers:
-        bp = broker_map[ticker]
-        entry = bp["avg_entry_price"]
-        atr_val = round(entry * p.default_atr_pct, 4)
-        size = round(bp["market_value"] / equity, 4) if equity > 0 else 0.0
-        current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else entry
-        pnl = round((current / entry - 1) * 100, 2) if entry else 0.0
-        new_pos = {
-            "ticker": ticker,
-            "qty": bp["qty"],
-            "entry_price": entry,
-            "entry_date": datetime.now().strftime("%Y-%m-%d"),
-            "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
-            "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
-            "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
-            "highest_close": max(entry, current),
-            "atr": atr_val,
-            "bars_held": 0,
-            "size": size,
-            "current_price": current,
-            "unrealized_pnl_pct": pnl,
-            "p_rally": 0.0,
-            "status": "open",
-        }
-        save_position_meta(new_pos)
-        logger.warning("sync: inserted untracked position %s (size=%.1f%%)", ticker, size * 100)
-
-
-def _sync_update_matched(
-    matched_tickers: set[str], broker_map: dict, meta_map: dict, equity: float,
-) -> None:
-    """Case 1: in both — update qty/entry/current_price from broker."""
-    for ticker in matched_tickers:
-        bp = broker_map[ticker]
-        pos = meta_map[ticker]
-        pos["qty"] = bp["qty"]
-        pos["entry_price"] = bp["avg_entry_price"]
-        current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else pos["entry_price"]
-        pos["current_price"] = current
-        pos["unrealized_pnl_pct"] = round(
-            (current / pos["entry_price"] - 1) * 100, 2
-        ) if pos["entry_price"] else 0.0
-        if equity > 0:
-            pos["size"] = round(bp["market_value"] / equity, 4)
-        save_position_meta(pos)
-
-
-async def sync_positions_from_alpaca(equity: float = 0.0) -> dict:
-    """Reconcile DB with Alpaca broker state.
-
-    Three cases:
-    1. In Alpaca + in DB  → update qty/entry_price/current_price from broker
-    2. In Alpaca, not DB  → insert with broker values and PARAMS-derived stops
-    3. In DB, not Alpaca  → broker closed it; recover fill price, delete + record closed
-    """
-    async with _positions_lock:
-        broker_list = await get_all_positions()
-        broker_map = {p["ticker"]: p for p in broker_list}
-        meta_list = load_all_position_meta()
-        meta_map = {p["ticker"]: p for p in meta_list}
-
-        broker_tickers = set(broker_map)
-        db_tickers = set(meta_map)
-
-        closed_tickers = db_tickers - broker_tickers
-        inserted_tickers = broker_tickers - db_tickers
-        matched_tickers = broker_tickers & db_tickers
-
-        await _sync_close_broker_exits(closed_tickers, meta_map)
-        _sync_insert_untracked(inserted_tickers, broker_map, equity)
-        _sync_update_matched(matched_tickers, broker_map, meta_map, equity)
-
-        return {
-            "synced": len(matched_tickers),
-            "closed": len(closed_tickers),
-            "inserted": len(inserted_tickers),
-        }
-
-
-def get_merged_positions_sync() -> dict:
-    """DB-only read; sync is handled proactively by the scheduler."""
-    return load_positions()
 
 
 # ---------------------------------------------------------------------------
@@ -374,88 +257,8 @@ def update_positions(
 
 
 # ---------------------------------------------------------------------------
-# Intraday operations
-# ---------------------------------------------------------------------------
-
-def close_position_intraday(ticker: str, price: float, reason: str) -> dict | None:
-    """Close a single position during market hours. Returns closed position or None."""
-    pos = load_position_meta(ticker)
-    if pos is None:
-        return None
-
-    pos["exit_reason"] = reason
-    pos["exit_price"] = price
-    pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
-    pos["realized_pnl_pct"] = round((price / pos["entry_price"] - 1) * 100, 2)
-    pos["status"] = "closed"
-
-    delete_position_meta(ticker)
-    record_closed_position(pos)
-    return pos
-
-
-async def update_fill_prices(fills: dict[str, float]) -> int:
-    """Update positions that have pending order_ids with actual fill prices."""
-    async with _positions_lock:
-        positions = load_all_position_meta()
-        updated = 0
-        for pos in positions:
-            oid = pos.get("order_id")
-            if oid and oid in fills:
-                fill_price = fills[oid]
-                pos["entry_price"] = fill_price
-                pos["order_id"] = None
-
-                # Recalibrate trailing_stop and highest_close to fill price.
-                # stop_price is left alone — it's set to range_low (ML support level) and is
-                # still valid regardless of fill slippage.
-                p = PARAMS
-                atr_val = pos.get("atr", fill_price * p.default_atr_pct)
-                pos["trailing_stop"] = round(fill_price - p.trailing_stop_atr_mult * atr_val, 4)
-                pos["highest_close"] = fill_price
-
-                save_position_meta(pos)
-                updated += 1
-        return updated
-
-
-def get_trail_order_ids() -> dict[str, str]:
-    """Return {ticker: trail_order_id} for positions with trailing stops."""
-    positions = load_all_position_meta()
-    return {
-        pos["ticker"]: pos["trail_order_id"]
-        for pos in positions
-        if pos.get("trail_order_id")
-    }
-
-
-def close_position_by_trail_fill(ticker: str, fill_price: float) -> dict | None:
-    """Close a position whose trailing stop filled at the broker."""
-    return close_position_intraday(ticker, fill_price, "trail_stop_filled")
-
-
-def get_total_exposure() -> float:
-    """Return sum of size (fraction of equity) across all open positions."""
-    return sum(p.get("size", 0) for p in load_all_position_meta())
-
-
-def get_group_exposure(group: str) -> tuple[int, float]:
-    """Return (count, total_exposure) for positions in the given asset group."""
-    matched = [p for p in load_all_position_meta() if TICKER_TO_GROUP.get(p["ticker"]) == group]
-    return len(matched), sum(p.get("size", 0) for p in matched)
-
-
-# ---------------------------------------------------------------------------
 # Async helpers
 # ---------------------------------------------------------------------------
-
-async def async_close_position(
-    ticker: str, price: float, reason: str,
-) -> dict | None:
-    """Thread-safe close via asyncio.Lock."""
-    async with _positions_lock:
-        return close_position_intraday(ticker, price, reason)
-
 
 async def async_save_positions(state: dict) -> None:
     """Thread-safe save via asyncio.Lock."""
