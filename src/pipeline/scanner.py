@@ -43,6 +43,8 @@ from trading.signals import compute_position_size, generate_signals
 warnings.filterwarnings("ignore")
 
 LOOKBACK_DAYS = 500  # enough for 252-bar percentile window + buffer
+_MAX_SCAN_WORKERS = 8
+_MAX_WATCHLIST_WORKERS = 4
 
 
 class ScanTask(NamedTuple):
@@ -181,6 +183,58 @@ def _scan_one(task: ScanTask) -> dict:
         return {"ticker": ticker, "status": f"error: {e}"}
 
 
+def _fetch_scan_data(
+    scan_tickers: list[str], start: str, verbose: bool = True,
+) -> tuple["pd.Series | None", dict]:
+    """Fetch VIX and batch OHLCV data for all tickers. Returns (vix_data, ohlcv_cache)."""
+    logger.info("Fetching VIX data...")
+    vix_data = fetch_vix_safe(start=start, verbose=verbose)
+
+    logger.info("Batch-fetching OHLCV data...")
+    try:
+        ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
+    except Exception as e:
+        logger.warning("Batch fetch failed (%s), falling back to individual fetches", e)
+        ohlcv_cache = {}
+
+    return vix_data, ohlcv_cache
+
+
+def _compute_breadth(ok_results: list[dict]) -> None:
+    """Print market breadth statistics to stdout."""
+    above_ma50 = sum(
+        1 for r in ok_results
+        if r["close"] > r.get("ma50", 0) and r.get("ma50", 0) > 0
+    )
+    above_ma200 = sum(1 for r in ok_results if r.get("trend", 0))
+    golden_crosses = sum(1 for r in ok_results if r.get("golden_cross", 0))
+    avg_vix_pctile = np.mean([r.get("vix_pctile", 0.5) for r in ok_results])
+    breadth_50 = above_ma50 / len(ok_results)
+    breadth_200 = above_ma200 / len(ok_results)
+    n = len(ok_results)
+
+    print(f"\n  {'='*86}")
+    print("  MARKET BREADTH")
+    print(f"  {'='*86}")
+    b50_bar = "#" * int(breadth_50 * 40) + "." * (40 - int(breadth_50 * 40))
+    b200_bar = "#" * int(breadth_200 * 40) + "." * (40 - int(breadth_200 * 40))
+    print(f"  Above 50-day MA:  {above_ma50:>3}/{n} ({breadth_50:.0%})  [{b50_bar}]")
+    print(f"  Above 200-day MA: {above_ma200:>3}/{n} ({breadth_200:.0%})  [{b200_bar}]")
+    gc_pct = golden_crosses / n
+    print(f"  Golden crosses:   {golden_crosses:>3}/{n} ({gc_pct:.0%})")
+    if avg_vix_pctile > 0.80:
+        vix_label = "EXTREME FEAR"
+    elif avg_vix_pctile > 0.60:
+        vix_label = "FEAR"
+    elif avg_vix_pctile > 0.40:
+        vix_label = "NEUTRAL"
+    elif avg_vix_pctile > 0.20:
+        vix_label = "GREED"
+    else:
+        vix_label = "EXTREME GREED"
+    print(f"  VIX percentile:   {avg_vix_pctile:.0%} ({vix_label})")
+
+
 def scan_all(
     tickers: list[str] | None = None, show_positions: bool = False,
     config_name: str = "conservative",
@@ -201,18 +255,8 @@ def scan_all(
     else:
         scan_tickers = sorted(manifest.keys())
 
-    # Fetch VIX data once for all tickers
-    logger.info("Fetching VIX data...")
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    vix_data = fetch_vix_safe(start=start)
-
-    # Batch-fetch OHLCV for all tickers at once (much faster than individual fetches)
-    logger.info("Batch-fetching OHLCV data...")
-    try:
-        ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
-    except Exception as e:
-        logger.warning("Batch fetch failed (%s), falling back to individual fetches", e)
-        ohlcv_cache = {}
+    vix_data, ohlcv_cache = _fetch_scan_data(scan_tickers, start)
 
     print(f"\n{'='*90}")
     print(f"  RALLY DETECTOR — DAILY SCAN  [{config_name.upper()}]")
@@ -223,7 +267,7 @@ def scan_all(
     print(f"{'='*90}")
 
     # Scan all tickers in parallel using process pool
-    n_workers = min(8, len(scan_tickers))
+    n_workers = min(_MAX_SCAN_WORKERS, len(scan_tickers))
     work_items = [
         ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
         for ticker in scan_tickers
@@ -267,39 +311,7 @@ def scan_all(
 
     # --- MARKET BREADTH ---
     if ok_results:
-        above_ma50 = sum(
-            1 for r in ok_results
-            if r["close"] > r.get("ma50", 0) and r.get("ma50", 0) > 0
-        )
-        above_ma200 = sum(1 for r in ok_results if r.get("trend", 0))
-        golden_crosses = sum(1 for r in ok_results if r.get("golden_cross", 0))
-        avg_vix_pctile = np.mean([r.get("vix_pctile", 0.5) for r in ok_results])
-        breadth_50 = above_ma50 / len(ok_results)
-        breadth_200 = above_ma200 / len(ok_results)
-
-        print(f"\n  {'='*86}")
-        print("  MARKET BREADTH")
-        print(f"  {'='*86}")
-        # Breadth bar
-        b50_bar = "#" * int(breadth_50 * 40) + "." * (40 - int(breadth_50 * 40))
-        b200_bar = "#" * int(breadth_200 * 40) + "." * (40 - int(breadth_200 * 40))
-        n = len(ok_results)
-        print(f"  Above 50-day MA:  {above_ma50:>3}/{n} ({breadth_50:.0%})  [{b50_bar}]")
-        print(f"  Above 200-day MA: {above_ma200:>3}/{n} ({breadth_200:.0%})  [{b200_bar}]")
-        gc_pct = golden_crosses / n
-        print(f"  Golden crosses:   {golden_crosses:>3}/{n} ({gc_pct:.0%})")
-        # VIX context
-        if avg_vix_pctile > 0.80:
-            vix_label = "EXTREME FEAR"
-        elif avg_vix_pctile > 0.60:
-            vix_label = "FEAR"
-        elif avg_vix_pctile > 0.40:
-            vix_label = "NEUTRAL"
-        elif avg_vix_pctile > 0.20:
-            vix_label = "GREED"
-        else:
-            vix_label = "EXTREME GREED"
-        print(f"  VIX percentile:   {avg_vix_pctile:.0%} ({vix_label})")
+        _compute_breadth(ok_results)
 
     # --- NEW SIGNALS ---
     print(f"\n  {'='*86}")
@@ -441,15 +453,8 @@ def scan_watchlist(
 
     # Fetch data
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    vix_data = fetch_vix_safe(start=start, verbose=False)
-
-    try:
-        ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
-    except Exception:
-        logger.warning("OHLCV batch fetch failed in fast-scan, using empty cache", exc_info=True)
-        ohlcv_cache = {}
-
-    n_workers = min(4, len(scan_tickers))
+    vix_data, ohlcv_cache = _fetch_scan_data(scan_tickers, start, verbose=False)
+    n_workers = min(_MAX_WATCHLIST_WORKERS, len(scan_tickers))
     work_items = [
         ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
         for ticker in scan_tickers
