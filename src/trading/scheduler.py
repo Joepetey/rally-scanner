@@ -24,10 +24,11 @@ from db.positions import (
     delete_position_meta as _del_meta,
 )
 from db.positions import (
-    load_position_meta as _load_position_meta,
+    get_recently_closed_tickers,
+    load_positions,
 )
 from db.positions import (
-    load_positions,
+    load_position_meta as _load_position_meta,
 )
 from db.positions import (
     record_closed_position as _rec_closed,
@@ -279,7 +280,15 @@ class TradingScheduler:
             self._watchlist_tickers = sorted(manifest.keys())
 
         open_tickers = {p["ticker"] for p in positions.get("positions", [])}
-        signals = [s for s in all_signals if s["ticker"] not in open_tickers]
+        cooldown_tickers: set[str] = set()
+        if PARAMS.cooldown_days > 0:
+            cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+            cooled = [s["ticker"] for s in all_signals
+                      if s["ticker"] not in open_tickers and s["ticker"] in cooldown_tickers]
+            if cooled:
+                logger.info("Cooldown filter (%dd): skipping %s", PARAMS.cooldown_days, cooled)
+        signals = [s for s in all_signals
+                   if s["ticker"] not in open_tickers and s["ticker"] not in cooldown_tickers]
 
         # Snapshot positions BEFORE entries so the embed reflects existing
         # open positions only — new entries are shown in the orders/signals section.

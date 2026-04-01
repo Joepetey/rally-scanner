@@ -34,6 +34,7 @@ def simulate_trades_fast(
     require_volume: bool = False,
     spy_trend: pd.Series | None = None,
     limit_sell_on_tp: bool = False,
+    cooldown_days: int = 0,
 ) -> pd.DataFrame:
     """Simulate trades with config-specific parameters.
 
@@ -56,6 +57,8 @@ def simulate_trades_fast(
             than exiting on the same bar.  The order fills on subsequent bars at
             open (if open >= limit price) or at the limit price (if high reaches
             it).  Stops and other exits still fire normally while the limit is live.
+        cooldown_days: Number of bars to skip after closing a position before
+            accepting new signals on the same ticker.  0 = no cooldown (default).
     """
     p = PARAMS
     n = len(preds)
@@ -82,6 +85,7 @@ def simulate_trades_fast(
     limit_sell_active = False  # TP level touched; limit order is live
     limit_sell_price = 0.0
     profit_lock_triggered = False
+    cooldown_until = -1  # bar index at which cooldown expires
 
     for i in range(n):
         # Enter at this bar's open if a signal fired on the previous bar
@@ -175,8 +179,10 @@ def simulate_trades_fast(
                 in_trade = False
                 limit_sell_active = False
                 profit_lock_triggered = False
+                if cooldown_days > 0:
+                    cooldown_until = i + cooldown_days
 
-        if not in_trade and not pending_entry and signal.iloc[i]:
+        if not in_trade and not pending_entry and signal.iloc[i] and i >= cooldown_until:
             # Optional gates at signal bar
             if require_fail_dn and fail_dn[i] <= 0:
                 continue

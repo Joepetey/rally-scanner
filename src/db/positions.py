@@ -123,6 +123,17 @@ def get_closed_today() -> list[dict]:
         return [row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_recently_closed_tickers(days: int) -> set[str]:
+    """Return tickers with exits in the last N calendar days."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT ticker FROM closed_positions WHERE exit_date >= CURRENT_DATE - %s",
+            (days,),
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
 # ---------------------------------------------------------------------------
 # Bulk state operations
 # ---------------------------------------------------------------------------

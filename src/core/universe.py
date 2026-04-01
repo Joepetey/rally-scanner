@@ -100,8 +100,11 @@ def _load_cache() -> dict | None:
 
 
 def _save_cache(tickers: list[str], source: str) -> None:
-    """Save universe to DB cache."""
-    _db_save_cache(tickers, source)
+    """Save universe to DB cache (best-effort — backtest doesn't need DB)."""
+    try:
+        _db_save_cache(tickers, source)
+    except Exception:
+        logger.debug("Could not save universe cache to DB", exc_info=True)
 
 
 def fetch_universe(force_refresh: bool = False) -> list[str]:

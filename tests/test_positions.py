@@ -365,3 +365,35 @@ async def test_sync_closes_position_missing_from_broker(tmp_models_dir):
     assert closed[0]["ticker"] == "MSFT"
     assert closed[0]["exit_reason"] == "broker_closed"
     assert closed[0]["exit_price"] == 405.0
+
+
+def test_get_recently_closed_tickers(tmp_models_dir):
+    """get_recently_closed_tickers returns tickers closed within N days."""
+    from datetime import date, timedelta
+
+    from db.positions import get_recently_closed_tickers, record_closed_position
+
+    # Insert a position closed today
+    record_closed_position({
+        "ticker": "AAPL", "entry_price": 150.0, "entry_date": str(date.today() - timedelta(days=5)),
+        "exit_price": 160.0, "exit_date": str(date.today()),
+        "exit_reason": "profit_target", "realized_pnl_pct": 0.067, "bars_held": 5, "size": 0.10,
+    })
+    # Insert a position closed 20 days ago
+    record_closed_position({
+        "ticker": "OLD", "entry_price": 100.0, "entry_date": str(date.today() - timedelta(days=30)),
+        "exit_price": 95.0, "exit_date": str(date.today() - timedelta(days=20)),
+        "exit_reason": "stop", "realized_pnl_pct": -0.05, "bars_held": 10, "size": 0.08,
+    })
+
+    recent_10 = get_recently_closed_tickers(10)
+    assert "AAPL" in recent_10
+    assert "OLD" not in recent_10
+
+    recent_30 = get_recently_closed_tickers(30)
+    assert "AAPL" in recent_30
+    assert "OLD" in recent_30
+
+    recent_0 = get_recently_closed_tickers(0)
+    assert "AAPL" in recent_0  # closed today
+    assert "OLD" not in recent_0

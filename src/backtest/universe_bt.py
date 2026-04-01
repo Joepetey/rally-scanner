@@ -38,13 +38,13 @@ import numpy as np
 import pandas as pd
 
 from .common import (  # noqa: E402
-    CONFIGS,
     combine_predictions,
     generate_signals_fast,
     simulate_portfolio,
     simulate_trades_fast,
     walk_forward_train,
 )
+from config import CONFIGS  # noqa: E402
 from config import PIPELINE
 from core.calibrate import calibrate_thresholds
 from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix

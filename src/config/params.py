@@ -69,6 +69,7 @@ class Params(BaseModel):
     partial_sizing_enabled: bool = True      # scale down size to fit available capital
     rotation_enabled: bool = True            # exit weakest pos to fund better signal
     rotation_p_rally_margin: float = 0.08   # new signal must exceed weakest by this margin
+    cooldown_days: int = 10                # skip re-entry on tickers closed within N days
 
     # --- Cash parking (SGOV) ---
     sgov_min_idle_fraction: float = 0.02  # don't park if idle < 2% of equity
