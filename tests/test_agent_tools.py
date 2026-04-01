@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 # Stub anthropic before importing agent (it imports at module level)
 sys.modules.setdefault("anthropic", MagicMock())
 
-from integrations.discord.agent import (  # noqa: E402
+from integrations.discord.tool_defs import (  # noqa: E402
     TOOLS,
     _dollar_metrics,
     _set_capital,
@@ -59,10 +59,10 @@ class TestSetCapital:
 
 class TestEnterTrade:
 
-    @patch("integrations.discord.agent.get_merged_positions_sync")
-    @patch("integrations.discord.agent.open_trade", return_value=1)
+    @patch("integrations.discord.tool_defs.get_merged_positions_sync")
+    @patch("integrations.discord.tool_defs.open_trade", return_value=1)
     def test_basic_entry(self, mock_open, mock_positions):
-        from integrations.discord.agent import _enter_trade
+        from integrations.discord.tool_defs import _enter_trade
 
         mock_positions.return_value = {"positions": []}
         result = _enter_trade(DISCORD_ID, {"ticker": "aapl", "price": 150.0}, 10000.0)
@@ -70,10 +70,10 @@ class TestEnterTrade:
         assert result["entry_price"] == 150.0
         assert result["trade_id"] == 1
 
-    @patch("integrations.discord.agent.get_merged_positions_sync")
-    @patch("integrations.discord.agent.open_trade", return_value=2)
+    @patch("integrations.discord.tool_defs.get_merged_positions_sync")
+    @patch("integrations.discord.tool_defs.open_trade", return_value=2)
     def test_auto_fills_from_system_signal(self, mock_open, mock_positions):
-        from integrations.discord.agent import _enter_trade
+        from integrations.discord.tool_defs import _enter_trade
 
         mock_positions.return_value = {
             "positions": [{
@@ -102,9 +102,9 @@ class TestEnterTrade:
 
 class TestExitTrade:
 
-    @patch("integrations.discord.agent.close_trade")
+    @patch("integrations.discord.tool_defs.close_trade")
     def test_successful_exit(self, mock_close):
-        from integrations.discord.agent import _exit_trade
+        from integrations.discord.tool_defs import _exit_trade
 
         mock_close.return_value = {
             "ticker": "AAPL", "entry_price": 100.0, "exit_price": 110.0,
@@ -115,9 +115,9 @@ class TestExitTrade:
         assert result["pnl_pct"] == 10.0
         assert result["ticker"] == "AAPL"
 
-    @patch("integrations.discord.agent.close_trade", return_value=None)
+    @patch("integrations.discord.tool_defs.close_trade", return_value=None)
     def test_no_open_trade(self, mock_close):
-        from integrations.discord.agent import _exit_trade
+        from integrations.discord.tool_defs import _exit_trade
 
         result = _exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
         assert "error" in result
@@ -130,9 +130,9 @@ class TestExitTrade:
 
 class TestGetSystemPositions:
 
-    @patch("integrations.discord.agent.get_merged_positions_sync")
+    @patch("integrations.discord.tool_defs.get_merged_positions_sync")
     def test_with_positions(self, mock_positions):
-        from integrations.discord.agent import _get_system_positions
+        from integrations.discord.tool_defs import _get_system_positions
 
         mock_positions.return_value = {
             "positions": [
