@@ -45,16 +45,6 @@ from db.positions import (
     save_watchlist as _db_save_watchlist,
 )
 from integrations.alpaca.broker import get_all_positions
-from integrations.alpaca.cash_parking import (
-    _TICKER as PARKING_TICKER,
-)
-from integrations.alpaca.cash_parking import (
-    buy_sgov,
-    sell_sgov,
-)
-from integrations.alpaca.cash_parking import (
-    is_enabled as sgov_enabled,
-)
 from integrations.alpaca.executor import (
     check_exit_fills,
     execute_entries,
@@ -84,7 +74,6 @@ from trading.positions import (
     add_signal_positions,
     async_close_position,
     async_save_positions,
-    get_total_exposure,
     process_signal_queue,
     sync_positions_from_alpaca,
     update_existing_positions,
@@ -176,7 +165,7 @@ class TradingScheduler:
                 tickers = {p["ticker"] for p in positions.get("positions", [])}
                 self._stream = AlpacaStreamManager(
                     on_trade=self._on_stream_trade,
-                    excluded={PARKING_TICKER},
+                    excluded=set(),
                 )
                 self._stream.start(tickers)
                 logger.info("AlpacaStreamManager started")
@@ -308,15 +297,6 @@ class TradingScheduler:
                 equity = await get_account_equity()
                 scan_equity = equity
 
-                # Sell SGOV to cover capital gap for new entries
-                if sgov_enabled() and signals:
-                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    _needed = sum(s.get("size", 0) for s in signals)
-                    _gap = max(_needed - _available, 0.0)
-                    sgov_sell = await sell_sgov(equity, _gap)
-                    if sgov_sell and sgov_sell.success:
-                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
-
                 if signals:
                     entry_results = await execute_entries(signals, equity=equity)
                     ok = [r for r in entry_results if r.success]
@@ -397,12 +377,6 @@ class TradingScheduler:
                         await self._store_order_ids(q_results)
                     orders.extend([r.model_dump() for r in q_results])
 
-                # Park idle capital in SGOV
-                if sgov_enabled():
-                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    sgov_buy = await buy_sgov(equity, idle)
-                    if sgov_buy and sgov_buy.success:
-                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
 
             except Exception:
                 logger.exception("Alpaca execution failed during %s scan", scan_type)
@@ -560,15 +534,6 @@ class TradingScheduler:
                 }
                 signals = [s for s in signals if s["ticker"] not in open_tickers]
 
-                # Sell SGOV to cover capital gap for new entries
-                if sgov_enabled() and signals:
-                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    _needed = sum(s.get("size", 0) for s in signals)
-                    _gap = max(_needed - _available, 0.0)
-                    sgov_sell = await sell_sgov(equity, _gap)
-                    if sgov_sell and sgov_sell.success:
-                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
-
                 if signals:
                     entry_results = await execute_entries(signals, equity=equity)
                     ok = [r for r in entry_results if r.success]
@@ -643,12 +608,6 @@ class TradingScheduler:
                         await self._store_order_ids(q_results)
                     orders.extend([r.model_dump() for r in q_results])
 
-                # Park idle capital in SGOV
-                if sgov_enabled():
-                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    sgov_buy = await buy_sgov(equity, idle)
-                    if sgov_buy and sgov_buy.success:
-                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
 
             except Exception:
                 logger.exception("Alpaca execution failed during market-open execute")

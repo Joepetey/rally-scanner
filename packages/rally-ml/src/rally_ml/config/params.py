@@ -72,9 +72,6 @@ class Params(BaseModel):
     rotation_p_rally_margin: float = 0.08   # new signal must exceed weakest by this margin
     cooldown_days: int = 10                # skip re-entry on tickers closed within N days
 
-    # --- Cash parking (SGOV) ---
-    sgov_min_idle_fraction: float = 0.02  # don't park if idle < 2% of equity
-
     # --- Real-time streaming ---
     # Override via env vars: ALPACA_STREAM_ENABLED=0, ALPACA_DATA_FEED=sip,
     # STREAM_EVAL_THROTTLE_SECONDS=5

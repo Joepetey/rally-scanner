@@ -150,8 +150,7 @@ class AlpacaStreamManager:
     def update_subscriptions(self, symbols: set[str]) -> None:
         """Diff the symbol set and subscribe/unsubscribe as needed. Thread-safe.
 
-        Automatically excludes non-signal tickers (e.g. SGOV cash parking) that
-        don't need real-time streaming.
+        Automatically excludes non-signal tickers that don't need real-time streaming.
         """
         symbols = symbols - self._excluded
         equity_symbols = {s for s in symbols if not self._is_crypto(s)}
