@@ -7,7 +7,6 @@ Zero Discord imports.
 
 import asyncio
 import logging
-import threading
 import time as _time
 import zoneinfo
 from collections.abc import Awaitable, Callable
@@ -152,28 +151,6 @@ class TradingScheduler:
         self._stream_degraded_cycles: int = 0
         self._stream_alert_sent: bool = False
 
-        # Positions cache: populated on first read, invalidated on any write.
-        # Cuts volume-mount DB reads to near-zero during steady state.
-        self._positions_cache: dict | None = None
-
-        # Threading lock for stream-callback writes. Guards the cache-read →
-        # DB-write sequence in _on_stream_trade against concurrent
-        # async_close_position deletes (which run on the event loop).
-        self._stream_write_lock = threading.Lock()
-
-    # ------------------------------------------------------------------
-    # Positions cache helpers
-    # ------------------------------------------------------------------
-
-    def _load_cached_positions(self) -> dict:
-        """Return cached positions dict; fall back to DB on cache miss."""
-        if self._positions_cache is None:
-            self._positions_cache = load_positions()
-        return self._positions_cache
-
-    def _invalidate_positions_cache(self) -> None:
-        self._positions_cache = None
-
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -190,7 +167,7 @@ class TradingScheduler:
         # Start stream if Alpaca + streaming both enabled
         if alpaca_enabled() and is_stream_enabled():
             try:
-                positions = self._load_cached_positions()
+                positions = load_positions()
                 tickers = {p["ticker"] for p in positions.get("positions", [])}
                 self._stream = AlpacaStreamManager(on_trade=self._on_stream_trade)
                 self._stream.start(tickers)
@@ -277,16 +254,15 @@ class TradingScheduler:
             try:
                 _equity = await get_account_equity()
                 await sync_positions_from_alpaca(equity=_equity)
-                self._invalidate_positions_cache()
+
             except Exception:
                 logger.exception("Alpaca sync failed — using cached positions")
-        positions = self._load_cached_positions()
+        positions = load_positions()
 
         # Detect exits; defer DB commit if Alpaca will confirm them
         positions = await asyncio.to_thread(
             update_existing_positions, positions, results, not alpaca_enabled(),
         )
-        self._invalidate_positions_cache()
         closed = positions.get("closed_today", [])
 
         if closed and not alpaca_enabled():
@@ -341,14 +317,14 @@ class TradingScheduler:
                             {**s, "size": size_map.get(s["ticker"], s["size"])}
                             for s in signals if s["ticker"] in filled_tickers
                         ]
-                        self._invalidate_positions_cache()
-                        fresh_positions = self._load_cached_positions()
+
+                        fresh_positions = load_positions()
                         add_signal_positions(fresh_positions, filled_signals)
-                        self._invalidate_positions_cache()
+
                         await self._store_order_ids(entry_results)
                         # Update stream subscriptions after new entries
                         if self._stream:
-                            all_pos = self._load_cached_positions().get("positions", [])
+                            all_pos = load_positions().get("positions", [])
                             self._stream.update_subscriptions({p["ticker"] for p in all_pos})
                     orders.extend([r.model_dump() for r in entry_results])
 
@@ -383,7 +359,7 @@ class TradingScheduler:
                             _del_meta(pos["ticker"])
                             _rec_closed(pos)
                         record_closed_trades(confirmed_exits)
-                        self._invalidate_positions_cache()
+
                     orders.extend([r.model_dump() for r in exit_results])
 
                 # Re-attempt queued signals freed by today's closes
@@ -399,9 +375,9 @@ class TradingScheduler:
                             {**s, "size": q_size_map.get(s["ticker"], s["size"])}
                             for s in queued if s["ticker"] in {r.ticker for r in q_ok}
                         ]
-                        self._invalidate_positions_cache()
-                        add_signal_positions(self._load_cached_positions(), filled_queued)
-                        self._invalidate_positions_cache()
+
+                        add_signal_positions(load_positions(), filled_queued)
+
                         await self._store_order_ids(q_results)
                     orders.extend([r.model_dump() for r in q_results])
 
@@ -449,7 +425,7 @@ class TradingScheduler:
         results = await asyncio.to_thread(scan_watchlist, self._watchlist_tickers)
         all_signals = [r for r in results if r.get("signal")]
 
-        open_tickers = {p["ticker"] for p in self._load_cached_positions().get("positions", [])}
+        open_tickers = {p["ticker"] for p in load_positions().get("positions", [])}
         signals = [s for s in all_signals if s["ticker"] not in open_tickers]
 
         await self._on_event(WatchlistEvent(signals=signals, scan_type="midday"))
@@ -501,7 +477,7 @@ class TradingScheduler:
         if not PARAMS.proactive_risk_enabled:
             return
 
-        state = self._load_cached_positions()
+        state = load_positions()
         positions = state.get("positions", [])
         if not positions:
             return
@@ -542,14 +518,14 @@ class TradingScheduler:
                 continue
             try:
                 self._housekeeping_cycles += 1
-                state = self._load_cached_positions()
+                state = load_positions()
                 positions = state.get("positions", [])
                 result = await self._engine.run_housekeeping(positions)
-                self._invalidate_positions_cache()
+
                 if result.fills_confirmed or result.orders_placed:
                     await self._on_event(result)
                     if self._stream:
-                        all_pos = self._load_cached_positions().get("positions", [])
+                        all_pos = load_positions().get("positions", [])
                         self._stream.update_subscriptions({p["ticker"] for p in all_pos})
 
                 # Stale price check + IEX REST fallback every 2 housekeeping cycles
@@ -575,7 +551,7 @@ class TradingScheduler:
                         try:
                             async with self._snapshot_lock:
                                 snapshots = await get_snapshots(stale)
-                            fresh_state = self._load_cached_positions()
+                            fresh_state = load_positions()
                             fresh_positions = fresh_state.get("positions", [])
                             events = await self._engine.check_prices(
                                 [p for p in fresh_positions if p["ticker"] in snapshots],
@@ -646,7 +622,7 @@ class TradingScheduler:
                     continue
                 self._last_alert_check = now
 
-                state = self._load_cached_positions()
+                state = load_positions()
                 positions = state.get("positions", [])
                 if not positions:
                     continue
@@ -691,7 +667,7 @@ class TradingScheduler:
             if not alpaca_enabled() or not self._engine.is_market_open():
                 continue
             try:
-                state = self._load_cached_positions()
+                state = load_positions()
                 positions = state.get("positions", [])
                 filled = await check_exit_fills(positions)
                 for fill in filled:
@@ -704,7 +680,7 @@ class TradingScheduler:
                     )
                     pos = await async_close_position(ticker, fill_price, exit_reason)
                     if pos:
-                        self._invalidate_positions_cache()
+
                         record_closed_trades([pos])
                         await self._on_event(ExitResult(
                             ticker=ticker,
@@ -714,7 +690,7 @@ class TradingScheduler:
                             bars_held=pos.get("bars_held"),
                         ))
                         if self._stream:
-                            all_pos = self._load_cached_positions().get("positions", [])
+                            all_pos = load_positions().get("positions", [])
                             self._stream.update_subscriptions({p["ticker"] for p in all_pos})
             except Exception:
                 logger.exception("Reconciliation loop error")
@@ -867,29 +843,12 @@ class TradingScheduler:
         if not is_crypto and not self._engine.is_market_open():
             return
 
-        state = self._load_cached_positions()
-        positions = state.get("positions", [])
-        pos = next((p for p in positions if p["ticker"] == ticker), None)
+        pos = _load_position_meta(ticker)
         if not pos:
             return
 
         if update_position_for_price(pos, price):
-            with self._stream_write_lock:
-                # Re-verify the position still exists in DB before writing.
-                # async_close_position (event loop) may have deleted it between
-                # our cache read above and this point — without this check the
-                # UPSERT would resurrect a position that was intentionally closed.
-                db_pos = _load_position_meta(ticker)
-                if db_pos is not None:
-                    # Merge only the price-related fields that update_position_for_price
-                    # may have changed. Writing the full cached pos would overwrite
-                    # target_order_id / trail_order_id set by housekeeping (MIC-102).
-                    for key in ("highest_close", "trailing_stop", "stop_price",
-                                "current_price", "unrealized_pnl_pct"):
-                        if key in pos:
-                            db_pos[key] = pos[key]
-                    _save_position_meta(db_pos)
-                    self._invalidate_positions_cache()
+            _save_position_meta(pos)
 
         event = self._engine.evaluate_single_ticker(ticker, price, pos)
         if event:
@@ -906,15 +865,11 @@ class TradingScheduler:
 
         if event.alert_type in ("stop_breached", "target_breached") and alpaca_enabled():
             # Reload from DB so execute_breach sees current exit order IDs
-            # (the cached pos may be stale and missing target_order_id / trail_order_id).
+            # (pos was loaded on the stream thread and may be stale by now).
             fresh = _load_position_meta(event.ticker)
             if fresh is not None:
                 pos = fresh
             await self._execute_breach_guarded(event.ticker, pos, price, event.alert_type)
-            # run_risk_evaluation inside _execute_breach_guarded can mutate DB
-            # (tighten stops, close positions) after re-populating the cache —
-            # invalidate here so the next read reflects the final persisted state.
-            self._invalidate_positions_cache()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -957,11 +912,11 @@ class TradingScheduler:
             reason = alert_type.replace("_breached", "")
             exit_result = await self._engine.execute_breach(ticker, pos, price, reason)
             if exit_result:
-                self._invalidate_positions_cache()
+
                 await self._on_event(exit_result)
                 await self.run_risk_evaluation()
                 if self._stream:
-                    all_pos = self._load_cached_positions().get("positions", [])
+                    all_pos = load_positions().get("positions", [])
                     self._stream.update_subscriptions({p["ticker"] for p in all_pos})
         finally:
             async with self._exit_lock:
@@ -987,7 +942,7 @@ class TradingScheduler:
 
     async def _store_order_ids(self, results: list) -> None:
         """Persist Alpaca order IDs to position records after entry fills."""
-        state = self._load_cached_positions()
+        state = load_positions()
         for result in results:
             if result.success and result.order_id:
                 for pos in state["positions"]:
@@ -1000,12 +955,11 @@ class TradingScheduler:
                             pos["trail_order_id"] = result.trail_order_id
                         break
         await async_save_positions(state)
-        self._invalidate_positions_cache()
 
     def _has_open_crypto_positions(self) -> bool:
         """True if any open position is a crypto asset."""
         from config import ASSETS
-        positions = self._load_cached_positions().get("positions", [])
+        positions = load_positions().get("positions", [])
         return any(
             ASSETS.get(p["ticker"]) and ASSETS[p["ticker"]].asset_class == "crypto"
             for p in positions

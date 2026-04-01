@@ -164,9 +164,8 @@ class TestCheckPrices:
 
     @pytest.mark.asyncio
     @patch("trading.engine.save_position_meta")
-    @patch("trading.engine.load_position_meta", side_effect=lambda t: _make_pos(t))
     @patch("trading.engine.log_price_alert", return_value=True)
-    async def test_batch_evaluation(self, mock_log, mock_load, mock_save, engine):
+    async def test_batch_evaluation(self, mock_log, mock_save, engine):
         positions = [
             _make_pos("AAPL", entry=100.0, stop=95.0, trailing=0.0, target=110.0),
             _make_pos("MSFT", entry=200.0, stop=190.0, trailing=0.0, target=220.0),

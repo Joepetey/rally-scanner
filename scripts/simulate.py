@@ -150,7 +150,6 @@ async def main(scenarios: tuple[str, ...], equity_override: float) -> None:
 
         runner = SimulationRunner(
             inject_fn=scheduler._stream.inject_trade if scheduler._stream else None,
-            invalidate_cache_fn=scheduler._invalidate_positions_cache,
         )
 
         results: list[SimulationResult] = []

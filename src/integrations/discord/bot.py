@@ -385,10 +385,7 @@ def make_bot(token: str) -> RallyBot:
             async def send_embed(embed_dict: dict) -> None:
                 await ctx.send(embed=discord.Embed.from_dict(embed_dict))
 
-            runner = SimulationRunner(
-                inject_fn=inject_fn,
-                invalidate_cache_fn=scheduler._invalidate_positions_cache,
-            )
+            runner = SimulationRunner(inject_fn=inject_fn)
 
             await ctx.send(
                 f"▶️ **Simulation starting** — scenario: `{scenario}` | equity: `${equity:,.0f}`\n"

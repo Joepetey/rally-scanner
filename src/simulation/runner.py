@@ -77,19 +77,14 @@ class SimulationRunner:
     """Run a single BTC paper trading simulation scenario end-to-end.
 
     Args:
-        inject_fn:          AlpacaStreamManager.inject_trade (required for stream scenarios).
-        invalidate_cache_fn: TradingScheduler._invalidate_positions_cache — must be called
-                             after saving the simulation position so the scheduler reads
-                             the DB-fresh position when the first inject arrives.
+        inject_fn: AlpacaStreamManager.inject_trade (required for stream scenarios).
     """
 
     def __init__(
         self,
         inject_fn: Callable[[str, float], None] | None = None,
-        invalidate_cache_fn: Callable[[], None] | None = None,
     ) -> None:
         self._inject_fn = inject_fn
-        self._invalidate_cache_fn = invalidate_cache_fn
 
     async def run(
         self,
@@ -161,10 +156,6 @@ class SimulationRunner:
         pos["order_id"] = order_id
         pos["qty"] = qty
         save_position_meta(pos)
-
-        # Invalidate scheduler cache so inject lands on the fresh DB row
-        if self._invalidate_cache_fn:
-            self._invalidate_cache_fn()
 
         # Emit entry embed
         await send_embed(_order_embed([result.model_dump()], equity))
