@@ -805,88 +805,8 @@ class TradingScheduler:
                         all_pos = load_positions().get("positions", [])
                         self._stream.update_subscriptions({p["ticker"] for p in all_pos})
 
-                # Stale price check + IEX REST fallback every 2 housekeeping cycles
-                if (
-                    self._stream and self._stream.is_connected
-                    and self._housekeeping_cycles % 2 == 0
-                ):
-                    new_stale, known_stale, never_traded = self._stream.get_stale_tickers(
-                        stale_seconds=300.0,
-                    )
-                    stale = new_stale + known_stale + never_traded
-                    if new_stale:
-                        logger.warning(
-                            "No stream trade in 5 min for %d ticker(s): %s — "
-                            "possible subscription issue",
-                            len(new_stale), sorted(new_stale),
-                        )
-                    if never_traded:
-                        logger.info(
-                            "No stream trade yet for %d ticker(s): %s — "
-                            "likely low-volume",
-                            len(never_traded), sorted(never_traded),
-                        )
-                    if known_stale:
-                        logger.debug(
-                            "Still stale (low-volume expected): %s",
-                            sorted(known_stale),
-                        )
-                    # IEX fallback: evaluate stale tickers via REST snapshot
-                    if stale and alpaca_enabled():
-                        try:
-                            async with self._snapshot_lock:
-                                snapshots = await get_snapshots(stale)
-                            fresh_state = load_positions()
-                            fresh_positions = fresh_state.get("positions", [])
-                            events = await self._engine.check_prices(
-                                [p for p in fresh_positions if p["ticker"] in snapshots],
-                                snapshots,
-                            )
-                            for event in events:
-                                await self._on_event(event)
-                                if event.alert_type in ("stop_breached", "target_breached"):
-                                    pos = next(
-                                        (p for p in fresh_positions if p["ticker"] == event.ticker),
-                                        None,
-                                    )
-                                    if pos:
-                                        await self._execute_breach_guarded(
-                                            event.ticker, pos,
-                                            event.current_price, event.alert_type,
-                                        )
-                        except Exception:
-                            logger.exception("IEX fallback evaluation failed")
-
-                # Stream degradation monitoring: alert after 5 consecutive disconnected cycles
-                # (~5 min)
-                _DEGRADE_THRESHOLD = 5
-                if self._stream:
-                    if not self._stream.is_connected:
-                        self._stream_degraded_cycles += 1
-                        if (
-                            self._stream_degraded_cycles >= _DEGRADE_THRESHOLD
-                            and not self._stream_alert_sent
-                        ):
-                            self._stream_alert_sent = True
-                            logger.warning(
-                                "Stream has been disconnected for %d min"
-                                " — emitting degradation alert",
-                                self._stream_degraded_cycles,
-                            )
-                            await self._on_event(StreamDegradedEvent(
-                                disconnected_minutes=self._stream_degraded_cycles,
-                            ))
-                    else:
-                        if self._stream_alert_sent:
-                            logger.info(
-                                "Stream reconnected after %d min — emitting recovery alert",
-                                self._stream_degraded_cycles,
-                            )
-                            await self._on_event(StreamRecoveredEvent(
-                                downtime_minutes=self._stream_degraded_cycles,
-                            ))
-                            self._stream_alert_sent = False
-                        self._stream_degraded_cycles = 0
+                await self._evaluate_stale_tickers()
+                await self._check_stream_health()
 
             except Exception:
                 logger.exception("Housekeeping loop error")
@@ -1282,3 +1202,84 @@ class TradingScheduler:
                 "signal": bool(r.get("signal")),
             })
         _db_save_watchlist(watchlist, scan_date=_date.today())
+
+    async def _evaluate_stale_tickers(self) -> None:
+        """Stale price detection + IEX REST fallback (every 2 housekeeping cycles)."""
+        if not (
+            self._stream and self._stream.is_connected
+            and self._housekeeping_cycles % 2 == 0
+        ):
+            return
+        new_stale, known_stale, never_traded = self._stream.get_stale_tickers(
+            stale_seconds=300.0,
+        )
+        stale = new_stale + known_stale + never_traded
+        if new_stale:
+            logger.warning(
+                "No stream trade in 5 min for %d ticker(s): %s — "
+                "possible subscription issue",
+                len(new_stale), sorted(new_stale),
+            )
+        if never_traded:
+            logger.info(
+                "No stream trade yet for %d ticker(s): %s — "
+                "likely low-volume",
+                len(never_traded), sorted(never_traded),
+            )
+        if known_stale:
+            logger.debug("Still stale (low-volume expected): %s", sorted(known_stale))
+        if stale and alpaca_enabled():
+            try:
+                async with self._snapshot_lock:
+                    snapshots = await get_snapshots(stale)
+                fresh_state = load_positions()
+                fresh_positions = fresh_state.get("positions", [])
+                events = await self._engine.check_prices(
+                    [p for p in fresh_positions if p["ticker"] in snapshots],
+                    snapshots,
+                )
+                for event in events:
+                    await self._on_event(event)
+                    if event.alert_type in ("stop_breached", "target_breached"):
+                        pos = next(
+                            (p for p in fresh_positions if p["ticker"] == event.ticker),
+                            None,
+                        )
+                        if pos:
+                            await self._execute_breach_guarded(
+                                event.ticker, pos,
+                                event.current_price, event.alert_type,
+                            )
+            except Exception:
+                logger.exception("IEX fallback evaluation failed")
+
+    async def _check_stream_health(self) -> None:
+        """Monitor stream health; emit degradation/recovery events after threshold."""
+        _DEGRADE_THRESHOLD = 5
+        if not self._stream:
+            return
+        if not self._stream.is_connected:
+            self._stream_degraded_cycles += 1
+            if (
+                self._stream_degraded_cycles >= _DEGRADE_THRESHOLD
+                and not self._stream_alert_sent
+            ):
+                self._stream_alert_sent = True
+                logger.warning(
+                    "Stream has been disconnected for %d min — emitting degradation alert",
+                    self._stream_degraded_cycles,
+                )
+                await self._on_event(StreamDegradedEvent(
+                    disconnected_minutes=self._stream_degraded_cycles,
+                ))
+        else:
+            if self._stream_alert_sent:
+                logger.info(
+                    "Stream reconnected after %d min — emitting recovery alert",
+                    self._stream_degraded_cycles,
+                )
+                await self._on_event(StreamRecoveredEvent(
+                    downtime_minutes=self._stream_degraded_cycles,
+                ))
+                self._stream_alert_sent = False
+            self._stream_degraded_cycles = 0
