@@ -39,4 +39,4 @@ echo "✓ Models directory created/verified"
 echo ""
 echo "=== Starting rally-scanner ==="
 echo "✓ API server will listen on port ${PORT:-8080}"
-exec /app/.venv/bin/rally-scanner
+exec rally-scanner

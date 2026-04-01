@@ -1,6 +1,5 @@
 [build]
-builder = "RAILPACK"
-buildCommand = "python -m venv /app/.venv && /app/.venv/bin/pip install --no-cache-dir ."
+builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "bash start.sh"
