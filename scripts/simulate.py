@@ -38,9 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from db import close_pool, init_pool, init_schema
 from db.pool import get_conn
 from db.positions import delete_position_meta
-from integrations.alpaca.executor import get_account_equity, execute_exit
+from integrations.alpaca.executor import execute_exit, get_account_equity
 from log import setup_logging
-from simulation.runner import SimulationRunner, SimulationResult
+from simulation.runner import SimulationResult, SimulationRunner
 from simulation.scenarios import TICKER
 from trading.scheduler import TradingScheduler
 

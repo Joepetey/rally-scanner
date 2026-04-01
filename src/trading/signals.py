@@ -1,8 +1,7 @@
 """Trading rules — entry signals and position sizing."""
 
 import pandas as pd
-
-from config import PARAMS
+from rally_ml.config import PARAMS
 
 
 def generate_signals(preds: pd.DataFrame, require_trend: bool = False) -> pd.Series:

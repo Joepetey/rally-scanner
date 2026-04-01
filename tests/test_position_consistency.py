@@ -1,9 +1,8 @@
 """Tests for model persistence atomicity and position state consistency."""
 
 import pytest
-
-from config import AssetConfig
-from core.persistence import load_model, save_model
+from rally_ml.config import AssetConfig
+from rally_ml.core.persistence import load_model, save_model
 
 
 @pytest.fixture
@@ -12,9 +11,9 @@ def models_dir(tmp_path, monkeypatch):
     models = tmp_path / "models"
     models.mkdir()
 
-    import core.persistence as persist
+    import rally_ml.core.persistence as persist
     monkeypatch.setattr(persist, "MODELS_DIR", models)
-    monkeypatch.setattr(persist, "save_manifest_entry", lambda ticker, entry: None)
+    monkeypatch.setattr(persist, "_store", type("FakeStore", (), {"save_entry": lambda self, t, m: None, "load_all": lambda self: {}})())
 
     return models
 

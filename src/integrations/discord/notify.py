@@ -9,30 +9,49 @@ import logging
 import os
 from urllib.request import Request, urlopen
 
-from config import PARAMS as _P
+from rally_ml.config import PARAMS as _P
+
+from integrations.discord.colors import (
+    BLUE as _BLUE,
+)
+from integrations.discord.colors import (
+    EMOJI_CLOSE as _EMOJI_CLOSE,
+)
+from integrations.discord.colors import (
+    EMOJI_STOP as _EMOJI_STOP,
+)
+from integrations.discord.colors import (
+    EMOJI_TARGET as _EMOJI_TARGET,
+)
+from integrations.discord.colors import (
+    EMOJI_WARN as _EMOJI_WARN,
+)
+from integrations.discord.colors import (
+    FOOTER_INTRADAY as _FOOTER_INTRADAY,
+)
+from integrations.discord.colors import (
+    FOOTER_INTRADAY_WARN as _FOOTER_INTRADAY_WARN,
+)
+from integrations.discord.colors import (
+    GRAY as _GRAY,
+)
+from integrations.discord.colors import (
+    GREEN as _GREEN,
+)
+from integrations.discord.colors import (
+    ORANGE as _ORANGE,
+)
+from integrations.discord.colors import (
+    RED as _RED,
+)
+from integrations.discord.colors import (
+    RED_ORANGE as _RED_ORANGE,
+)
+from integrations.discord.colors import (
+    SKY as _SKY,
+)
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Shared constants
-# ---------------------------------------------------------------------------
-
-_GREEN = 0x00FF00
-_RED = 0xFF0000
-_ORANGE = 0xFF8C00
-_RED_ORANGE = 0xFF4500
-_SKY = 0x87CEEB
-_GOLD = 0xFFD700
-_GRAY = 0x95A5A6
-_BLUE = 0x0099FF
-
-_EMOJI_STOP = "\u26a0\ufe0f"   # ⚠️
-_EMOJI_TARGET = "\u2705"        # ✅
-_EMOJI_CLOSE = "\u274c"         # ❌
-_EMOJI_WARN = "\u26a0\ufe0f"   # ⚠️
-
-_FOOTER_INTRADAY = "Intraday alert \u2014 daily scan handles exits"
-_FOOTER_INTRADAY_WARN = "Intraday warning \u2014 daily scan handles exits"
 
 
 def _pnl_sign(pnl: float) -> str:
@@ -384,28 +403,6 @@ def _positions_embed(positions: list[dict]) -> dict:
         "description": "\n".join(lines),
     }
 
-
-def _cash_parking_embed(action: str, result, equity: float, idle_fraction: float) -> dict:
-    """Build a Discord embed for SGOV cash parking actions.
-
-    action: 'park' | 'unpark'
-    result: OrderResult
-    """
-    label = "Gap" if action == "unpark" else "Idle"
-    parts = [f"Qty: {result.qty}"]
-    if idle_fraction > 0:
-        parts.append(f"{label}: {idle_fraction:.1%}")
-    if result.fill_price:
-        parts.append(f"Fill: ${result.fill_price:.2f}")
-    if result.order_id:
-        parts.append(f"Order: `{result.order_id[:8]}`")
-    title = "SGOV Parked — Cash Management" if action == "park" else "SGOV Sold — Capital Freed"
-    return {
-        "title": title,
-        "color": _GOLD,
-        "description": "\n".join(parts),
-        "footer": {"text": f"Account equity: ${equity:,.0f}"},
-    }
 
 
 def _error_embed(title: str, details: str) -> dict:

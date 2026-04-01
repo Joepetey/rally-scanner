@@ -7,21 +7,33 @@ Directory structure:
         MSFT.joblib
         ...
 
-Manifest metadata is stored in the `model_manifest` PostgreSQL table.
+Manifest metadata is stored via an injected ManifestStore (configured at
+application startup).  Call ``configure(store)`` before using save_model()
+or load_manifest().
 """
 
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
 
 import joblib
 
-from config import AssetConfig
-from db.models import load_manifest as _db_load_manifest
-from db.models import save_manifest_entry
+from ..config import AssetConfig
+from .protocols import ManifestStore
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(os.environ.get("APP_ROOT", Path.cwd()))
 MODELS_DIR = Path(os.environ.get("MODELS_DIR", PROJECT_ROOT / "models"))
+
+_store: ManifestStore | None = None
+
+
+def configure(store: ManifestStore) -> None:
+    """Inject a ManifestStore implementation (call once at startup)."""
+    global _store
+    _store = store
 
 
 def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
@@ -43,13 +55,16 @@ def save_model(ticker: str, artifacts: dict, asset_config: AssetConfig) -> None:
     joblib.dump(artifacts, tmp_path)
     tmp_path.rename(path)
 
-    save_manifest_entry(ticker, {
-        "saved_at": artifacts["saved_at"],
-        "train_start": artifacts["train_start"],
-        "train_end": artifacts["train_end"],
-        "r_up": asset_config.r_up,
-        "d_dn": asset_config.d_dn,
-    })
+    if _store is not None:
+        _store.save_entry(ticker, {
+            "saved_at": artifacts["saved_at"],
+            "train_start": artifacts["train_start"],
+            "train_end": artifacts["train_end"],
+            "r_up": asset_config.r_up,
+            "d_dn": asset_config.d_dn,
+        })
+    else:
+        logger.warning("ManifestStore not configured — metadata not persisted for %s", ticker)
 
 
 def load_model(ticker: str) -> dict:
@@ -65,4 +80,6 @@ def load_model(ticker: str) -> dict:
 
 def load_manifest() -> dict:
     """Load the manifest of all trained models."""
-    return _db_load_manifest()
+    if _store is None:
+        raise RuntimeError("ManifestStore not configured — call configure() at startup")
+    return _store.load_all()

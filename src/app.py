@@ -17,7 +17,11 @@ from monitoring import init_sentry
 init_sentry()
 
 try:
+    from rally_ml.core.persistence import configure as configure_manifest
+    from rally_ml.core.universe import configure as configure_universe
+
     from api import start_api_server
+    from db.ml_stores import PostgresManifestStore, PostgresUniverseCacheStore
     from db.pool import init_pool
     from db.schema import init_schema
     from integrations.discord.bot import make_bot, make_discord_event_handler
@@ -95,5 +99,7 @@ def main_sync() -> int:
         return 1
     init_pool()
     init_schema()
+    configure_manifest(PostgresManifestStore())
+    configure_universe(PostgresUniverseCacheStore())
     asyncio.run(main())
     return 0

@@ -1,1 +1,1 @@
-"""Production pipeline — daily scan, weekly retrain, and health checks."""
+"""Production pipeline — daily scan."""

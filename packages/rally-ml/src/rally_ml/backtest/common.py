@@ -7,10 +7,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from config import PARAMS, TradingConfig
-from core.features import ALL_FEATURE_COLS
-from core.hmm import predict_hmm_probs
-from core.train import fit_model
+from ..config import PARAMS, TradingConfig
+from ..core.features import ALL_FEATURE_COLS
+from ..core.hmm import predict_hmm_probs
+from ..core.train import fit_model
 
 
 def generate_signals_fast(preds: pd.DataFrame, cfg: TradingConfig,

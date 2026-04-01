@@ -3,9 +3,9 @@
 import numpy as np
 import pandas as pd
 import pytest
+from rally_ml.core.features import _rsi, build_features
+from rally_ml.core.persistence import load_model
 
-from core.features import _rsi, build_features
-from core.persistence import load_model
 from trading.signals import compute_position_size, generate_signals
 
 # ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ def test_features_incomplete_check_catches_inf(ohlcv_df, monkeypatch):
 
 def test_load_model_raises_on_corrupt_file(tmp_path, monkeypatch):
     """Garbage bytes in a .joblib file must raise RuntimeError."""
-    import core.persistence as persist
+    import rally_ml.core.persistence as persist
 
     monkeypatch.setattr(persist, "MODELS_DIR", tmp_path)
 

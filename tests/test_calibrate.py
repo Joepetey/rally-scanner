@@ -6,9 +6,8 @@ and output types match scanner expectations.
 
 import numpy as np
 import pandas as pd
-
-from config import AssetConfig
-from core.calibrate import (
+from rally_ml.config import AssetConfig
+from rally_ml.core.calibrate import (
     D_DN_MAX,
     D_DN_MIN,
     R_UP_MAX,

@@ -14,10 +14,11 @@ from datetime import date as _date
 from datetime import datetime
 
 import sentry_sdk
+from rally_ml.config import ASSETS, PARAMS
+from rally_ml.core.data import fetch_quotes
+from rally_ml.core.persistence import load_manifest
+from rally_ml.pipeline.retrain import retrain_all
 
-from config import ASSETS, PARAMS
-from core.data import fetch_quotes
-from core.persistence import load_manifest
 from db.events import finish_scheduler_event, log_order, log_scheduler_event
 from db.portfolio import record_closed_trades, update_daily_snapshot
 from db.positions import (
@@ -44,16 +45,6 @@ from db.positions import (
     save_watchlist as _db_save_watchlist,
 )
 from integrations.alpaca.broker import get_all_positions
-from integrations.alpaca.cash_parking import (
-    _TICKER as PARKING_TICKER,
-)
-from integrations.alpaca.cash_parking import (
-    buy_sgov,
-    sell_sgov,
-)
-from integrations.alpaca.cash_parking import (
-    is_enabled as sgov_enabled,
-)
 from integrations.alpaca.executor import (
     check_exit_fills,
     execute_entries,
@@ -65,26 +56,24 @@ from integrations.alpaca.executor import (
     is_enabled as alpaca_enabled,
 )
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
-from pipeline.retrain import retrain_all
 from pipeline.scanner import scan_all, scan_watchlist
-from trading.engine import (
-    AlertEngine,
+from trading.engine import AlertEngine
+from trading.events import (
     AlertEvent,
     ExitResult,
-    HousekeepingResult,
     RegimeEvent,
     RetrainResult,
     RiskActionEvent,
     ScanResult,
     StreamDegradedEvent,
     StreamRecoveredEvent,
+    TradingEvent,
     WatchlistEvent,
 )
 from trading.positions import (
     add_signal_positions,
     async_close_position,
     async_save_positions,
-    get_total_exposure,
     process_signal_queue,
     sync_positions_from_alpaca,
     update_existing_positions,
@@ -96,14 +85,6 @@ from trading.risk_manager import compute_drawdown, evaluate, execute_actions
 
 _ET = zoneinfo.ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
-
-# All event types the scheduler can emit
-TradingEvent = (
-    AlertEvent | ExitResult | HousekeepingResult |
-    ScanResult | WatchlistEvent | RegimeEvent | RetrainResult | RiskActionEvent |
-    StreamDegradedEvent | StreamRecoveredEvent
-)
-
 
 class TradingScheduler:
     """Owns AlertEngine + AlpacaStreamManager, emits typed events via callback.
@@ -184,7 +165,7 @@ class TradingScheduler:
                 tickers = {p["ticker"] for p in positions.get("positions", [])}
                 self._stream = AlpacaStreamManager(
                     on_trade=self._on_stream_trade,
-                    excluded={PARKING_TICKER},
+                    excluded=set(),
                 )
                 self._stream.start(tickers)
                 logger.info("AlpacaStreamManager started")
@@ -316,101 +297,13 @@ class TradingScheduler:
                 equity = await get_account_equity()
                 scan_equity = equity
 
-                # Sell SGOV to cover capital gap for new entries
-                if sgov_enabled() and signals:
-                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    _needed = sum(s.get("size", 0) for s in signals)
-                    _gap = max(_needed - _available, 0.0)
-                    sgov_sell = await sell_sgov(equity, _gap)
-                    if sgov_sell and sgov_sell.success:
-                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
-
                 if signals:
-                    entry_results = await execute_entries(signals, equity=equity)
-                    ok = [r for r in entry_results if r.success]
-                    for r in entry_results:
-                        log_order(r.ticker, "buy", "market", r.qty, "entry",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok:
-                        size_map = {
-                            r.ticker: r.actual_size for r in ok if r.actual_size is not None
-                        }
-                        filled_tickers = {r.ticker for r in ok}
-                        filled_signals = [
-                            {**s, "size": size_map.get(s["ticker"], s["size"])}
-                            for s in signals if s["ticker"] in filled_tickers
-                        ]
-
-                        fresh_positions = load_positions()
-                        add_signal_positions(fresh_positions, filled_signals)
-
-                        await self._store_order_ids(entry_results)
-                        # Update stream subscriptions after new entries
-                        if self._stream:
-                            all_pos = load_positions().get("positions", [])
-                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
-                    orders.extend([r.model_dump() for r in entry_results])
+                    await self._execute_and_log_entries(signals, equity, orders)
 
                 if closed:
-                    exit_results = await execute_exits(closed)
-                    ok_exit = [r for r in exit_results if r.success]
-                    for r in exit_results:
-                        log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok_exit:
-                        ok_tickers = {r.ticker for r in ok_exit}
-                        # Confirm at the broker level before deleting DB records.
-                        # success=True only means the close_position() API call succeeded;
-                        # if an OCO leg still held the shares, the position may still be
-                        # open at Alpaca. Ghost positions would be re-inserted by
-                        # sync_positions_from_alpaca() with wrong risk params.
-                        broker_positions = await get_all_positions()
-                        still_open = {p["ticker"] for p in broker_positions}
-                        ghost_tickers = ok_tickers & still_open
-                        if ghost_tickers:
-                            logger.warning(
-                                "Exit API success but position still open at broker "
-                                "— skipping DB delete to avoid ghost position: %s",
-                                ghost_tickers,
-                            )
-                        confirmed_exits = [
-                            p for p in closed
-                            if p["ticker"] in ok_tickers and p["ticker"] not in still_open
-                        ]
-                        for pos in confirmed_exits:
-                            _del_meta(pos["ticker"])
-                            _rec_closed(pos)
-                        record_closed_trades(confirmed_exits)
+                    confirmed_exits = await self._execute_and_log_exits(closed, orders)
 
-                    orders.extend([r.model_dump() for r in exit_results])
-
-                # Re-attempt queued signals freed by today's closes
-                queued = await asyncio.to_thread(process_signal_queue)
-                if queued:
-                    q_results = await execute_entries(queued, equity=equity)
-                    q_ok = [r for r in q_results if r.success]
-                    if q_ok:
-                        q_size_map = {
-                            r.ticker: r.actual_size for r in q_ok if r.actual_size is not None
-                        }
-                        filled_queued = [
-                            {**s, "size": q_size_map.get(s["ticker"], s["size"])}
-                            for s in queued if s["ticker"] in {r.ticker for r in q_ok}
-                        ]
-
-                        add_signal_positions(load_positions(), filled_queued)
-
-                        await self._store_order_ids(q_results)
-                    orders.extend([r.model_dump() for r in q_results])
-
-                # Park idle capital in SGOV
-                if sgov_enabled():
-                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    sgov_buy = await buy_sgov(equity, idle)
-                    if sgov_buy and sgov_buy.success:
-                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
+                await self._retry_queued_signals(equity, orders)
 
             except Exception:
                 logger.exception("Alpaca execution failed during %s scan", scan_type)
@@ -568,95 +461,13 @@ class TradingScheduler:
                 }
                 signals = [s for s in signals if s["ticker"] not in open_tickers]
 
-                # Sell SGOV to cover capital gap for new entries
-                if sgov_enabled() and signals:
-                    _available = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    _needed = sum(s.get("size", 0) for s in signals)
-                    _gap = max(_needed - _available, 0.0)
-                    sgov_sell = await sell_sgov(equity, _gap)
-                    if sgov_sell and sgov_sell.success:
-                        orders.append({"type": "sgov_sell", "result": sgov_sell.model_dump()})
-
                 if signals:
-                    entry_results = await execute_entries(signals, equity=equity)
-                    ok = [r for r in entry_results if r.success]
-                    for r in entry_results:
-                        log_order(r.ticker, "buy", "market", r.qty, "entry",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok:
-                        size_map = {
-                            r.ticker: r.actual_size for r in ok if r.actual_size is not None
-                        }
-                        filled_tickers = {r.ticker for r in ok}
-                        filled_signals = [
-                            {**s, "size": size_map.get(s["ticker"], s["size"])}
-                            for s in signals if s["ticker"] in filled_tickers
-                        ]
-
-                        fresh_positions = load_positions()
-                        add_signal_positions(fresh_positions, filled_signals)
-
-                        await self._store_order_ids(entry_results)
-                        if self._stream:
-                            all_pos = load_positions().get("positions", [])
-                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
-                    orders.extend([r.model_dump() for r in entry_results])
+                    await self._execute_and_log_entries(signals, equity, orders)
 
                 if closed:
-                    exit_results = await execute_exits(closed)
-                    ok_exit = [r for r in exit_results if r.success]
-                    for r in exit_results:
-                        log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
-                                  r.order_id, "filled" if r.success else "failed",
-                                  r.fill_price, r.error)
-                    if ok_exit:
-                        ok_tickers = {r.ticker for r in ok_exit}
-                        broker_positions = await get_all_positions()
-                        still_open = {p["ticker"] for p in broker_positions}
-                        ghost_tickers = ok_tickers & still_open
-                        if ghost_tickers:
-                            logger.warning(
-                                "Exit API success but position still open at broker "
-                                "— skipping DB delete to avoid ghost position: %s",
-                                ghost_tickers,
-                            )
-                        confirmed_exits = [
-                            p for p in closed
-                            if p["ticker"] in ok_tickers and p["ticker"] not in still_open
-                        ]
-                        for pos in confirmed_exits:
-                            _del_meta(pos["ticker"])
-                            _rec_closed(pos)
-                        record_closed_trades(confirmed_exits)
+                    confirmed_exits = await self._execute_and_log_exits(closed, orders)
 
-                    orders.extend([r.model_dump() for r in exit_results])
-
-                # Re-attempt queued signals freed by today's closes
-                queued = await asyncio.to_thread(process_signal_queue)
-                if queued:
-                    q_results = await execute_entries(queued, equity=equity)
-                    q_ok = [r for r in q_results if r.success]
-                    if q_ok:
-                        q_size_map = {
-                            r.ticker: r.actual_size for r in q_ok if r.actual_size is not None
-                        }
-                        filled_queued = [
-                            {**s, "size": q_size_map.get(s["ticker"], s["size"])}
-                            for s in queued if s["ticker"] in {r.ticker for r in q_ok}
-                        ]
-
-                        add_signal_positions(load_positions(), filled_queued)
-
-                        await self._store_order_ids(q_results)
-                    orders.extend([r.model_dump() for r in q_results])
-
-                # Park idle capital in SGOV
-                if sgov_enabled():
-                    idle = PARAMS.max_portfolio_exposure - get_total_exposure()
-                    sgov_buy = await buy_sgov(equity, idle)
-                    if sgov_buy and sgov_buy.success:
-                        orders.append({"type": "sgov_buy", "result": sgov_buy.model_dump()})
+                await self._retry_queued_signals(equity, orders)
 
             except Exception:
                 logger.exception("Alpaca execution failed during market-open execute")
@@ -783,12 +594,7 @@ class TradingScheduler:
     # ------------------------------------------------------------------
 
     async def _housekeeping_loop(self) -> None:
-        """1-minute timer: fill checks, OCO placement, position sync.
-
-        Also handles stale-price warnings and IEX coverage fallback every
-        2 cycles (~2 min) when the stream is connected but a ticker has had
-        no trade event.
-        """
+        """1-minute timer: fill checks, OCO placement, position sync."""
         while True:
             await asyncio.sleep(60)
             if not self._engine.is_market_open() and not self._has_open_crypto_positions():
@@ -805,91 +611,99 @@ class TradingScheduler:
                         all_pos = load_positions().get("positions", [])
                         self._stream.update_subscriptions({p["ticker"] for p in all_pos})
 
-                # Stale price check + IEX REST fallback every 2 housekeeping cycles
-                if (
-                    self._stream and self._stream.is_connected
-                    and self._housekeeping_cycles % 2 == 0
-                ):
-                    new_stale, known_stale, never_traded = self._stream.get_stale_tickers(
-                        stale_seconds=300.0,
-                    )
-                    stale = new_stale + known_stale + never_traded
-                    if new_stale:
-                        logger.warning(
-                            "No stream trade in 5 min for %d ticker(s): %s — "
-                            "possible subscription issue",
-                            len(new_stale), sorted(new_stale),
-                        )
-                    if never_traded:
-                        logger.info(
-                            "No stream trade yet for %d ticker(s): %s — "
-                            "likely low-volume",
-                            len(never_traded), sorted(never_traded),
-                        )
-                    if known_stale:
-                        logger.debug(
-                            "Still stale (low-volume expected): %s",
-                            sorted(known_stale),
-                        )
-                    # IEX fallback: evaluate stale tickers via REST snapshot
-                    if stale and alpaca_enabled():
-                        try:
-                            async with self._snapshot_lock:
-                                snapshots = await get_snapshots(stale)
-                            fresh_state = load_positions()
-                            fresh_positions = fresh_state.get("positions", [])
-                            events = await self._engine.check_prices(
-                                [p for p in fresh_positions if p["ticker"] in snapshots],
-                                snapshots,
-                            )
-                            for event in events:
-                                await self._on_event(event)
-                                if event.alert_type in ("stop_breached", "target_breached"):
-                                    pos = next(
-                                        (p for p in fresh_positions if p["ticker"] == event.ticker),
-                                        None,
-                                    )
-                                    if pos:
-                                        await self._execute_breach_guarded(
-                                            event.ticker, pos,
-                                            event.current_price, event.alert_type,
-                                        )
-                        except Exception:
-                            logger.exception("IEX fallback evaluation failed")
-
-                # Stream degradation monitoring: alert after 5 consecutive disconnected cycles
-                # (~5 min)
-                _DEGRADE_THRESHOLD = 5
-                if self._stream:
-                    if not self._stream.is_connected:
-                        self._stream_degraded_cycles += 1
-                        if (
-                            self._stream_degraded_cycles >= _DEGRADE_THRESHOLD
-                            and not self._stream_alert_sent
-                        ):
-                            self._stream_alert_sent = True
-                            logger.warning(
-                                "Stream has been disconnected for %d min"
-                                " — emitting degradation alert",
-                                self._stream_degraded_cycles,
-                            )
-                            await self._on_event(StreamDegradedEvent(
-                                disconnected_minutes=self._stream_degraded_cycles,
-                            ))
-                    else:
-                        if self._stream_alert_sent:
-                            logger.info(
-                                "Stream reconnected after %d min — emitting recovery alert",
-                                self._stream_degraded_cycles,
-                            )
-                            await self._on_event(StreamRecoveredEvent(
-                                downtime_minutes=self._stream_degraded_cycles,
-                            ))
-                            self._stream_alert_sent = False
-                        self._stream_degraded_cycles = 0
+                await self._check_stale_tickers()
+                await self._check_stream_health()
 
             except Exception:
                 logger.exception("Housekeeping loop error")
+
+    async def _check_stale_tickers(self) -> None:
+        """Every 2 cycles: warn about stale stream tickers, run IEX fallback."""
+        if not (
+            self._stream and self._stream.is_connected
+            and self._housekeeping_cycles % 2 == 0
+        ):
+            return
+
+        new_stale, known_stale, never_traded = self._stream.get_stale_tickers(
+            stale_seconds=300.0,
+        )
+        stale = new_stale + known_stale + never_traded
+        if new_stale:
+            logger.warning(
+                "No stream trade in 5 min for %d ticker(s): %s — "
+                "possible subscription issue",
+                len(new_stale), sorted(new_stale),
+            )
+        if never_traded:
+            logger.info(
+                "No stream trade yet for %d ticker(s): %s — "
+                "likely low-volume",
+                len(never_traded), sorted(never_traded),
+            )
+        if known_stale:
+            logger.debug(
+                "Still stale (low-volume expected): %s",
+                sorted(known_stale),
+            )
+        # IEX fallback: evaluate stale tickers via REST snapshot
+        if stale and alpaca_enabled():
+            try:
+                async with self._snapshot_lock:
+                    snapshots = await get_snapshots(stale)
+                fresh_state = load_positions()
+                fresh_positions = fresh_state.get("positions", [])
+                events = await self._engine.check_prices(
+                    [p for p in fresh_positions if p["ticker"] in snapshots],
+                    snapshots,
+                )
+                for event in events:
+                    await self._on_event(event)
+                    if event.alert_type in ("stop_breached", "target_breached"):
+                        pos = next(
+                            (p for p in fresh_positions if p["ticker"] == event.ticker),
+                            None,
+                        )
+                        if pos:
+                            await self._execute_breach_guarded(
+                                event.ticker, pos,
+                                event.current_price, event.alert_type,
+                            )
+            except Exception:
+                logger.exception("IEX fallback evaluation failed")
+
+    async def _check_stream_health(self) -> None:
+        """Alert after 5 consecutive disconnected cycles (~5 min)."""
+        _DEGRADE_THRESHOLD = 5
+        if not self._stream:
+            return
+
+        if not self._stream.is_connected:
+            self._stream_degraded_cycles += 1
+            if (
+                self._stream_degraded_cycles >= _DEGRADE_THRESHOLD
+                and not self._stream_alert_sent
+            ):
+                self._stream_alert_sent = True
+                logger.warning(
+                    "Stream has been disconnected for %d min"
+                    " — emitting degradation alert",
+                    self._stream_degraded_cycles,
+                )
+                await self._on_event(StreamDegradedEvent(
+                    disconnected_minutes=self._stream_degraded_cycles,
+                ))
+        else:
+            if self._stream_alert_sent:
+                logger.info(
+                    "Stream reconnected after %d min — emitting recovery alert",
+                    self._stream_degraded_cycles,
+                )
+                await self._on_event(StreamRecoveredEvent(
+                    downtime_minutes=self._stream_degraded_cycles,
+                ))
+                self._stream_alert_sent = False
+            self._stream_degraded_cycles = 0
 
     async def _polling_loop(self) -> None:
         """Price alert polling — active when stream is disconnected or disabled."""
@@ -1060,7 +874,7 @@ class TradingScheduler:
 
     async def _maybe_run_weekend_crypto_scan(self, now: datetime, today: str) -> None:
         """Run a crypto-only scan every 6 hours on weekends."""
-        from config import ASSETS
+        from rally_ml.config import ASSETS
 
         # Fire at hours 0, 6, 12, 18 ET within a 5-minute window
         if now.hour % 6 != 0 or now.minute >= 5:
@@ -1228,6 +1042,87 @@ class TradingScheduler:
             logger.warning("Drawdown computation failed in _should_use_fast_alerts", exc_info=True)
         return False
 
+    async def _retry_queued_signals(self, equity: float, orders: list) -> None:
+        """Re-attempt queued signals freed by today's closes."""
+        queued = await asyncio.to_thread(process_signal_queue)
+        if queued:
+            await self._execute_and_log_entries(
+                queued, equity, orders, update_stream=False,
+            )
+
+    async def _execute_and_log_entries(
+        self,
+        signals: list[dict],
+        equity: float,
+        orders: list,
+        *,
+        update_stream: bool = True,
+    ) -> None:
+        """Execute entry orders, log results, persist positions + order IDs."""
+        entry_results = await execute_entries(signals, equity=equity)
+        for r in entry_results:
+            log_order(r.ticker, "buy", "market", r.qty, "entry",
+                      r.order_id, "filled" if r.success else "failed",
+                      r.fill_price, r.error)
+        ok = [r for r in entry_results if r.success]
+        if ok:
+            size_map = {
+                r.ticker: r.actual_size for r in ok if r.actual_size is not None
+            }
+            filled_tickers = {r.ticker for r in ok}
+            filled_signals = [
+                {**s, "size": size_map.get(s["ticker"], s["size"])}
+                for s in signals if s["ticker"] in filled_tickers
+            ]
+
+            fresh_positions = load_positions()
+            add_signal_positions(fresh_positions, filled_signals)
+
+            await self._store_order_ids(entry_results)
+            if update_stream and self._stream:
+                all_pos = load_positions().get("positions", [])
+                self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+        orders.extend([r.model_dump() for r in entry_results])
+
+    async def _execute_and_log_exits(
+        self,
+        closed: list[dict],
+        orders: list,
+    ) -> list[dict]:
+        """Execute exit orders, confirm with broker, clean up DB records.
+
+        Returns the list of confirmed exit positions.
+        """
+        exit_results = await execute_exits(closed)
+        for r in exit_results:
+            log_order(r.ticker, "sell", "market", r.qty, "exit_scan",
+                      r.order_id, "filled" if r.success else "failed",
+                      r.fill_price, r.error)
+        confirmed_exits: list[dict] = []
+        ok_exit = [r for r in exit_results if r.success]
+        if ok_exit:
+            ok_tickers = {r.ticker for r in ok_exit}
+            broker_positions = await get_all_positions()
+            still_open = {p["ticker"] for p in broker_positions}
+            ghost_tickers = ok_tickers & still_open
+            if ghost_tickers:
+                logger.warning(
+                    "Exit API success but position still open at broker "
+                    "— skipping DB delete to avoid ghost position: %s",
+                    ghost_tickers,
+                )
+            confirmed_exits = [
+                p for p in closed
+                if p["ticker"] in ok_tickers and p["ticker"] not in still_open
+            ]
+            for pos in confirmed_exits:
+                _del_meta(pos["ticker"])
+                _rec_closed(pos)
+            record_closed_trades(confirmed_exits)
+
+        orders.extend([r.model_dump() for r in exit_results])
+        return confirmed_exits
+
     async def _store_order_ids(self, results: list) -> None:
         """Persist Alpaca order IDs to position records after entry fills."""
         state = load_positions()
@@ -1246,7 +1141,7 @@ class TradingScheduler:
 
     def _has_open_crypto_positions(self) -> bool:
         """True if any open position is a crypto asset."""
-        from config import ASSETS
+        from rally_ml.config import ASSETS
         positions = load_positions().get("positions", [])
         return any(
             ASSETS.get(p["ticker"]) and ASSETS[p["ticker"]].asset_class == "crypto"

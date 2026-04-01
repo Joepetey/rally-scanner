@@ -19,20 +19,20 @@ from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
-
-from config import CONFIGS_BY_NAME, PARAMS, AssetConfig
+from rally_ml.config import CONFIGS_BY_NAME, PARAMS, AssetConfig
 
 logger = logging.getLogger(__name__)
-from core.data import (
+from rally_ml.core.data import (
     fetch_daily,
     fetch_daily_batch,
     fetch_quotes,
     fetch_vix_safe,
     merge_vix,
 )
-from core.features import build_features
-from core.hmm import predict_hmm_probs
-from core.persistence import load_manifest, load_model
+from rally_ml.core.features import build_features
+from rally_ml.core.hmm import predict_hmm_probs
+from rally_ml.core.persistence import load_manifest, load_model
+
 from trading.positions import (
     get_merged_positions_sync,
     print_positions,
@@ -236,7 +236,7 @@ def _compute_breadth(ok_results: list[dict]) -> None:
 
 
 def scan_all(
-    tickers: list[str] | None = None, show_positions: bool = False,
+    tickers: list[str] | None = None,
     config_name: str = "conservative",
 ) -> list[dict]:
     # Apply config
@@ -343,12 +343,6 @@ def scan_all(
         print(f"\n  ERRORS ({len(errors)}):")
         for r in errors:
             print(f"    {r['ticker']}: {r['status']}")
-
-    # --- POSITIONS ---
-    if show_positions:
-        positions = get_merged_positions_sync()
-        positions = update_existing_positions(positions, results)
-        print_positions(positions)
 
     # Summary
     ok_count = sum(1 for r in results if r.get("status") == "ok")
@@ -472,6 +466,21 @@ def scan_watchlist(
         for future in as_completed(futures):
             results.append(future.result())
 
+    # Update signals with live prices (same as scan_all)
+    signals = [r for r in results if r.get("signal")]
+    if signals:
+        live_tickers = [s["ticker"] for s in signals]
+        quotes = fetch_quotes(live_tickers)
+        for sig in signals:
+            q = quotes.get(sig["ticker"], {})
+            if "price" in q:
+                daily_close = sig["close"]
+                sig["close"] = q["price"]
+                logger.info(
+                    "%s: live price $%.2f (daily close was $%.2f)",
+                    sig["ticker"], q["price"], daily_close,
+                )
+
     return results
 
 
@@ -485,7 +494,11 @@ def main() -> None:
                         choices=["conservative", "baseline", "aggressive", "concentrated"],
                         help="Trading config: conservative, baseline, aggressive, concentrated")
     args = parser.parse_args()
-    scan_all(tickers=args.tickers, show_positions=args.positions, config_name=args.config)
+    results = scan_all(tickers=args.tickers, config_name=args.config)
+    if args.positions:
+        positions = get_merged_positions_sync()
+        positions = update_existing_positions(positions, results)
+        print_positions(positions)
 
 
 if __name__ == "__main__":

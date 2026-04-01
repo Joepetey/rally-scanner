@@ -30,12 +30,12 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from config import CONFIGS_BY_NAME, TradingConfig  # noqa: E402
-from backtest.common import (  # noqa: E402
+from rally_ml.backtest.common import (  # noqa: E402
     generate_signals_fast,
     simulate_portfolio,
     simulate_trades_fast,
 )
+from rally_ml.config import CONFIGS_BY_NAME, TradingConfig  # noqa: E402
 
 CACHE_DIR = PROJECT_ROOT / "backtest_cache"
 PREDICTIONS_CACHE = CACHE_DIR / "predictions.pkl"

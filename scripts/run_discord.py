@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from integrations.discord.bot import make_bot
 from db import init_pool, init_schema
+from integrations.discord.bot import make_bot
 from log import setup_logging
 from monitoring import init_sentry
 

@@ -28,14 +28,14 @@ os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 import pandas as pd
 
-from config import ASSETS, PARAMS, PIPELINE, AssetConfig
-from core.calibrate import calibrate_thresholds
-from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
-from core.features import ALL_FEATURE_COLS, build_features
-from core.labels import compute_labels
-from core.persistence import load_manifest, save_model
-from core.train import fit_model
-from core.universe import get_universe
+from ..config import ASSETS, PARAMS, PIPELINE, AssetConfig
+from ..core.calibrate import calibrate_thresholds
+from ..core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
+from ..core.features import ALL_FEATURE_COLS, build_features
+from ..core.labels import compute_labels
+from ..core.persistence import load_manifest, save_model
+from ..core.train import fit_model
+from ..core.universe import get_universe
 
 logger = logging.getLogger(__name__)
 

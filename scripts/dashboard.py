@@ -10,13 +10,12 @@ Usage:
 """
 
 import argparse
-import sys
 from datetime import datetime
+
+from rally_ml.core.persistence import load_manifest
 
 from db.portfolio import load_equity_history, load_trade_journal
 from db.positions import load_positions
-from core.persistence import load_manifest
-
 
 W = 80
 
@@ -137,7 +136,7 @@ def main() -> None:
     manifest = load_manifest()
 
     print(f"\n{'='*W}")
-    print(f"  MARKET RALLY DASHBOARD")
+    print("  MARKET RALLY DASHBOARD")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  "
           f"{len(manifest)} trained models")
     print(f"{'='*W}")

@@ -1,8 +1,9 @@
+api
 app
-backtest
-config
-core
 db
 integrations
+log
+monitoring
 pipeline
+simulation
 trading

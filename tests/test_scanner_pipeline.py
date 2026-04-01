@@ -8,10 +8,10 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+from rally_ml.config import CONFIGS_BY_NAME, PARAMS, AssetConfig
+from rally_ml.core.features import ALL_FEATURE_COLS, build_features
+from rally_ml.core.train import fit_model
 
-from config import CONFIGS_BY_NAME, PARAMS, AssetConfig
-from core.features import ALL_FEATURE_COLS, build_features
-from core.train import fit_model
 from pipeline.scanner import apply_config, scan_single
 
 # ---------------------------------------------------------------------------

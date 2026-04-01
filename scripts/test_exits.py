@@ -27,14 +27,13 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from config import PARAMS
+from rally_ml.config import PARAMS
+
 from db import close_pool, init_pool, init_schema
 from db.positions import (
     delete_position_meta,
-    load_all_position_meta,
     load_position_meta,
     load_positions,
-    record_closed_position,
     save_position_meta,
 )
 from integrations.alpaca.executor import (

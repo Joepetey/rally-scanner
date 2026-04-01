@@ -2,7 +2,8 @@
 Universe management — S&P 500 + Nasdaq top 500 tickers.
 
 Fetches from Wikipedia (S&P 500) and NASDAQ screener API (top 500 by market cap).
-Caches locally. Falls back to hardcoded S&P 100 if all fetches fail.
+Caches via an injected UniverseCacheStore. Falls back to hardcoded S&P 100 if all
+fetches fail.
 """
 
 import io
@@ -12,12 +13,20 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from db.universe import load_universe_cache as _db_load_cache
-from db.universe import save_universe_cache as _db_save_cache
+from .protocols import UniverseCacheStore
 
 logger = logging.getLogger(__name__)
 
 CACHE_MAX_AGE_DAYS = 30
+
+_store: UniverseCacheStore | None = None
+
+
+def configure(store: UniverseCacheStore) -> None:
+    """Inject a UniverseCacheStore implementation (call once at startup)."""
+    global _store
+    _store = store
+
 
 # Hardcoded fallback (S&P 100)
 SP100_TICKERS = [
@@ -92,19 +101,23 @@ def _fetch_nasdaq_top500() -> list[str]:
 
 def _load_cache() -> dict | None:
     """Load cached universe if fresh enough."""
+    if _store is None:
+        return None
     try:
-        return _db_load_cache(CACHE_MAX_AGE_DAYS)
+        return _store.load(CACHE_MAX_AGE_DAYS)
     except Exception:
         logger.warning("Universe cache load failed", exc_info=True)
         return None
 
 
 def _save_cache(tickers: list[str], source: str) -> None:
-    """Save universe to DB cache (best-effort — backtest doesn't need DB)."""
+    """Save universe to cache (best-effort — backtest doesn't need DB)."""
+    if _store is None:
+        return
     try:
-        _db_save_cache(tickers, source)
+        _store.save(tickers, source)
     except Exception:
-        logger.debug("Could not save universe cache to DB", exc_info=True)
+        logger.debug("Could not save universe cache", exc_info=True)
 
 
 def fetch_universe(force_refresh: bool = False) -> list[str]:

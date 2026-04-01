@@ -36,10 +36,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 def _compute_levels(ticker: str, entry_price: float) -> dict:
     """Fetch recent OHLCV and compute stop/target/trailing/ATR for a ticker."""
-    import numpy as np
     import pandas as pd
     import yfinance as yf
-    from config import PARAMS
+    from rally_ml.config import PARAMS
 
     atr_period = PARAMS.atr_period       # 20
     range_period = PARAMS.range_period   # 40
@@ -174,7 +173,8 @@ async def main() -> None:
 
         # Place trailing stop on Alpaca if not already present
         if not pos.get("trail_order_id"):
-            from config import PARAMS
+            from rally_ml.config import PARAMS
+
             from integrations.alpaca.executor import _trading_client, place_trailing_stop
 
             atr_pct = levels["atr"] / entry_price if levels["atr"] else PARAMS.default_atr_pct

@@ -165,7 +165,7 @@ async def test_update_fill_prices(tmp_models_dir):
     assert aapl["entry_price"] == 149.50
     assert aapl["order_id"] is None
     # trailing_stop and highest_close recalibrated to fill price
-    from config import PARAMS
+    from rally_ml.config import PARAMS
     assert aapl["trailing_stop"] == round(149.50 - PARAMS.trailing_stop_atr_mult * 3.0, 4)
     assert aapl["highest_close"] == 149.50
     # stop_price (range_low) left untouched — it's a strategy-derived level, not entry-relative
@@ -488,6 +488,7 @@ async def test_execute_exits_position_not_found_does_not_fail_batch(alpaca_mock)
 def test_compute_limit_price_with_snapshot():
     """Uses bid/ask midpoint + buffer when snapshot is available."""
     from dataclasses import dataclass
+
     from integrations.alpaca.executor import _compute_limit_price
 
     @dataclass

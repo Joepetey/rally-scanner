@@ -323,7 +323,7 @@ async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
     btc_asset.asset_class = "crypto"
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
-         patch("config.ASSETS", {"BTC-USD": btc_asset}), \
+         patch("rally_ml.config.ASSETS", {"BTC-USD": btc_asset}), \
          patch("trading.scheduler.load_positions", return_value=crypto_positions), \
          patch("trading.scheduler.alpaca_enabled", return_value=False):
         with pytest.raises(asyncio.CancelledError):

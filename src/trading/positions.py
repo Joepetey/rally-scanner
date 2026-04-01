@@ -9,7 +9,8 @@ import asyncio
 import logging
 from datetime import datetime
 
-from config import PARAMS, TICKER_TO_GROUP
+from rally_ml.config import PARAMS, TICKER_TO_GROUP
+
 from db.positions import (
     clear_expired_queue,
     delete_position_meta,
@@ -49,6 +50,10 @@ __all__ = [
     "process_signal_queue",
     "update_skipped_outcomes",
     "sync_positions_from_alpaca",
+    "build_untracked_position",
+    "compute_sync_updates",
+    "filter_signals_by_constraints",
+    "build_closed_record",
 ]
 
 
@@ -86,37 +91,70 @@ async def _sync_close_broker_exits(
         logger.info("sync: closed %s (broker_closed), fill=%.4f", ticker, fill_price)
 
 
+def build_untracked_position(
+    ticker: str, broker_pos: dict, equity: float,
+) -> dict:
+    """Pure builder: create a position dict from broker data + PARAMS-derived stops."""
+    p = PARAMS
+    entry = broker_pos["avg_entry_price"]
+    atr_val = round(entry * p.default_atr_pct, 4)
+    size = round(broker_pos["market_value"] / equity, 4) if equity > 0 else 0.0
+    current = (
+        round(broker_pos["market_value"] / broker_pos["qty"], 4)
+        if broker_pos["qty"] else entry
+    )
+    pnl = round((current / entry - 1) * 100, 2) if entry else 0.0
+    return {
+        "ticker": ticker,
+        "qty": broker_pos["qty"],
+        "entry_price": entry,
+        "entry_date": datetime.now().strftime("%Y-%m-%d"),
+        "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
+        "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
+        "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
+        "highest_close": max(entry, current),
+        "atr": atr_val,
+        "bars_held": 0,
+        "size": size,
+        "current_price": current,
+        "unrealized_pnl_pct": pnl,
+        "p_rally": 0.0,
+        "status": "open",
+    }
+
+
+def compute_sync_updates(
+    pos: dict, broker_pos: dict, equity: float,
+) -> dict:
+    """Pure builder: compute field updates for a matched position from broker data."""
+    current = (
+        round(broker_pos["market_value"] / broker_pos["qty"], 4)
+        if broker_pos["qty"] else pos["entry_price"]
+    )
+    updates = {
+        "qty": broker_pos["qty"],
+        "entry_price": broker_pos["avg_entry_price"],
+        "current_price": current,
+        "unrealized_pnl_pct": round(
+            (current / pos["entry_price"] - 1) * 100, 2
+        ) if pos["entry_price"] else 0.0,
+    }
+    if equity > 0:
+        updates["size"] = round(broker_pos["market_value"] / equity, 4)
+    return updates
+
+
 def _sync_insert_untracked(
     inserted_tickers: set[str], broker_map: dict, equity: float,
 ) -> None:
     """Case 2: in Alpaca but not in DB — insert with PARAMS-derived stops."""
-    p = PARAMS
     for ticker in inserted_tickers:
-        bp = broker_map[ticker]
-        entry = bp["avg_entry_price"]
-        atr_val = round(entry * p.default_atr_pct, 4)
-        size = round(bp["market_value"] / equity, 4) if equity > 0 else 0.0
-        current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else entry
-        pnl = round((current / entry - 1) * 100, 2) if entry else 0.0
-        new_pos = {
-            "ticker": ticker,
-            "qty": bp["qty"],
-            "entry_price": entry,
-            "entry_date": datetime.now().strftime("%Y-%m-%d"),
-            "stop_price": round(entry * (1 - p.fallback_stop_pct), 4),
-            "target_price": round(entry + p.profit_atr_mult * atr_val, 4),
-            "trailing_stop": round(entry - p.trailing_stop_atr_mult * atr_val, 4),
-            "highest_close": max(entry, current),
-            "atr": atr_val,
-            "bars_held": 0,
-            "size": size,
-            "current_price": current,
-            "unrealized_pnl_pct": pnl,
-            "p_rally": 0.0,
-            "status": "open",
-        }
+        new_pos = build_untracked_position(ticker, broker_map[ticker], equity)
         save_position_meta(new_pos)
-        logger.warning("sync: inserted untracked position %s (size=%.1f%%)", ticker, size * 100)
+        logger.warning(
+            "sync: inserted untracked position %s (size=%.1f%%)",
+            ticker, new_pos["size"] * 100,
+        )
 
 
 def _sync_update_matched(
@@ -124,17 +162,9 @@ def _sync_update_matched(
 ) -> None:
     """Case 1: in both — update qty/entry/current_price from broker."""
     for ticker in matched_tickers:
-        bp = broker_map[ticker]
         pos = meta_map[ticker]
-        pos["qty"] = bp["qty"]
-        pos["entry_price"] = bp["avg_entry_price"]
-        current = round(bp["market_value"] / bp["qty"], 4) if bp["qty"] else pos["entry_price"]
-        pos["current_price"] = current
-        pos["unrealized_pnl_pct"] = round(
-            (current / pos["entry_price"] - 1) * 100, 2
-        ) if pos["entry_price"] else 0.0
-        if equity > 0:
-            pos["size"] = round(bp["market_value"] / equity, 4)
+        updates = compute_sync_updates(pos, broker_map[ticker], equity)
+        pos.update(updates)
         save_position_meta(pos)
 
 
@@ -299,6 +329,48 @@ def update_existing_positions(
     return state
 
 
+def filter_signals_by_constraints(
+    open_positions: list[dict],
+    signals: list[dict],
+    max_exposure: float,
+    max_group_positions: int,
+    max_group_exposure: float,
+) -> list[dict]:
+    """Pure filter: return signals that pass portfolio + group exposure caps."""
+    open_tickers = {pos["ticker"] for pos in open_positions}
+    current_exposure = sum(pos.get("size", 0) for pos in open_positions)
+
+    group_counts: dict[str, int] = {}
+    group_exposures: dict[str, float] = {}
+    for pos in open_positions:
+        g = TICKER_TO_GROUP.get(pos["ticker"])
+        if g:
+            group_counts[g] = group_counts.get(g, 0) + 1
+            group_exposures[g] = group_exposures.get(g, 0) + pos.get("size", 0)
+
+    accepted: list[dict] = []
+    for sig in signals:
+        if sig["ticker"] in open_tickers:
+            continue
+        sig_size = sig.get("size", 0)
+        if current_exposure + sig_size > max_exposure:
+            continue
+        g = TICKER_TO_GROUP.get(sig["ticker"])
+        if g:
+            if group_counts.get(g, 0) >= max_group_positions:
+                continue
+            if group_exposures.get(g, 0) + sig_size > max_group_exposure:
+                continue
+        accepted.append(sig)
+        current_exposure += sig_size
+        open_tickers.add(sig["ticker"])
+        if g:
+            group_counts[g] = group_counts.get(g, 0) + 1
+            group_exposures[g] = group_exposures.get(g, 0) + sig_size
+
+    return accepted
+
+
 def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
     """Add new positions from signals, respecting portfolio + group exposure caps.
 
@@ -308,30 +380,12 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
     p = PARAMS
     still_open = state.get("positions", [])
 
-    open_tickers = {pos["ticker"] for pos in still_open}
-    current_exposure = sum(pos.get("size", 0) for pos in still_open)
-    max_exposure = p.max_portfolio_exposure
+    accepted = filter_signals_by_constraints(
+        still_open, new_signals,
+        p.max_portfolio_exposure, p.max_group_positions, p.max_group_exposure,
+    )
 
-    group_counts: dict[str, int] = {}
-    group_exposures: dict[str, float] = {}
-    for pos in still_open:
-        g = TICKER_TO_GROUP.get(pos["ticker"])
-        if g:
-            group_counts[g] = group_counts.get(g, 0) + 1
-            group_exposures[g] = group_exposures.get(g, 0) + pos.get("size", 0)
-
-    for sig in new_signals:
-        if sig["ticker"] in open_tickers:
-            continue
-        sig_size = sig.get("size", 0)
-        if current_exposure + sig_size > max_exposure:
-            continue
-        g = TICKER_TO_GROUP.get(sig["ticker"])
-        if g:
-            if group_counts.get(g, 0) >= p.max_group_positions:
-                continue
-            if group_exposures.get(g, 0) + sig_size > p.max_group_exposure:
-                continue
+    for sig in accepted:
         atr_pct = sig.get("atr_pct", p.default_atr_pct)
         atr_val = sig["close"] * atr_pct
         new_pos = {
@@ -354,11 +408,6 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
         }
         still_open.append(new_pos)
         save_position_meta(new_pos)
-        current_exposure += sig["size"]
-        open_tickers.add(sig["ticker"])
-        if g:
-            group_counts[g] = group_counts.get(g, 0) + 1
-            group_exposures[g] = group_exposures.get(g, 0) + sig["size"]
 
     state["positions"] = still_open
     return state
@@ -377,21 +426,28 @@ def update_positions(
 # Intraday operations
 # ---------------------------------------------------------------------------
 
+def build_closed_record(pos: dict, price: float, reason: str) -> dict:
+    """Pure builder: add exit fields + PnL to a position dict."""
+    return {
+        **pos,
+        "exit_reason": reason,
+        "exit_price": price,
+        "exit_date": datetime.now().strftime("%Y-%m-%d"),
+        "realized_pnl_pct": round((price / pos["entry_price"] - 1) * 100, 2),
+        "status": "closed",
+    }
+
+
 def close_position_intraday(ticker: str, price: float, reason: str) -> dict | None:
     """Close a single position during market hours. Returns closed position or None."""
     pos = load_position_meta(ticker)
     if pos is None:
         return None
 
-    pos["exit_reason"] = reason
-    pos["exit_price"] = price
-    pos["exit_date"] = datetime.now().strftime("%Y-%m-%d")
-    pos["realized_pnl_pct"] = round((price / pos["entry_price"] - 1) * 100, 2)
-    pos["status"] = "closed"
-
+    closed = build_closed_record(pos, price, reason)
     delete_position_meta(ticker)
-    record_closed_position(pos)
-    return pos
+    record_closed_position(closed)
+    return closed
 
 
 async def update_fill_prices(fills: dict[str, float]) -> int:

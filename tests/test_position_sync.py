@@ -10,8 +10,8 @@ All tests mock the DB layer so no TEST_DATABASE_URL is required.
 from unittest.mock import patch
 
 import pytest
+from rally_ml.config import PARAMS, TICKER_TO_GROUP
 
-from config import PARAMS, TICKER_TO_GROUP
 from trading.positions import (
     add_signal_positions,
     close_position_intraday,

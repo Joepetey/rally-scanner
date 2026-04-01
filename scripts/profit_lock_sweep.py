@@ -26,13 +26,13 @@ warnings.filterwarnings("ignore")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import config.params as _params_mod  # noqa: E402 — need module ref to mutate PARAMS
-from config import CONFIGS_BY_NAME  # noqa: E402
-from backtest.common import (  # noqa: E402
+import rally_ml.config.params as _params_mod  # noqa: E402 — need module ref to mutate PARAMS
+from rally_ml.backtest.common import (  # noqa: E402
     generate_signals_fast,
     simulate_portfolio,
     simulate_trades_fast,
 )
+from rally_ml.config import CONFIGS_BY_NAME  # noqa: E402
 
 CACHE_DIR = PROJECT_ROOT / "backtest_cache"
 PREDICTIONS_CACHE = CACHE_DIR / "predictions.pkl"
@@ -110,7 +110,7 @@ def main() -> None:
                         help="Limit analysis to specific tickers (e.g. BTC-USD)")
     args = parser.parse_args()
 
-    from config import TradingConfig  # noqa: E402
+    from rally_ml.config import TradingConfig  # noqa: E402
     cfg = CONFIGS_BY_NAME.get(args.config.lower().replace(" ", "_"))
     if cfg is None:
         print(f"ERROR: Unknown config '{args.config}'")

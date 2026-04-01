@@ -7,9 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
-
-from config import AssetConfig
-from core.data import (
+from rally_ml.config import AssetConfig
+from rally_ml.core.data import (
     OHLCV_COLS,
     fetch_daily,
     fetch_daily_batch,
@@ -47,7 +46,7 @@ ASSET = AssetConfig(ticker="AAPL", asset_class="equity", r_up=0.03, d_dn=0.015)
 
 class TestFetchDaily:
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_returns_ohlcv_columns(self, mock_ticker_cls):
         df = _make_ohlcv()
         # yfinance Ticker.history can return extra columns; fetch_daily selects OHLCV_COLS
@@ -58,7 +57,7 @@ class TestFetchDaily:
         result = fetch_daily(ASSET, start="2023-01-02")
         assert list(result.columns) == OHLCV_COLS
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_index_sorted_ascending(self, mock_ticker_cls):
         df = _make_ohlcv()
         # Shuffle the index to simulate unsorted data
@@ -67,7 +66,7 @@ class TestFetchDaily:
         result = fetch_daily(ASSET, start="2023-01-02")
         assert result.index.is_monotonic_increasing
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_index_is_tz_naive(self, mock_ticker_cls):
         df = _make_ohlcv()
         df.index = df.index.tz_localize("UTC")
@@ -76,7 +75,7 @@ class TestFetchDaily:
         result = fetch_daily(ASSET, start="2023-01-02")
         assert result.index.tz is None
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_empty_download_returns_empty_df(self, mock_ticker_cls):
         empty = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
         mock_ticker_cls.return_value.history.return_value = empty
@@ -85,7 +84,7 @@ class TestFetchDaily:
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_drops_todays_partial_bar(self, mock_ticker_cls):
         today = pd.Timestamp.now().normalize()
         dates = pd.bdate_range(end=today, periods=10)
@@ -109,9 +108,9 @@ class TestFetchDaily:
 
 class TestFetchVix:
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_returns_series_named_vix_close(self, mock_ticker_cls):
-        from core.data import _vix_cache
+        from rally_ml.core.data import _vix_cache
         _vix_cache.clear()
 
         df = _make_ohlcv(50)
@@ -121,18 +120,18 @@ class TestFetchVix:
         assert isinstance(result, pd.Series)
         assert result.name == "VIX_Close"
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_fetch_vix_safe_returns_none_on_error(self, mock_ticker_cls):
-        from core.data import _vix_cache
+        from rally_ml.core.data import _vix_cache
         _vix_cache.clear()
 
         mock_ticker_cls.return_value.history.side_effect = Exception("network error")
         result = fetch_vix_safe(start="2023-01-02")
         assert result is None
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_fetch_vix_safe_returns_series_on_success(self, mock_ticker_cls):
-        from core.data import _vix_cache
+        from rally_ml.core.data import _vix_cache
         _vix_cache.clear()
 
         df = _make_ohlcv(50)
@@ -183,7 +182,7 @@ class TestMergeVix:
 
 class TestFetchDailyBatch:
 
-    @patch("core.data.yf.download")
+    @patch("rally_ml.core.data.yf.download")
     def test_multi_ticker_returns_dict(self, mock_download):
         df_aapl = _make_ohlcv(100)
         df_msft = _make_ohlcv(100)
@@ -204,7 +203,7 @@ class TestFetchDailyBatch:
         assert "MSFT" in result
         assert list(result["AAPL"].columns) == OHLCV_COLS
 
-    @patch("core.data.yf.download")
+    @patch("rally_ml.core.data.yf.download")
     def test_single_ticker_flat_columns(self, mock_download):
         """Single ticker: yfinance may return flat (non-MultiIndex) columns."""
         df = _make_ohlcv(100)
@@ -214,8 +213,8 @@ class TestFetchDailyBatch:
         assert "AAPL" in result
         assert list(result["AAPL"].columns) == OHLCV_COLS
 
-    @patch("core.data.yf.download")
-    @patch("core.data.fetch_daily")
+    @patch("rally_ml.core.data.yf.download")
+    @patch("rally_ml.core.data.fetch_daily")
     def test_batch_failure_falls_back_to_sequential(self, mock_fetch, mock_download):
         """When batch download raises, fallback to individual fetch_daily calls."""
         mock_download.side_effect = Exception("batch failed")
@@ -225,7 +224,7 @@ class TestFetchDailyBatch:
         assert "AAPL" in result
         mock_fetch.assert_called_once()
 
-    @patch("core.data.yf.download")
+    @patch("rally_ml.core.data.yf.download")
     def test_empty_batch_raises_to_fallback(self, mock_download):
         mock_download.return_value = pd.DataFrame()
 
@@ -243,7 +242,7 @@ class TestFetchDailyBatch:
 
 class TestFetchQuotes:
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_returns_price_data(self, mock_ticker_cls):
         fi_data = {
             "lastPrice": 150.0, "regularMarketPreviousClose": 148.0,
@@ -261,7 +260,7 @@ class TestFetchQuotes:
         assert result["AAPL"]["price"] == 150.0
         assert result["AAPL"]["change"] == round(150.0 - 148.0, 2)
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_failed_ticker_returns_error_dict(self, mock_ticker_cls):
         mock_ticker_cls.return_value.fast_info.__getitem__ = MagicMock(
             side_effect=KeyError("no data")
@@ -273,7 +272,7 @@ class TestFetchQuotes:
         result = fetch_quotes([])
         assert result == {}
 
-    @patch("core.data.yf.Ticker")
+    @patch("rally_ml.core.data.yf.Ticker")
     def test_partial_failure(self, mock_ticker_cls):
         """One ticker fails, others succeed — result has both."""
         call_count = 0

@@ -1,6 +1,6 @@
 """Tests for adaptive scan frequency and watchlist scanning."""
 
-from config import PARAMS
+from rally_ml.config import PARAMS
 
 
 def test_scan_watchlist_returns_results(monkeypatch):

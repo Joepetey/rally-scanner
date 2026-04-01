@@ -53,7 +53,7 @@ def test_position_size_positive():
 def test_position_size_capped():
     preds = _make_preds(P_RALLY=0.99, ATR_pct=0.001)  # extreme values
     size = compute_position_size(preds)
-    from config import PARAMS
+    from rally_ml.config import PARAMS
     assert size.iloc[0] <= PARAMS.max_risk_frac
 
 

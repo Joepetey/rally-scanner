@@ -13,7 +13,7 @@ forces the intended exit condition:
 
 from datetime import datetime
 
-from config import PARAMS
+from rally_ml.config import PARAMS
 
 TICKER = "BTC"
 _SIM_SIZE = 0.05  # 5% of equity — small enough to always fit within any cap

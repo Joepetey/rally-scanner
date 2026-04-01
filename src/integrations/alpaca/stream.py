@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from config import ASSETS, PARAMS
+from rally_ml.config import ASSETS, PARAMS
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +150,7 @@ class AlpacaStreamManager:
     def update_subscriptions(self, symbols: set[str]) -> None:
         """Diff the symbol set and subscribe/unsubscribe as needed. Thread-safe.
 
-        Automatically excludes non-signal tickers (e.g. SGOV cash parking) that
-        don't need real-time streaming.
+        Automatically excludes non-signal tickers that don't need real-time streaming.
         """
         symbols = symbols - self._excluded
         equity_symbols = {s for s in symbols if not self._is_crypto(s)}

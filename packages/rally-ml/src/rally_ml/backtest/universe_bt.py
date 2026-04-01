@@ -1,7 +1,7 @@
 """
 Full walk-forward backtest across the entire S&P 500 + Nasdaq 100 universe.
 
-Runs the complete model pipeline (features → labels → walk-forward LR+HMM → OOS predictions)
+Runs the complete model pipeline (features -> labels -> walk-forward LR+HMM -> OOS predictions)
 for every ticker, then simulates portfolio performance across multiple trading configurations.
 
 Saves intermediate results to disk so a crash doesn't lose all progress.
@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Limit per-worker thread count BEFORE importing numpy/sklearn/hmmlearn.
-# Without this, each subprocess spawns os.cpu_count() threads → 2 workers × 16
+# Without this, each subprocess spawns os.cpu_count() threads -> 2 workers x 16
 # threads = 32 threads thrashing 16 cores.
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
@@ -37,26 +37,25 @@ os.environ.setdefault("MKL_NUM_THREADS", "2")
 import numpy as np
 import pandas as pd
 
-from .common import (  # noqa: E402
+from ..config import CONFIGS, PIPELINE
+from ..core.calibrate import calibrate_thresholds
+from ..core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
+from ..core.features import build_features
+from ..core.labels import compute_labels
+from ..core.universe import get_universe
+from .common import (
     combine_predictions,
     generate_signals_fast,
     simulate_portfolio,
     simulate_trades_fast,
     walk_forward_train,
 )
-from config import CONFIGS  # noqa: E402
-from config import PIPELINE
-from core.calibrate import calibrate_thresholds
-from core.data import fetch_daily_batch, fetch_vix_safe, merge_vix
-from core.features import build_features
-from core.labels import compute_labels
-from core.universe import get_universe
 
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CACHE_DIR = PROJECT_ROOT / "backtest_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 PREDICTIONS_CACHE = CACHE_DIR / "predictions.pkl"

@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-from config import PIPELINE, AssetConfig
+from ..config import PIPELINE, AssetConfig
 
 logger = logging.getLogger(__name__)
 

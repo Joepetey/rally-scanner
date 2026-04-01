@@ -16,7 +16,7 @@ import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 from sklearn.preprocessing import StandardScaler
 
-from config import PIPELINE
+from ..config import PIPELINE
 
 HMM_FEATURES = ["RV", "ATR_pct", "BB_width"]
 N_STATES = 3

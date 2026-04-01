@@ -26,16 +26,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from bot.notify import (
+    notify_error,
+    notify_exits,
+    notify_retrain_complete,
+    notify_signals,
+)
+from rally_ml.core.persistence import load_manifest
+from rally_ml.pipeline.retrain import retrain_all
+
+from db.portfolio import record_closed_trades, update_daily_snapshot
 from log import setup_logging
 from monitoring import init_sentry
 from pipeline.scanner import scan_all
-from pipeline.retrain import retrain_all
 from trading.positions import get_merged_positions_sync
-from core.persistence import load_manifest
-from bot.notify import (
-    notify_signals, notify_exits, notify_retrain_complete, notify_error,
-)
-from db.portfolio import record_closed_trades, update_daily_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +161,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     health = check_model_health()
 
     print(f"\n{'='*60}")
-    print(f"  MODEL HEALTH REPORT")
+    print("  MODEL HEALTH REPORT")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
     print(f"  Total models:  {health['total_count']}")
@@ -165,7 +169,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     print(f"  Stale (>14d):  {health['stale_count']}")
 
     if health["stale_tickers"]:
-        print(f"\n  Stalest models:")
+        print("\n  Stalest models:")
         for ticker, age in health["stale_tickers"]:
             print(f"    {ticker:<8s} {age:>4d} days old")
 
