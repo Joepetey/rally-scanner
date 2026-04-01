@@ -442,6 +442,7 @@ def scan_watchlist(
     try:
         ohlcv_cache = fetch_daily_batch(scan_tickers, start=start)
     except Exception:
+        logger.warning("OHLCV batch fetch failed in fast-scan, using empty cache", exc_info=True)
         ohlcv_cache = {}
 
     n_workers = min(4, len(scan_tickers))

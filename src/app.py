@@ -81,8 +81,10 @@ async def main() -> None:
         bot_task.cancel()
         try:
             await bot_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            logger.warning("Bot task shutdown error", exc_info=True)
 
 
 def main_sync() -> int:

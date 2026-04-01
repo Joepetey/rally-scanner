@@ -13,6 +13,8 @@ from collections.abc import Awaitable, Callable
 from datetime import date as _date
 from datetime import datetime
 
+import sentry_sdk
+
 from config import ASSETS, PARAMS
 from core.data import fetch_quotes
 from core.persistence import load_manifest
@@ -485,6 +487,7 @@ class TradingScheduler:
         try:
             equity = await get_account_equity() if alpaca_enabled() else 100_000
         except Exception:
+            logger.warning("Equity fetch failed, defaulting to $100k", exc_info=True)
             equity = 100_000
 
         actions = await asyncio.to_thread(evaluate, equity, positions, self._regime_states)
@@ -893,6 +896,7 @@ class TradingScheduler:
             task.get_name(), exc,
             exc_info=exc,
         )
+        sentry_sdk.capture_exception(exc)
 
     async def _execute_breach_guarded(
         self, ticker: str, pos: dict, price: float, alert_type: str,
@@ -937,7 +941,7 @@ class TradingScheduler:
             if dd >= PARAMS.risk_tier1_dd:
                 return True
         except Exception:
-            pass
+            logger.warning("Drawdown computation failed in _should_use_fast_alerts", exc_info=True)
         return False
 
     async def _store_order_ids(self, results: list) -> None:

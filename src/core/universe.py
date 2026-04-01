@@ -95,6 +95,7 @@ def _load_cache() -> dict | None:
     try:
         return _db_load_cache(CACHE_MAX_AGE_DAYS)
     except Exception:
+        logger.warning("Universe cache load failed", exc_info=True)
         return None
 
 

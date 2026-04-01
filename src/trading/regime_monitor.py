@@ -29,6 +29,7 @@ def _load_regime_states() -> dict:
     try:
         return _db_load_regime_states()
     except Exception:
+        logger.warning("Failed to load regime states from DB", exc_info=True)
         return {}
 
 
@@ -64,6 +65,7 @@ def check_regime_shifts(tickers: list[str] | None = None) -> list[dict]:
     try:
         ohlcv_cache = fetch_daily_batch(check_tickers, start=start)
     except Exception:
+        logger.warning("Regime monitor: batch OHLCV fetch failed", exc_info=True)
         ohlcv_cache = {}
 
     prev_states = _load_regime_states()

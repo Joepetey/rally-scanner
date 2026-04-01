@@ -246,6 +246,7 @@ def fetch_daily_batch(
                 result[ticker] = df
                 time.sleep(0.3)
             except Exception:
+                logger.warning("Sequential fetch failed for %s", ticker, exc_info=True)
                 continue
 
     return result

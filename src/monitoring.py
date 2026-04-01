@@ -27,7 +27,7 @@ def init_sentry() -> None:
         integrations=[
             # level: capture warnings as breadcrumbs (context alongside errors)
             # event_level: only create Sentry issues for ERROR+
-            LoggingIntegration(level=logging.WARNING, event_level=logging.ERROR),
+            LoggingIntegration(level=logging.DEBUG, event_level=logging.WARNING),
         ],
         before_send=_before_send,
         traces_sample_rate=0.0,
