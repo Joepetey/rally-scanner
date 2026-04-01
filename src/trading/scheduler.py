@@ -264,48 +264,11 @@ class TradingScheduler:
                                    duration_s=round(_time.time() - t0, 1))
             return
 
-        all_signals = [r for r in results if r.get("signal")]
-
-        if alpaca_enabled():
-            try:
-                _equity = await get_account_equity()
-                await sync_positions_from_alpaca(equity=_equity)
-
-            except Exception:
-                logger.exception("Alpaca sync failed — using cached positions")
-        positions = load_positions()
-
-        # Detect exits; defer DB commit if Alpaca will confirm them
-        positions = await asyncio.to_thread(
-            update_existing_positions, positions, results, not alpaca_enabled(),
-        )
-        closed = positions.get("closed_today", [])
-
-        if closed and not alpaca_enabled():
-            record_closed_trades(closed)
-
-        update_daily_snapshot(positions, results)
-        self._save_watchlist(results, positions)
-        await asyncio.to_thread(_save_latest_scan, results, positions)
-
-        # Refresh watchlist for mid-day scans
-        if manifest:
-            self._watchlist_tickers = sorted(manifest.keys())
-
-        open_tickers = {p["ticker"] for p in positions.get("positions", [])}
-        cooldown_tickers: set[str] = set()
-        if PARAMS.cooldown_days > 0:
-            cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
-            cooled = [s["ticker"] for s in all_signals
-                      if s["ticker"] not in open_tickers and s["ticker"] in cooldown_tickers]
-            if cooled:
-                logger.info("Cooldown filter (%dd): skipping %s", PARAMS.cooldown_days, cooled)
-        signals = [s for s in all_signals
-                   if s["ticker"] not in open_tickers and s["ticker"] not in cooldown_tickers]
-
         # Snapshot positions BEFORE entries so the embed reflects existing
         # open positions only — new entries are shown in the orders/signals section.
-        positions_for_embed = list(positions.get("positions", []))
+        positions, closed, signals, positions_for_embed = await self._prepare_scan_signals(
+            results, manifest
+        )
 
         orders: list[dict] = []
         confirmed_exits: list[dict] = list(closed) if not alpaca_enabled() else []
@@ -460,44 +423,9 @@ class TradingScheduler:
                                    duration_s=round(_time.time() - t0, 1))
             return
 
-        all_signals = [r for r in results if r.get("signal")]
-
-        if alpaca_enabled():
-            try:
-                _equity = await get_account_equity()
-                await sync_positions_from_alpaca(equity=_equity)
-            except Exception:
-                logger.exception("Alpaca sync failed — using cached positions")
-        positions = load_positions()
-
-        # Detect exits; defer DB commit — execution happens at 9:30
-        positions = await asyncio.to_thread(
-            update_existing_positions, positions, results, not alpaca_enabled(),
+        positions, closed, signals, positions_for_embed = await self._prepare_scan_signals(
+            results, manifest
         )
-        closed = positions.get("closed_today", [])
-
-        if closed and not alpaca_enabled():
-            record_closed_trades(closed)
-
-        update_daily_snapshot(positions, results)
-        self._save_watchlist(results, positions)
-        await asyncio.to_thread(_save_latest_scan, results, positions)
-
-        if manifest:
-            self._watchlist_tickers = sorted(manifest.keys())
-
-        open_tickers = {p["ticker"] for p in positions.get("positions", [])}
-        cooldown_tickers: set[str] = set()
-        if PARAMS.cooldown_days > 0:
-            cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
-            cooled = [s["ticker"] for s in all_signals
-                      if s["ticker"] not in open_tickers and s["ticker"] in cooldown_tickers]
-            if cooled:
-                logger.info("Cooldown filter (%dd): skipping %s", PARAMS.cooldown_days, cooled)
-        signals = [s for s in all_signals
-                   if s["ticker"] not in open_tickers and s["ticker"] not in cooldown_tickers]
-
-        positions_for_embed = list(positions.get("positions", []))
 
         # Store for market-open execution
         self._pending_signals = signals
@@ -1282,3 +1210,49 @@ class TradingScheduler:
                 "signal": bool(r.get("signal")),
             })
         _db_save_watchlist(watchlist, scan_date=_date.today())
+
+    async def _prepare_scan_signals(
+        self, results: list[dict], manifest: dict
+    ) -> tuple[dict, list[dict], list[dict], list[dict]]:
+        """Sync positions, detect exits, apply cooldown filter to scan results.
+
+        Returns (positions, closed, signals, positions_for_embed).
+        """
+        all_signals = [r for r in results if r.get("signal")]
+
+        if alpaca_enabled():
+            try:
+                _equity = await get_account_equity()
+                await sync_positions_from_alpaca(equity=_equity)
+            except Exception:
+                logger.exception("Alpaca sync failed — using cached positions")
+        positions = load_positions()
+
+        positions = await asyncio.to_thread(
+            update_existing_positions, positions, results, not alpaca_enabled(),
+        )
+        closed = positions.get("closed_today", [])
+
+        if closed and not alpaca_enabled():
+            record_closed_trades(closed)
+
+        update_daily_snapshot(positions, results)
+        self._save_watchlist(results, positions)
+        await asyncio.to_thread(_save_latest_scan, results, positions)
+
+        if manifest:
+            self._watchlist_tickers = sorted(manifest.keys())
+
+        open_tickers = {p["ticker"] for p in positions.get("positions", [])}
+        cooldown_tickers: set[str] = set()
+        if PARAMS.cooldown_days > 0:
+            cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+            cooled = [s["ticker"] for s in all_signals
+                      if s["ticker"] not in open_tickers and s["ticker"] in cooldown_tickers]
+            if cooled:
+                logger.info("Cooldown filter (%dd): skipping %s", PARAMS.cooldown_days, cooled)
+        signals = [s for s in all_signals
+                   if s["ticker"] not in open_tickers and s["ticker"] not in cooldown_tickers]
+
+        positions_for_embed = list(positions.get("positions", []))
+        return positions, closed, signals, positions_for_embed
