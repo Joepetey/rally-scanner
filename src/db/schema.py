@@ -333,6 +333,14 @@ def init_schema() -> None:
             ADD COLUMN IF NOT EXISTS range_low DOUBLE PRECISION NOT NULL DEFAULT 0
         """)
 
+        # Migration: trades table no longer filters by discord_id (single-user)
+        cur.execute("""
+            ALTER TABLE trades ALTER COLUMN discord_id DROP NOT NULL
+        """)
+        cur.execute("""
+            ALTER TABLE trades DROP CONSTRAINT IF EXISTS trades_discord_id_fkey
+        """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS current_watchlist (
                 ticker         TEXT PRIMARY KEY,

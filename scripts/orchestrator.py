@@ -92,10 +92,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         notify_error("Model staleness warning", msg)
 
     # Run scan with position tracking
-    results = scan_all(
-        config_name=args.config,
-        show_positions=True,
-    )
+    results = scan_all(config_name=args.config)
 
     # Extract signals
     signals = [r for r in results if r.get("signal")]

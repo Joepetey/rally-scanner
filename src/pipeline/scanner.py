@@ -1,15 +1,7 @@
 """
-Daily market rally scanner — load models, scan assets, print alerts.
-
-Usage:
-    python scanner.py                          # scan all trained assets (baseline)
-    python scanner.py --config conservative    # use conservative thresholds
-    python scanner.py --config aggressive      # use aggressive thresholds
-    python scanner.py --tickers AAPL MSFT SPY  # scan specific tickers
-    python scanner.py --positions              # also show open positions
+Daily market rally scanner — load models, scan assets, return signals.
 """
 
-import argparse
 import logging
 import multiprocessing
 import warnings
@@ -33,11 +25,6 @@ from rally_ml.core.features import build_features
 from rally_ml.core.hmm import predict_hmm_probs
 from rally_ml.core.persistence import load_manifest, load_model
 
-from trading.positions import (
-    get_merged_positions_sync,
-    print_positions,
-    update_existing_positions,
-)
 from trading.signals import compute_position_size, generate_signals
 
 warnings.filterwarnings("ignore")
@@ -160,7 +147,6 @@ def scan_single(
         "range_high": round(float(row.get("RangeHigh", 0)), 2),
         "range_low": round(float(row.get("RangeLow", 0)), 2),
         "rsi": round(float(row.get("RSI", 0)), 1),
-        # New features
         "golden_cross": int(row.get("GOLDEN_CROSS", 0)),
         "macd_hist": round(float(row.get("MACD_HIST", 0)), 5),
         "vol_ratio": round(float(row.get("VOL_RATIO", 1)), 2),
@@ -200,74 +186,14 @@ def _fetch_scan_data(
     return vix_data, ohlcv_cache
 
 
-def _compute_breadth(ok_results: list[dict]) -> None:
-    """Print market breadth statistics to stdout."""
-    above_ma50 = sum(
-        1 for r in ok_results
-        if r["close"] > r.get("ma50", 0) and r.get("ma50", 0) > 0
-    )
-    above_ma200 = sum(1 for r in ok_results if r.get("trend", 0))
-    golden_crosses = sum(1 for r in ok_results if r.get("golden_cross", 0))
-    avg_vix_pctile = np.mean([r.get("vix_pctile", 0.5) for r in ok_results])
-    breadth_50 = above_ma50 / len(ok_results)
-    breadth_200 = above_ma200 / len(ok_results)
-    n = len(ok_results)
-
-    print(f"\n  {'='*86}")
-    print("  MARKET BREADTH")
-    print(f"  {'='*86}")
-    b50_bar = "#" * int(breadth_50 * 40) + "." * (40 - int(breadth_50 * 40))
-    b200_bar = "#" * int(breadth_200 * 40) + "." * (40 - int(breadth_200 * 40))
-    print(f"  Above 50-day MA:  {above_ma50:>3}/{n} ({breadth_50:.0%})  [{b50_bar}]")
-    print(f"  Above 200-day MA: {above_ma200:>3}/{n} ({breadth_200:.0%})  [{b200_bar}]")
-    gc_pct = golden_crosses / n
-    print(f"  Golden crosses:   {golden_crosses:>3}/{n} ({gc_pct:.0%})")
-    if avg_vix_pctile > 0.80:
-        vix_label = "EXTREME FEAR"
-    elif avg_vix_pctile > 0.60:
-        vix_label = "FEAR"
-    elif avg_vix_pctile > 0.40:
-        vix_label = "NEUTRAL"
-    elif avg_vix_pctile > 0.20:
-        vix_label = "GREED"
-    else:
-        vix_label = "EXTREME GREED"
-    print(f"  VIX percentile:   {avg_vix_pctile:.0%} ({vix_label})")
-
-
-def scan_all(
-    tickers: list[str] | None = None,
-    config_name: str = "conservative",
+def _run_parallel_scan(
+    scan_tickers: list[str],
+    vix_data: "pd.Series | None",
+    ohlcv_cache: dict,
+    max_workers: int,
 ) -> list[dict]:
-    # Apply config
-    apply_config(config_name)
-
-    manifest = load_manifest()
-    if not manifest:
-        logger.error("No trained models found. Run retrain.py first.")
-        return []
-
-    if tickers:
-        scan_tickers = [t for t in tickers if t in manifest]
-        missing = [t for t in tickers if t not in manifest]
-        if missing:
-            logger.warning("No models for: %s", ", ".join(missing))
-    else:
-        scan_tickers = sorted(manifest.keys())
-
-    start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    vix_data, ohlcv_cache = _fetch_scan_data(scan_tickers, start)
-
-    print(f"\n{'='*90}")
-    print(f"  RALLY DETECTOR — DAILY SCAN  [{config_name.upper()}]")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  {len(scan_tickers)} assets")
-    print(f"  P(rally)>{PARAMS.p_rally_threshold:.0%}  Comp>{PARAMS.comp_score_threshold}  "
-          f"MaxSize={PARAMS.max_risk_frac:.0%}  ProfitATR={PARAMS.profit_atr_mult}  "
-          f"TimeStop={PARAMS.time_stop_bars}")
-    print(f"{'='*90}")
-
-    # Scan all tickers in parallel using process pool
-    n_workers = min(_MAX_SCAN_WORKERS, len(scan_tickers))
+    """Run scan across tickers using a process pool."""
+    n_workers = min(max_workers, len(scan_tickers))
     work_items = [
         ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
         for ticker in scan_tickers
@@ -287,143 +213,69 @@ def scan_all(
             logger.debug("Scanned %s (%d/%d)", ticker, i, len(scan_tickers))
             results.append(future.result())
 
-    # Separate results
-    signals = [r for r in results if r.get("signal")]
-    watchlist = [r for r in results if r.get("status") == "ok"
-                 and not r.get("signal")
-                 and r.get("p_rally", 0) > PARAMS.watchlist_p_rally_min]
-    errors = [r for r in results if r.get("status") != "ok"]
-    ok_results = [r for r in results if r.get("status") == "ok"]
-
-    # Update signals with live prices so entries/stops/targets use current market price
-    if signals:
-        live_tickers = [s["ticker"] for s in signals]
-        quotes = fetch_quotes(live_tickers)
-        for sig in signals:
-            q = quotes.get(sig["ticker"], {})
-            if "price" in q:
-                daily_close = sig["close"]
-                sig["close"] = q["price"]
-                logger.info(
-                    "%s: live price $%.2f (daily close was $%.2f)",
-                    sig["ticker"], q["price"], daily_close,
-                )
-
-    # --- MARKET BREADTH ---
-    if ok_results:
-        _compute_breadth(ok_results)
-
-    # --- NEW SIGNALS ---
-    print(f"\n  {'='*86}")
-    print(f"  NEW SIGNALS ({len(signals)})")
-    print(f"  {'='*86}")
-    if signals:
-        _print_signal_table(signals)
-    else:
-        print("  (none)")
-
-    # --- WATCHLIST ---
-    print(f"\n  {'='*86}")
-    print(f"  WATCHLIST — near-miss, P(rally) > 35% ({len(watchlist)})")
-    print(f"  {'='*86}")
-    if watchlist:
-        _print_watchlist_table(watchlist)
-    else:
-        print("  (none)")
-
-    # --- FULL PROBABILITY RANKING --- (debug only — 800+ lines floods Railway logs)
-    if ok_results and logger.isEnabledFor(logging.DEBUG):
-        print(f"\n  {'='*86}")
-        print(f"  RALLY PROBABILITY RANKING — all {len(ok_results)} assets")
-        print(f"  {'='*86}")
-        _print_probability_table(ok_results)
-
-    # --- ERRORS ---
-    if errors:
-        print(f"\n  ERRORS ({len(errors)}):")
-        for r in errors:
-            print(f"    {r['ticker']}: {r['status']}")
-
-    # Summary
-    ok_count = sum(1 for r in results if r.get("status") == "ok")
-    print(f"\n  Scanned: {ok_count}/{len(scan_tickers)} ok, "
-          f"{len(signals)} signals, {len(watchlist)} watchlist, {len(errors)} errors")
-    print(f"{'='*90}\n")
-
     return results
 
 
-def _print_signal_table(signals: list[dict]) -> None:
-    header = (f"  {'Ticker':<7} {'Close':>8} {'P(rally)':>9} {'Comp':>6} "
-              f"{'GC':>3} {'MACD':>7} {'Vol':>5} {'VIX':>4} "
-              f"{'Size':>6} {'Stop':>8} {'Target':>8}")
-    print(header)
-    print(f"  {'-'*78}")
-    for r in sorted(signals, key=lambda x: x["p_rally"], reverse=True):
-        atr_val = r["close"] * r["atr_pct"]
-        target = r["close"] + PARAMS.profit_atr_mult * atr_val
-        print(f"  {r['ticker']:<7} {r['close']:>8.2f} {r['p_rally']:>8.1%} "
-              f"{r['comp_score']:>6.3f} "
-              f"{'Y' if r.get('golden_cross') else 'N':>3} "
-              f"{r.get('macd_hist', 0):>+6.4f} "
-              f"{r.get('vol_ratio', 1):>5.1f} "
-              f"{r.get('vix_pctile', 0.5):>3.0%} "
-              f"{r['size']:>5.1%} "
-              f"{r['range_low']:>8.2f} {target:>8.2f}")
+def _update_signals_with_live_prices(signals: list[dict]) -> None:
+    """Replace daily close with live quote price for signal tickers (in-place)."""
+    if not signals:
+        return
+    live_tickers = [s["ticker"] for s in signals]
+    quotes = fetch_quotes(live_tickers)
+    for sig in signals:
+        q = quotes.get(sig["ticker"], {})
+        if "price" in q:
+            daily_close = sig["close"]
+            sig["close"] = q["price"]
+            logger.info(
+                "%s: live price $%.2f (daily close was $%.2f)",
+                sig["ticker"], q["price"], daily_close,
+            )
 
 
-def _print_watchlist_table(watchlist: list[dict]) -> None:
-    header = (f"  {'Ticker':<7} {'Close':>8} {'P(rally)':>9} {'Comp':>6} "
-              f"{'Trend':>5} {'HMM_C':>6} {'RV%':>5} {'RSI':>5} {'Missing':>12}")
-    print(header)
-    print(f"  {'-'*67}")
-    for r in sorted(watchlist, key=lambda x: x["p_rally"], reverse=True)[:20]:
-        missing = []
-        if r["p_rally"] <= PARAMS.p_rally_threshold:
-            missing.append("P<thr")
-        if r["comp_score"] <= PARAMS.comp_score_threshold:
-            missing.append("Comp")
-        if not r["trend"]:
-            missing.append("Trend")
-        missing_str = ",".join(missing) if missing else "?"
+def scan_all(
+    tickers: list[str] | None = None,
+    config_name: str = "conservative",
+) -> list[dict]:
+    """Scan all trained assets (or specific tickers) and return results."""
+    apply_config(config_name)
 
-        print(f"  {r['ticker']:<7} {r['close']:>8.2f} {r['p_rally']:>8.1%} "
-              f"{r['comp_score']:>6.3f} {'Y' if r['trend'] else 'N':>5} "
-              f"{r['hmm_compressed']:>6.3f} {r['rv_pctile']:>5.1%} "
-              f"{r['rsi']:>5.1f} {missing_str:>12}")
+    manifest = load_manifest()
+    if not manifest:
+        logger.error("No trained models found. Run retrain.py first.")
+        return []
 
+    if tickers:
+        scan_tickers = [t for t in tickers if t in manifest]
+        missing = [t for t in tickers if t not in manifest]
+        if missing:
+            logger.warning("No models for: %s", ", ".join(missing))
+    else:
+        scan_tickers = sorted(manifest.keys())
 
-def _print_probability_table(results: list[dict]) -> None:
-    """Print every asset ranked by P(rally) with visual probability bar."""
-    p = PARAMS
-    sorted_r = sorted(results, key=lambda x: x["p_rally"], reverse=True)
+    start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    vix_data, ohlcv_cache = _fetch_scan_data(scan_tickers, start)
 
-    header = (f"  {'#':>3} {'Ticker':<7} {'P(rally)':>9} {'':20} "
-              f"{'Comp':>6} {'Trend':>5} {'HMM_C':>6} {'RV%':>5} {'RSI':>5} {'Close':>9}")
-    print(header)
-    print(f"  {'-'*80}")
+    logger.info(
+        "Scanning %d assets [%s] P(rally)>%.0f%% Comp>%s",
+        len(scan_tickers), config_name.upper(),
+        PARAMS.p_rally_threshold * 100, PARAMS.comp_score_threshold,
+    )
 
-    for i, r in enumerate(sorted_r, 1):
-        prob = r["p_rally"]
+    results = _run_parallel_scan(scan_tickers, vix_data, ohlcv_cache, _MAX_SCAN_WORKERS)
 
-        # Visual bar: 20 chars wide, filled proportionally
-        bar_len = 20
-        filled = int(prob * bar_len)
-        # Color coding via symbols: above signal threshold vs below
-        if r.get("signal"):
-            bar = ">" * filled + "." * (bar_len - filled)
-            tag = " <<< SIGNAL"
-        elif prob > p.p_rally_threshold:
-            bar = "#" * filled + "." * (bar_len - filled)
-            tag = ""
-        else:
-            bar = "|" * filled + "." * (bar_len - filled)
-            tag = ""
+    signals = [r for r in results if r.get("signal")]
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    err_count = sum(1 for r in results if r.get("status") != "ok")
 
-        print(f"  {i:>3} {r['ticker']:<7} {prob:>8.1%} [{bar}] "
-              f"{r['comp_score']:>6.3f} {'Y' if r['trend'] else 'N':>5} "
-              f"{r['hmm_compressed']:>6.3f} {r['rv_pctile']:>5.1%} "
-              f"{r['rsi']:>5.1f} {r['close']:>9.2f}{tag}")
+    _update_signals_with_live_prices(signals)
+
+    logger.info(
+        "Scan complete — %d/%d ok, %d signals, %d errors",
+        ok_count, len(scan_tickers), len(signals), err_count,
+    )
+
+    return results
 
 
 def scan_watchlist(
@@ -432,7 +284,7 @@ def scan_watchlist(
 ) -> list[dict]:
     """Scan a specific set of tickers (e.g. near-threshold watchlist).
 
-    Lighter than scan_all: fewer workers, no console output.
+    Lighter than scan_all: fewer workers.
     Returns list of result dicts (same format as scan_all).
     """
     apply_config(config_name)
@@ -445,61 +297,12 @@ def scan_watchlist(
     if not scan_tickers:
         return []
 
-    # Fetch data
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     vix_data, ohlcv_cache = _fetch_scan_data(scan_tickers, start, verbose=False)
-    n_workers = min(_MAX_WATCHLIST_WORKERS, len(scan_tickers))
-    work_items = [
-        ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
-        for ticker in scan_tickers
-    ]
 
-    results = []
-    with ProcessPoolExecutor(
-        max_workers=n_workers,
-        mp_context=multiprocessing.get_context("forkserver"),
-    ) as pool:
-        futures = {
-            pool.submit(_scan_one, item): item[0]
-            for item in work_items
-        }
-        for future in as_completed(futures):
-            results.append(future.result())
+    results = _run_parallel_scan(scan_tickers, vix_data, ohlcv_cache, _MAX_WATCHLIST_WORKERS)
 
-    # Update signals with live prices (same as scan_all)
     signals = [r for r in results if r.get("signal")]
-    if signals:
-        live_tickers = [s["ticker"] for s in signals]
-        quotes = fetch_quotes(live_tickers)
-        for sig in signals:
-            q = quotes.get(sig["ticker"], {})
-            if "price" in q:
-                daily_close = sig["close"]
-                sig["close"] = q["price"]
-                logger.info(
-                    "%s: live price $%.2f (daily close was $%.2f)",
-                    sig["ticker"], q["price"], daily_close,
-                )
+    _update_signals_with_live_prices(signals)
 
     return results
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Daily rally scanner")
-    parser.add_argument("--tickers", nargs="+", default=None,
-                        help="Specific tickers to scan (default: all trained)")
-    parser.add_argument("--positions", action="store_true",
-                        help="Show and update open positions")
-    parser.add_argument("--config", default="conservative",
-                        choices=["conservative", "baseline", "aggressive", "concentrated"],
-                        help="Trading config: conservative, baseline, aggressive, concentrated")
-    args = parser.parse_args()
-    results = scan_all(tickers=args.tickers, config_name=args.config)
-    if args.positions:
-        positions = get_merged_positions_sync()
-        positions = update_existing_positions(positions, results)
-        print_positions(positions)
-
-
-if __name__ == "__main__":
-    main()

@@ -195,26 +195,3 @@ def save_positions(state: dict) -> None:
                     ),
                 )
 
-
-# ---------------------------------------------------------------------------
-# Helper operations
-# ---------------------------------------------------------------------------
-
-def tighten_trailing_stop(ticker: str, new_stop: float) -> dict | None:
-    """Tighten a position's trailing stop (only if new_stop > current).
-
-    Returns the updated position dict, or None if not found or not tightened.
-    """
-    pos = load_position_meta(ticker)
-    if pos is None:
-        return None
-    current = pos.get("trailing_stop", 0)
-    if new_stop > current:
-        pos["trailing_stop"] = round(new_stop, 2)
-        save_position_meta(pos)
-        logger.info(
-            "Tightened trailing stop for %s: %.2f → %.2f",
-            ticker, current, new_stop,
-        )
-        return pos
-    return None

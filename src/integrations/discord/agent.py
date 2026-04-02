@@ -217,15 +217,15 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 
 _TOOL_DISPATCH: dict = {
-    "get_signals": lambda ti, did, cap: trading_ops.get_signals(did, cap),
-    "get_system_positions": lambda ti, did, cap: trading_ops.get_system_positions(did, cap),
-    "get_user_positions": lambda ti, did, cap: trading_ops.get_user_positions(did, cap),
-    "enter_trade": lambda ti, did, cap: trading_ops.enter_trade(did, ti, cap),
-    "exit_trade": lambda ti, did, cap: trading_ops.exit_trade(did, ti, cap),
-    "get_pnl": lambda ti, did, cap: trading_ops.get_pnl(did, ti.get("period", "all")),
+    "get_signals": lambda ti, did, cap: trading_ops.get_signals(cap),
+    "get_system_positions": lambda ti, did, cap: trading_ops.get_system_positions(cap),
+    "get_user_positions": lambda ti, did, cap: trading_ops.get_user_positions(cap),
+    "enter_trade": lambda ti, did, cap: trading_ops.enter_trade(ti, cap),
+    "exit_trade": lambda ti, did, cap: trading_ops.exit_trade(ti, cap),
+    "get_pnl": lambda ti, did, cap: trading_ops.get_pnl(cap, ti.get("period", "all")),
     "set_capital": lambda ti, did, cap: trading_ops.set_capital_amount(did, ti.get("amount")),
     "get_trade_history": lambda ti, did, cap: trading_ops.get_trade_history(
-        did, ti.get("ticker"), ti.get("limit", trading_ops.DEFAULT_TRADE_LIMIT),
+        ti.get("ticker"), ti.get("limit", trading_ops.DEFAULT_TRADE_LIMIT),
     ),
     "get_portfolio": lambda ti, did, cap: trading_ops.get_portfolio(ti.get("days", 30)),
     "get_health": lambda ti, did, cap: trading_ops.get_health(),
