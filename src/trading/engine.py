@@ -15,9 +15,9 @@ import rally_ml.config as config
 
 from db.events import log_order, log_price_alert
 from db.positions import load_positions, save_position_meta
+from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.exits import cancel_exit_orders, execute_exit, place_exit_orders
 from integrations.alpaca.fills import check_pending_fills, get_recent_sell_fills
-from integrations.alpaca.models import is_enabled as alpaca_enabled
 from trading.events import (  # noqa: F401 — re-export for backward compat
     AlertEvent,
     ExitResult,

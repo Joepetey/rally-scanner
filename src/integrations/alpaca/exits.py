@@ -22,13 +22,12 @@ except ImportError:
 # local
 import rally_ml.config as config
 
-from integrations.alpaca.broker import _safe_qty, _trading_client
+from integrations.alpaca.broker import _alpaca_symbol, _safe_qty, _trading_client
 from integrations.alpaca.models import (
     _ERR_NOT_TRADABLE,
     _ERR_POSITION_CLOSED,
     _ERR_SHARES_HELD,
     OrderResult,
-    _alpaca_symbol,
 )
 
 logger = logging.getLogger(__name__)

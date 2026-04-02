@@ -21,8 +21,8 @@ from db.positions import (
 )
 from db.positions import load_positions
 from integrations.alpaca.account import get_snapshots
+from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.fills import check_exit_fills
-from integrations.alpaca.models import is_enabled as alpaca_enabled
 from trading.events import (
     ExitResult,
     StreamDegradedEvent,

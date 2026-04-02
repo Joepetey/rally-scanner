@@ -98,7 +98,7 @@ def _compute_levels(ticker: str, entry_price: float) -> dict:
 async def main() -> None:
     from db import init_pool, init_schema
     from db.positions import load_all_position_meta, save_position_meta
-    from integrations.alpaca.account import get_all_positions
+    from integrations.alpaca.broker import get_all_positions
 
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:

@@ -6,10 +6,11 @@ import pytest
 from alpaca.trading.enums import OrderSide, OrderStatus
 
 from db.positions import load_positions, save_positions
+from integrations.alpaca.broker import is_enabled
 from integrations.alpaca.entries import execute_entries
 from integrations.alpaca.exits import cancel_order, execute_exit, execute_exits
 from integrations.alpaca.fills import check_pending_fills
-from integrations.alpaca.models import OrderResult, is_enabled
+from integrations.alpaca.models import OrderResult
 from integrations.discord.notify import _order_embed, _order_failure_embed
 from tests.helpers.alpaca_mock import MockAlpacaOrder
 from trading.positions import (

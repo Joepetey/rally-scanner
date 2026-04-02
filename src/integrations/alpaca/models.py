@@ -1,9 +1,3 @@
-# stdlib
-import os
-
-# local
-import rally_ml.config as config
-
 # third-party
 from pydantic import BaseModel
 
@@ -38,19 +32,3 @@ class EntryPlan(BaseModel):
     size: float
     price: float
     is_crypto: bool
-
-
-def is_enabled() -> bool:
-    return os.environ.get("ALPACA_AUTO_EXECUTE") == "1"
-
-
-def has_alpaca_keys() -> bool:
-    """True if Alpaca API keys are configured (regardless of auto-execute)."""
-    return bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
-
-
-def _alpaca_symbol(ticker: str) -> str:
-    """Convert internal ticker key to Alpaca symbol format (e.g. BTC → BTC/USD)."""
-    if ticker in config.ASSETS and config.ASSETS[ticker].asset_class == "crypto":
-        return config.ASSETS[ticker].ticker.replace("-", "/")
-    return ticker

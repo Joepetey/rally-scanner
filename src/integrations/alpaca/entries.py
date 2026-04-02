@@ -22,12 +22,12 @@ from db.positions import (
     log_skipped_signal,
     remove_from_queue,
 )
-from integrations.alpaca.broker import _data_client, _trading_client
+from integrations.alpaca.broker import _alpaca_symbol, _data_client, _trading_client
+from integrations.alpaca.exits import execute_exit
 from integrations.alpaca.models import (
     _ERR_NOT_TRADABLE,
     EntryPlan,
     OrderResult,
-    _alpaca_symbol,
 )
 from trading.positions import async_close_position, get_group_exposure, get_total_exposure
 from trading.risk_manager import is_circuit_breaker_active
@@ -75,9 +75,6 @@ async def _attempt_rotation(
 
     Returns (size, current_exposure, open_positions, open_tickers, rotated).
     """
-    # Late import to avoid circular dependency with exits module
-    from integrations.alpaca.exits import execute_exit
-
     ticker = sig["ticker"]
     size = sig["size"]
     sig_p = sig.get("p_rally", 0)
