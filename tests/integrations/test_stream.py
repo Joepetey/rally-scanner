@@ -13,7 +13,8 @@ import pytest
 
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from trading.engine import AlertEvent, HousekeepingResult
-from trading.scheduler_loops import housekeeping_loop, polling_loop
+from trading.loops.housekeeping import housekeeping_loop
+from trading.loops.polling import polling_loop
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -323,7 +324,7 @@ class TestTradingSchedulerIntegration:
 
         from trading.scheduler import TradingScheduler
         scheduler = TradingScheduler(on_event=on_event)
-        scheduler._exit_lock = asyncio.Lock()
+
 
         async def slow_breach(ticker, pos, price, reason):
             exit_calls.append(ticker)
@@ -367,8 +368,8 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.loops.housekeeping.load_positions", return_value={"positions": []}), \
+             patch("trading.loops.housekeeping.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Run 5 cycles (threshold), then cancel
             mock_sleep.side_effect = [None] * 5 + [asyncio.CancelledError()]
             try:
@@ -397,8 +398,8 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.loops.housekeeping.load_positions", return_value={"positions": []}), \
+             patch("trading.loops.housekeeping.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Run 10 cycles (well past threshold)
             mock_sleep.side_effect = [None] * 10 + [asyncio.CancelledError()]
             try:
@@ -422,8 +423,8 @@ class TestStreamHealthMonitoring:
         scheduler._stream = mock_stream
 
         # Pre-condition: degradation alert was already sent
-        scheduler._stream_degraded_cycles = 7
-        scheduler._stream_alert_sent = True
+        scheduler.state.stream_degraded_cycles = 7
+        scheduler.state.stream_alert_sent = True
 
         # Stream is now connected (recovered)
         mock_stream.is_connected = True
@@ -432,8 +433,8 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.loops.housekeeping.load_positions", return_value={"positions": []}), \
+             patch("trading.loops.housekeeping.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
             try:
                 await housekeeping_loop(scheduler)
@@ -443,8 +444,8 @@ class TestStreamHealthMonitoring:
         recovered = [e for e in received if isinstance(e, StreamRecoveredEvent)]
         assert len(recovered) == 1
         assert recovered[0].downtime_minutes == 7
-        assert scheduler._stream_degraded_cycles == 0
-        assert scheduler._stream_alert_sent is False
+        assert scheduler.state.stream_degraded_cycles == 0
+        assert scheduler.state.stream_alert_sent is False
 
     @pytest.mark.asyncio
     async def test_no_alert_before_threshold(self):
@@ -463,8 +464,8 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.loops.housekeeping.load_positions", return_value={"positions": []}), \
+             patch("trading.loops.housekeeping.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_sleep.side_effect = [None] * 4 + [asyncio.CancelledError()]
             try:
                 await housekeeping_loop(scheduler)
@@ -487,13 +488,13 @@ class TestStreamFallback:
         mock_stream = MagicMock()
         mock_stream.is_connected = True
         scheduler._stream = mock_stream
-        scheduler._last_alert_check = scheduler._last_alert_check.min.replace(
-            tzinfo=scheduler._last_alert_check.tzinfo
+        scheduler.state.last_alert_check = scheduler.state.last_alert_check.min.replace(
+            tzinfo=scheduler.state.last_alert_check.tzinfo
         )
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
-             patch("trading.scheduler_loops.get_snapshots") as mock_snap, \
-             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.loops.polling.get_snapshots") as mock_snap, \
+             patch("trading.loops.polling.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Make sleep return immediately then raise to exit loop
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
             try:
@@ -516,20 +517,20 @@ class TestStreamFallback:
         mock_stream.is_connected = False
         scheduler._stream = mock_stream
         # Force elapsed time to exceed interval
-        scheduler._last_alert_check = datetime.min.replace(
+        scheduler.state.last_alert_check = datetime.min.replace(
             tzinfo=zoneinfo.ZoneInfo("America/New_York")
         )
-        scheduler._current_alert_interval = 0
+        scheduler.state.current_alert_interval = 0
 
         pos = _make_pos()
         mock_check = AsyncMock(return_value=[])
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
-             patch("trading.scheduler_loops.load_positions", return_value={"positions": [pos]}), \
-             patch("trading.scheduler_loops.alpaca_enabled", return_value=False), \
-             patch("trading.scheduler_loops.fetch_quotes", return_value={}), \
+             patch("trading.loops.polling.load_positions", return_value={"positions": [pos]}), \
+             patch("trading.loops.polling.alpaca_enabled", return_value=False), \
+             patch("trading.loops.polling.fetch_quotes", return_value={}), \
              patch.object(scheduler._engine, "check_prices", mock_check), \
-             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
-             patch("trading.scheduler_loops.asyncio.to_thread",
+             patch("trading.loops.polling.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+             patch("trading.loops.polling.asyncio.to_thread",
                    new_callable=AsyncMock) as mock_thread:
             mock_thread.return_value = {}
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
@@ -546,7 +547,6 @@ class TestStreamFallback:
         from trading.scheduler import TradingScheduler
 
         scheduler = TradingScheduler(on_event=AsyncMock())
-        scheduler._snapshot_lock = asyncio.Lock()
 
         call_order = []
 
@@ -558,11 +558,11 @@ class TestStreamFallback:
 
         # Run two coroutines that both try to acquire the lock and call get_snapshots
         async def caller_a():
-            async with scheduler._snapshot_lock:
+            async with scheduler.state.snapshot_lock:
                 await fake_snapshots(["AAPL"])
 
         async def caller_b():
-            async with scheduler._snapshot_lock:
+            async with scheduler.state.snapshot_lock:
                 await fake_snapshots(["MSFT"])
 
         await asyncio.gather(caller_a(), caller_b())

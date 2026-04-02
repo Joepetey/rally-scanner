@@ -12,11 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from trading.scheduler_exec import store_order_ids
-from trading.scheduler_loops import (
-    housekeeping_loop,
-    reconcile_loop,
-    retrain_loop,
-)
+from trading.loops.housekeeping import housekeeping_loop
+from trading.loops.reconciliation import reconcile_loop
+from trading.loops.timers import retrain_loop
 
 
 def _make_scheduler():
@@ -134,8 +132,6 @@ async def test_store_order_ids_skips_result_without_order_id():
 async def test_scan_dedup_prevents_concurrent_same_scan_type():
     """Calling run_daily_scan("morning") twice concurrently must invoke scan_all exactly once."""
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     # Make scan_all slow so both tasks overlap
     scan_started = asyncio.Event()
@@ -147,25 +143,25 @@ async def test_scan_dedup_prevents_concurrent_same_scan_type():
 
     async def _guarded_scan(scan_type: str):
         """Replicate _scan_loop dedup guard around run_daily_scan."""
-        if scheduler._scan_in_progress.get(scan_type):
+        if scheduler.state.scan_in_progress.get(scan_type):
             return
-        scheduler._scan_in_progress[scan_type] = True
+        scheduler.state.scan_in_progress[scan_type] = True
         try:
             async with asyncio.timeout(600):
                 await scheduler.run_daily_scan(scan_type)
         finally:
-            scheduler._scan_in_progress[scan_type] = False
+            scheduler.state.scan_in_progress[scan_type] = False
 
-    with patch("trading.scheduler_ops.scan_all", side_effect=_slow_scan_all) as mock_scan, \
-         patch("trading.scheduler_ops.load_manifest", return_value={"AAPL": {}}), \
-         patch("trading.scheduler_ops.load_positions", return_value={"positions": []}), \
-         patch("trading.scheduler_ops.update_existing_positions", return_value={"positions": []}), \
-         patch("trading.scheduler_ops.update_daily_snapshot"), \
-         patch("trading.scheduler_ops._save_latest_scan"), \
+    with patch("trading.scheduler_prepare.scan_all", side_effect=_slow_scan_all) as mock_scan, \
+         patch("trading.scheduler_prepare.load_manifest", return_value={"AAPL": {}}), \
+         patch("trading.scheduler_prepare.load_positions", return_value={"positions": []}), \
+         patch("trading.scheduler_prepare.update_existing_positions", return_value={"positions": []}), \
+         patch("trading.scheduler_prepare.update_daily_snapshot"), \
+         patch("trading.scheduler_prepare._save_latest_scan"), \
          patch("trading.scheduler_exec._db_save_watchlist"), \
-         patch("trading.scheduler_ops.alpaca_enabled", return_value=False), \
-         patch("trading.scheduler_ops.log_scheduler_event", return_value=1), \
-         patch("trading.scheduler_ops.finish_scheduler_event"):
+         patch("trading.scheduler_prepare.alpaca_enabled", return_value=False), \
+         patch("trading.scheduler_prepare.log_scheduler_event", return_value=1), \
+         patch("trading.scheduler_prepare.finish_scheduler_event"):
         # Launch two concurrent guarded scans
         t1 = asyncio.create_task(_guarded_scan("morning"))
         t2 = asyncio.create_task(_guarded_scan("morning"))
@@ -178,8 +174,6 @@ async def test_scan_dedup_prevents_concurrent_same_scan_type():
 async def test_run_daily_scan_respects_timeout():
     """run_daily_scan must raise TimeoutError when scan_all exceeds the timeout window."""
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     original_to_thread = asyncio.to_thread
 
@@ -190,9 +184,9 @@ async def test_run_daily_scan_respects_timeout():
             return []
         return await original_to_thread(func, *args, **kwargs)
 
-    with patch("trading.scheduler_ops.load_manifest", return_value={"AAPL": {}}), \
-         patch("trading.scheduler_ops.log_scheduler_event", return_value=1), \
-         patch("trading.scheduler_ops.finish_scheduler_event"), \
+    with patch("trading.scheduler_prepare.load_manifest", return_value={"AAPL": {}}), \
+         patch("trading.scheduler_prepare.log_scheduler_event", return_value=1), \
+         patch("trading.scheduler_prepare.finish_scheduler_event"), \
          patch("asyncio.to_thread", side_effect=_hanging_to_thread):
         with pytest.raises(TimeoutError):
             async with asyncio.timeout(0.05):
@@ -203,8 +197,6 @@ async def test_run_daily_scan_respects_timeout():
 async def test_concurrent_exits_for_same_ticker_prevented():
     """Simultaneous breach exits for the same ticker must execute exactly once."""
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     pos = {"ticker": "AAPL", "entry_price": 150.0, "stop_price": 140.0}
 
@@ -231,15 +223,13 @@ async def test_concurrent_exits_for_same_ticker_prevented():
         await asyncio.gather(t1, t2)
 
     scheduler._engine.execute_breach.assert_awaited_once()
-    assert "AAPL" not in scheduler._exiting_tickers  # cleaned up
+    assert "AAPL" not in scheduler.state.exiting_tickers  # cleaned up
 
 
 @pytest.mark.asyncio
 async def test_reconcile_loop_runs_with_empty_positions():
     """_reconcile_loop must not crash with empty positions."""
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     scheduler._engine = MagicMock()
     scheduler._engine.is_market_open.return_value = True
@@ -253,9 +243,9 @@ async def test_reconcile_loop_runs_with_empty_positions():
             raise asyncio.CancelledError  # break out after first iteration
 
     mock_fills = AsyncMock(return_value=[])
-    with patch("trading.scheduler_loops.alpaca_enabled", return_value=True), \
-         patch("trading.scheduler_loops.check_exit_fills", mock_fills), \
-         patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+    with patch("trading.loops.reconciliation.alpaca_enabled", return_value=True), \
+         patch("trading.loops.reconciliation.check_exit_fills", mock_fills), \
+         patch("trading.loops.reconciliation.load_positions", return_value={"positions": []}), \
          patch("asyncio.sleep", side_effect=_sleep_then_stop):
         with pytest.raises(asyncio.CancelledError):
             await reconcile_loop(scheduler)
@@ -267,8 +257,6 @@ async def test_reconcile_loop_runs_with_empty_positions():
 async def test_housekeeping_skips_outside_market_hours_without_crypto():
     """Housekeeping loop must skip when market is closed and no crypto positions."""
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     scheduler._engine = MagicMock()
     scheduler._engine.is_market_open.return_value = False
@@ -283,7 +271,8 @@ async def test_housekeeping_skips_outside_market_hours_without_crypto():
             raise asyncio.CancelledError
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
-         patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+         patch("trading.loops.housekeeping.load_positions", return_value={"positions": []}), \
+         patch("trading.loops._crypto.load_positions", return_value={"positions": []}), \
          patch("rally_ml.config.ASSETS", {}):
         with pytest.raises(asyncio.CancelledError):
             await housekeeping_loop(scheduler)
@@ -296,8 +285,6 @@ async def test_housekeeping_skips_outside_market_hours_without_crypto():
 async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
     """Housekeeping must NOT skip when market is closed but a crypto position is open."""
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     crypto_positions = {
         "positions": [{"ticker": "BTC-USD", "entry_price": 60000}],
@@ -323,8 +310,9 @@ async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
          patch("rally_ml.config.ASSETS", {"BTC-USD": btc_asset}), \
-         patch("trading.scheduler_loops.load_positions", return_value=crypto_positions), \
-         patch("trading.scheduler_loops.alpaca_enabled", return_value=False):
+         patch("trading.loops.housekeeping.load_positions", return_value=crypto_positions), \
+         patch("trading.loops._crypto.load_positions", return_value=crypto_positions), \
+         patch("trading.loops.housekeeping.alpaca_enabled", return_value=False):
         with pytest.raises(asyncio.CancelledError):
             await housekeeping_loop(scheduler)
 
@@ -343,8 +331,6 @@ async def test_retrain_fires_after_window_on_sunday():
     from datetime import datetime as _dt
 
     scheduler = _make_scheduler()
-    scheduler._exit_lock = asyncio.Lock()
-    scheduler._snapshot_lock = asyncio.Lock()
 
     call_count = 0
 
@@ -359,7 +345,7 @@ async def test_retrain_fires_after_window_on_sunday():
     assert fake_now.weekday() == 6  # confirm Sunday
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
-         patch("trading.scheduler_loops.datetime") as mock_dt, \
+         patch("trading.loops.timers.datetime") as mock_dt, \
          patch.object(scheduler, "run_retrain", new_callable=AsyncMock) as mock_retrain:
         mock_dt.now.return_value = fake_now
         mock_dt.min = _dt.min

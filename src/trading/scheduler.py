@@ -1,18 +1,15 @@
-"""
-TradingScheduler — decoupled orchestration of all trading tasks.
+"""TradingScheduler — decoupled orchestration of all trading tasks.
 
 Owns AlertEngine + AlpacaStreamManager. Emits typed events via callback.
 Zero Discord imports.
 
-Scan operations live in scheduler_ops, background loops in scheduler_loops,
-and execution helpers in scheduler_exec.
+Scan operations live in scheduler_scans, non-scan actions in scheduler_actions,
+background loops in trading.loops, and execution helpers in scheduler_exec.
 """
 
 import asyncio
 import logging
-import zoneinfo
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 
 import sentry_sdk
 from rally_ml.config import ASSETS, PARAMS
@@ -21,19 +18,17 @@ from rally_ml.core.persistence import load_manifest
 from db.positions import (
     load_position_meta as _load_position_meta,
 )
-from db.positions import load_positions
+from db.positions import (
+    load_positions,
+)
 from db.positions import (
     save_position_meta as _save_position_meta,
 )
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from trading.engine import AlertEngine
-from trading.events import (
-    AlertEvent,
-    TradingEvent,
-)
-from trading.positions import update_position_for_price
-from trading.scheduler_loops import (
+from trading.events import AlertEvent, TradingEvent
+from trading.loops import (
     housekeeping_loop,
     polling_loop,
     reconcile_loop,
@@ -41,29 +36,30 @@ from trading.scheduler_loops import (
     retrain_loop,
     scan_loop,
 )
-from trading.scheduler_ops import (
-    run_daily_scan as _run_daily_scan,
-)
-from trading.scheduler_ops import (
-    run_market_open_execute as _run_market_open_execute,
-)
-from trading.scheduler_ops import (
-    run_midday_scan as _run_midday_scan,
-)
-from trading.scheduler_ops import (
-    run_premarket_scan as _run_premarket_scan,
-)
-from trading.scheduler_ops import (
+from trading.positions import update_position_for_price
+from trading.scheduler_actions import (
     run_regime_check as _run_regime_check,
 )
-from trading.scheduler_ops import (
+from trading.scheduler_actions import (
     run_retrain as _run_retrain,
 )
-from trading.scheduler_ops import (
+from trading.scheduler_actions import (
     run_risk_evaluation as _run_risk_evaluation,
 )
+from trading.scheduler_scans import (
+    run_daily_scan as _run_daily_scan,
+)
+from trading.scheduler_scans import (
+    run_market_open_execute as _run_market_open_execute,
+)
+from trading.scheduler_scans import (
+    run_midday_scan as _run_midday_scan,
+)
+from trading.scheduler_scans import (
+    run_premarket_scan as _run_premarket_scan,
+)
+from trading.scheduler_state import SchedulerState
 
-_ET = zoneinfo.ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
 
@@ -86,45 +82,9 @@ class TradingScheduler:
         self._stream: AlpacaStreamManager | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: list[asyncio.Task] = []
-
-        # Shared state
-        self._regime_states: dict = {}
-        self._watchlist_tickers: list[str] = []
-        self._current_alert_interval = PARAMS.base_alert_interval
-        self._last_alert_check = datetime.min.replace(tzinfo=_ET)
-
-        # Daily dedup: store ISO date string of last run
-        self._ran_morning_scan: str = ""
-        self._ran_morning_execute: str = ""
-        self._ran_midday_1: str = ""
-        self._ran_midday_2: str = ""
-        self._ran_retrain: str = ""
-        # Weekend crypto scan dedup: "{date}_{6h_slot}" (slot 0=midnight,1=6am,2=noon,3=6pm)
-        self._ran_weekend_scan: str = ""
-
-        # Pre-market scan results, consumed by market-open execution
-        self._pending_signals: list[dict] = []
-        self._pending_exits: list[dict] = []
-        self._pending_scan_results: list[dict] = []
-        self._pending_positions_embed: list[dict] = []
-
-        # In-progress scan guard: prevent concurrent scans of the same type
-        self._scan_in_progress: dict[str, bool] = {}
-
-        # Concurrent exit guard: prevent double-exit for the same ticker
-        self._exiting_tickers: set[str] = set()
-        self._exit_lock: asyncio.Lock  # assigned in start()
-
-        # Snapshot fetch guard: prevent housekeeping IEX fallback and polling
-        # from calling get_snapshots concurrently when is_connected flips state
-        self._snapshot_lock: asyncio.Lock  # assigned in start()
-
-        # Housekeeping cycle counter for IEX coverage fallback (every 2 cycles ≈ 2 min)
-        self._housekeeping_cycles: int = 0
-
-        # Stream health monitoring: consecutive market-hours cycles where stream is disconnected
-        self._stream_degraded_cycles: int = 0
-        self._stream_alert_sent: bool = False
+        self.state = SchedulerState(
+            current_alert_interval=PARAMS.base_alert_interval,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -133,8 +93,6 @@ class TradingScheduler:
     async def start(self) -> None:
         """Start stream (if enabled) and all housekeeping loops."""
         self._loop = asyncio.get_event_loop()
-        self._exit_lock = asyncio.Lock()
-        self._snapshot_lock = asyncio.Lock()
 
         # Start stream if Alpaca + streaming both enabled
         if alpaca_enabled() and is_stream_enabled():
@@ -155,10 +113,10 @@ class TradingScheduler:
         try:
             manifest = load_manifest()
             if manifest:
-                self._watchlist_tickers = sorted(manifest.keys())
+                self.state.watchlist_tickers = sorted(manifest.keys())
                 logger.info(
                     "Loaded %d tickers into watchlist from manifest",
-                    len(self._watchlist_tickers),
+                    len(self.state.watchlist_tickers),
                 )
         except Exception:
             logger.debug("No manifest found — watchlist empty until first scan")
@@ -190,7 +148,7 @@ class TradingScheduler:
         logger.info("TradingScheduler stopped")
 
     # ------------------------------------------------------------------
-    # Public actions (delegate to scheduler_ops)
+    # Public actions (delegate to scheduler_scans / scheduler_actions)
     # ------------------------------------------------------------------
 
     async def run_daily_scan(
@@ -255,7 +213,7 @@ class TradingScheduler:
             await self._execute_breach_guarded(event.ticker, pos, price, event.alert_type)
 
     # ------------------------------------------------------------------
-    # Helpers (kept here — used by loops and stream callback)
+    # Helpers
     # ------------------------------------------------------------------
 
     def _task_sentinel(self, task: asyncio.Task) -> None:
@@ -276,22 +234,21 @@ class TradingScheduler:
         self, ticker: str, pos: dict, price: float, alert_type: str,
     ) -> None:
         """Execute a breach exit with concurrent-exit guard."""
-        async with self._exit_lock:
-            if ticker in self._exiting_tickers:
+        async with self.state.exit_lock:
+            if ticker in self.state.exiting_tickers:
                 logger.info("Exit already in progress for %s — skipping duplicate", ticker)
                 return
-            self._exiting_tickers.add(ticker)
+            self.state.exiting_tickers.add(ticker)
 
         try:
             reason = alert_type.replace("_breached", "")
             exit_result = await self._engine.execute_breach(ticker, pos, price, reason)
             if exit_result:
-
                 await self._on_event(exit_result)
                 await self.run_risk_evaluation()
                 if self._stream:
                     all_pos = load_positions().get("positions", [])
                     self._stream.update_subscriptions({p["ticker"] for p in all_pos})
         finally:
-            async with self._exit_lock:
-                self._exiting_tickers.discard(ticker)
+            async with self.state.exit_lock:
+                self.state.exiting_tickers.discard(ticker)
