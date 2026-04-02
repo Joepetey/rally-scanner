@@ -25,6 +25,8 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from test_helpers import TestRunner
+
 from db import close_pool, init_pool, init_schema
 from db.positions import delete_position_meta, load_positions
 from integrations.alpaca.account import get_account_equity, get_snapshots
@@ -36,137 +38,85 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logger = logging.getLogger("test_trade")
-
-STEP_OK = "  [OK]"
-STEP_FAIL = "  [FAIL]"
 
 
-def _divider(title: str) -> None:
-    print(f"\n{'=' * 60}")
-    print(f"  {title}")
-    print("=" * 60)
-
-
-async def run(ticker: str) -> bool:
-    """Full production cycle: buy → save position → sell → cleanup.
-
-    Returns True if all steps succeeded.
-    """
-    _divider("1. Account connectivity")
+async def run(t: TestRunner, ticker: str) -> bool:
+    """Full production cycle: buy -> save position -> sell -> cleanup."""
+    t.divider("1. Account connectivity")
     equity = await get_account_equity()
     print(f"  Account equity: ${equity:,.2f}")
-    if equity <= 0:
-        print(STEP_FAIL, "equity is zero — check API keys / paper account")
+    if not t.check(equity > 0, "equity is positive"):
         return False
-    print(STEP_OK)
 
-    _divider(f"2. Fetch live price for {ticker}")
+    t.divider(f"2. Fetch live price for {ticker}")
     snapshots = await get_snapshots([ticker])
-    if ticker not in snapshots:
-        print(STEP_FAIL, f"no snapshot returned — is {ticker!r} in config.ASSETS?")
+    if not t.check(ticker in snapshots, f"got snapshot for {ticker}"):
         return False
     price = snapshots[ticker]["price"]
     print(f"  {ticker} latest trade: ${price:.2f}")
-    if price <= 0:
-        print(STEP_FAIL, "price is zero")
+    if not t.check(price > 0, "price is positive"):
         return False
-    print(STEP_OK)
 
-    # Build a minimal signal dict — same shape as the real scanner output.
-    # size=0.02 (2% of equity) → should yield at least 1 share for >$50 accounts.
     size = 0.02
     signal = {
-        "ticker": ticker,
-        "close": price,
-        "entry_price": price,
-        "size": size,
-        "p_rally": 0.75,          # realistic value; used for rotation logic
-        "comp_score": 0.5,
-        "atr_pct": 0.015,
-        "range_low": round(price * 0.97, 2),
-        "date": str(date.today()),
+        "ticker": ticker, "close": price, "entry_price": price, "size": size,
+        "p_rally": 0.75, "comp_score": 0.5, "atr_pct": 0.015,
+        "range_low": round(price * 0.97, 2), "date": str(date.today()),
     }
     qty_expected = int(equity * size / price)
-    print(f"\n  Signal: size={size:.0%}  price=${price:.2f}  "
-          f"expected_qty={qty_expected}")
-    if qty_expected < 1:
-        print(STEP_FAIL,
-              f"not enough equity (${equity:,.0f}) for 1 share at ${price:.2f} "
-              f"with size={size:.0%}")
+    print(f"\n  Signal: size={size:.0%}  price=${price:.2f}  expected_qty={qty_expected}")
+    if not t.check(qty_expected >= 1, "enough equity for 1 share"):
         return False
 
-    _divider("3. execute_entries (buy)")
+    t.divider("3. execute_entries (buy)")
     state = load_positions()
     if any(p["ticker"] == ticker for p in state.get("positions", [])):
-        print(f"  WARNING: {ticker} already in open positions — "
-              f"skipping to avoid duplicate")
+        t.fail(f"{ticker} already in open positions -- skipping to avoid duplicate")
         return False
 
     buy_results = await execute_entries([signal], equity=equity)
-    if not buy_results:
-        print(STEP_FAIL, "execute_entries returned empty results")
+    if not t.check(bool(buy_results), "execute_entries returned results"):
         return False
-
     result = buy_results[0]
-    print(f"  success={result.success}  skipped={result.skipped}  "
-          f"qty={result.qty}  order_id={result.order_id}  "
+    print(f"  success={result.success}  qty={result.qty}  order_id={result.order_id}  "
           f"fill_price={result.fill_price}  error={result.error}")
-
-    if not result.success:
-        print(STEP_FAIL, f"buy failed: {result.error}")
+    if not t.check(result.success, "buy succeeded"):
         return False
-    print(STEP_OK)
 
-    _divider("4. add_signal_positions (save to DB)")
-    # Mirror exactly what the bot does after execute_entries succeeds.
+    t.divider("4. add_signal_positions (save to DB)")
     signal["order_id"] = result.order_id
     state = load_positions()
     state = add_signal_positions(state, [signal])
-    saved = any(p["ticker"] == ticker for p in state.get("positions", []))
-    if not saved:
-        print(STEP_FAIL, "position not found in DB after add_signal_positions")
+    if not t.check(any(p["ticker"] == ticker for p in state.get("positions", [])),
+                   f"position saved (DB has {len(state['positions'])} open)"):
         return False
-    print(STEP_OK, f"position saved  (DB has {len(state['positions'])} open)")
 
-    _divider("5. execute_exit (sell)")
+    t.divider("5. execute_exit (sell)")
     exit_result = await execute_exit(ticker, trail_order_id=None)
     print(f"  success={exit_result.success}  already_closed={exit_result.already_closed}  "
-          f"qty={exit_result.qty}  fill_price={exit_result.fill_price}  "
-          f"error={exit_result.error}")
-
+          f"qty={exit_result.qty}  fill_price={exit_result.fill_price}")
     if not exit_result.success and not exit_result.already_closed:
-        print(STEP_FAIL, f"exit failed: {exit_result.error}")
-        # Still clean up DB even if Alpaca exit failed
-    else:
-        print(STEP_OK)
+        t.fail(f"exit failed: {exit_result.error}")
 
-    _divider("6. DB cleanup")
+    t.divider("6. DB cleanup")
     delete_position_meta(ticker)
     state_after = load_positions()
-    still_there = any(p["ticker"] == ticker for p in state_after.get("positions", []))
-    if still_there:
-        print(STEP_FAIL, f"{ticker} still in DB after delete")
-        return False
-    print(STEP_OK, "position removed from DB")
+    t.check(not any(p["ticker"] == ticker for p in state_after.get("positions", [])),
+            "position removed from DB")
 
-    all_ok = result.success and (exit_result.success or exit_result.already_closed)
-    return all_ok
+    return result.success and (exit_result.success or exit_result.already_closed)
 
 
 async def main(ticker: str) -> None:
+    t = TestRunner()
     init_pool()
     init_schema()
     try:
-        ok = await run(ticker)
+        await run(t, ticker)
     finally:
         close_pool()
 
-    _divider("RESULT")
-    if ok:
-        print("  ALL STEPS PASSED — paper trade cycle works end-to-end\n")
-    else:
-        print("  ONE OR MORE STEPS FAILED — see output above\n")
+    if not t.summary():
         sys.exit(1)
 
 
