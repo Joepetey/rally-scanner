@@ -13,6 +13,7 @@ import pytest
 
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from trading.engine import AlertEvent, HousekeepingResult
+from trading.scheduler_loops import housekeeping_loop, polling_loop
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -366,12 +367,12 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Run 5 cycles (threshold), then cancel
             mock_sleep.side_effect = [None] * 5 + [asyncio.CancelledError()]
             try:
-                await scheduler._housekeeping_loop()
+                await housekeeping_loop(scheduler)
             except asyncio.CancelledError:
                 pass
 
@@ -396,12 +397,12 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Run 10 cycles (well past threshold)
             mock_sleep.side_effect = [None] * 10 + [asyncio.CancelledError()]
             try:
-                await scheduler._housekeeping_loop()
+                await housekeeping_loop(scheduler)
             except asyncio.CancelledError:
                 pass
 
@@ -431,11 +432,11 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
             try:
-                await scheduler._housekeeping_loop()
+                await housekeeping_loop(scheduler)
             except asyncio.CancelledError:
                 pass
 
@@ -462,11 +463,11 @@ class TestStreamHealthMonitoring:
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
              patch.object(scheduler._engine, "run_housekeeping", new_callable=AsyncMock,
                           return_value=MagicMock(fills_confirmed=[], orders_placed=[])), \
-             patch("trading.scheduler.load_positions", return_value={"positions": []}), \
-             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_sleep.side_effect = [None] * 4 + [asyncio.CancelledError()]
             try:
-                await scheduler._housekeeping_loop()
+                await housekeeping_loop(scheduler)
             except asyncio.CancelledError:
                 pass
 
@@ -491,12 +492,12 @@ class TestStreamFallback:
         )
 
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
-             patch("trading.scheduler.get_snapshots") as mock_snap, \
-             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("trading.scheduler_loops.get_snapshots") as mock_snap, \
+             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Make sleep return immediately then raise to exit loop
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
             try:
-                await scheduler._polling_loop()
+                await polling_loop(scheduler)
             except asyncio.CancelledError:
                 pass
 
@@ -523,16 +524,17 @@ class TestStreamFallback:
         pos = _make_pos()
         mock_check = AsyncMock(return_value=[])
         with patch.object(scheduler._engine, "is_market_open", return_value=True), \
-             patch("trading.scheduler.load_positions", return_value={"positions": [pos]}), \
-             patch("trading.scheduler.alpaca_enabled", return_value=False), \
-             patch("trading.scheduler.fetch_quotes", return_value={}), \
+             patch("trading.scheduler_loops.load_positions", return_value={"positions": [pos]}), \
+             patch("trading.scheduler_loops.alpaca_enabled", return_value=False), \
+             patch("trading.scheduler_loops.fetch_quotes", return_value={}), \
              patch.object(scheduler._engine, "check_prices", mock_check), \
-             patch("trading.scheduler.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
-             patch("trading.scheduler.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+             patch("trading.scheduler_loops.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+             patch("trading.scheduler_loops.asyncio.to_thread",
+                   new_callable=AsyncMock) as mock_thread:
             mock_thread.return_value = {}
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
             try:
-                await scheduler._polling_loop()
+                await polling_loop(scheduler)
             except asyncio.CancelledError:
                 pass
 

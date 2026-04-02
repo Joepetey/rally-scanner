@@ -11,6 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from trading.scheduler_exec import store_order_ids
+from trading.scheduler_loops import (
+    housekeeping_loop,
+    reconcile_loop,
+    retrain_loop,
+)
+
 
 def _make_scheduler():
     """Create a TradingScheduler with minimal mocking to avoid side effects."""
@@ -35,8 +42,6 @@ def _make_result(*, ticker: str, order_id: str, success: bool = True,
 @pytest.mark.asyncio
 async def test_store_order_ids_preserves_existing_order_id():
     """When a position already has an order_id, _store_order_ids must not overwrite it."""
-    scheduler = _make_scheduler()
-
     existing_positions = {
         "positions": [
             {"ticker": "AAPL", "order_id": "original-id-123", "qty": 10},
@@ -45,9 +50,9 @@ async def test_store_order_ids_preserves_existing_order_id():
 
     result = _make_result(ticker="AAPL", order_id="new-id-456", qty=20)
 
-    with patch("trading.scheduler.load_positions", return_value=existing_positions), \
-         patch("trading.scheduler.async_save_positions", new_callable=AsyncMock) as mock_save:
-        await scheduler._store_order_ids([result])
+    with patch("trading.scheduler_exec.load_positions", return_value=existing_positions), \
+         patch("trading.scheduler_exec.async_save_positions", new_callable=AsyncMock) as mock_save:
+        await store_order_ids([result])
 
         # order_id must be preserved
         pos = existing_positions["positions"][0]
@@ -60,8 +65,6 @@ async def test_store_order_ids_preserves_existing_order_id():
 @pytest.mark.asyncio
 async def test_store_order_ids_sets_order_id_when_missing():
     """When a position has no order_id, _store_order_ids must set it."""
-    scheduler = _make_scheduler()
-
     existing_positions = {
         "positions": [
             {"ticker": "MSFT"},
@@ -71,9 +74,9 @@ async def test_store_order_ids_sets_order_id_when_missing():
     result = _make_result(ticker="MSFT", order_id="msft-order-789", qty=5,
                           trail_order_id="trail-abc")
 
-    with patch("trading.scheduler.load_positions", return_value=existing_positions), \
-         patch("trading.scheduler.async_save_positions", new_callable=AsyncMock) as mock_save:
-        await scheduler._store_order_ids([result])
+    with patch("trading.scheduler_exec.load_positions", return_value=existing_positions), \
+         patch("trading.scheduler_exec.async_save_positions", new_callable=AsyncMock) as mock_save:
+        await store_order_ids([result])
 
         pos = existing_positions["positions"][0]
         assert pos["order_id"] == "msft-order-789"
@@ -85,8 +88,6 @@ async def test_store_order_ids_sets_order_id_when_missing():
 @pytest.mark.asyncio
 async def test_store_order_ids_skips_failed_results():
     """Results with success=False should not modify positions."""
-    scheduler = _make_scheduler()
-
     existing_positions = {
         "positions": [
             {"ticker": "TSLA"},
@@ -95,9 +96,9 @@ async def test_store_order_ids_skips_failed_results():
 
     result = _make_result(ticker="TSLA", order_id="fail-id", success=False)
 
-    with patch("trading.scheduler.load_positions", return_value=existing_positions), \
-         patch("trading.scheduler.async_save_positions", new_callable=AsyncMock) as mock_save:
-        await scheduler._store_order_ids([result])
+    with patch("trading.scheduler_exec.load_positions", return_value=existing_positions), \
+         patch("trading.scheduler_exec.async_save_positions", new_callable=AsyncMock) as mock_save:
+        await store_order_ids([result])
 
         pos = existing_positions["positions"][0]
         assert "order_id" not in pos
@@ -107,8 +108,6 @@ async def test_store_order_ids_skips_failed_results():
 @pytest.mark.asyncio
 async def test_store_order_ids_skips_result_without_order_id():
     """Results with order_id=None should not modify positions."""
-    scheduler = _make_scheduler()
-
     existing_positions = {
         "positions": [
             {"ticker": "GOOG"},
@@ -117,9 +116,9 @@ async def test_store_order_ids_skips_result_without_order_id():
 
     result = _make_result(ticker="GOOG", order_id=None, success=True)
 
-    with patch("trading.scheduler.load_positions", return_value=existing_positions), \
-         patch("trading.scheduler.async_save_positions", new_callable=AsyncMock) as mock_save:
-        await scheduler._store_order_ids([result])
+    with patch("trading.scheduler_exec.load_positions", return_value=existing_positions), \
+         patch("trading.scheduler_exec.async_save_positions", new_callable=AsyncMock) as mock_save:
+        await store_order_ids([result])
 
         pos = existing_positions["positions"][0]
         assert "order_id" not in pos
@@ -157,16 +156,16 @@ async def test_scan_dedup_prevents_concurrent_same_scan_type():
         finally:
             scheduler._scan_in_progress[scan_type] = False
 
-    with patch("trading.scheduler.scan_all", side_effect=_slow_scan_all) as mock_scan, \
-         patch("trading.scheduler.load_manifest", return_value={"AAPL": {}}), \
-         patch("trading.scheduler.load_positions", return_value={"positions": []}), \
-         patch("trading.scheduler.update_existing_positions", return_value={"positions": []}), \
-         patch("trading.scheduler.update_daily_snapshot"), \
-         patch("trading.scheduler._save_latest_scan"), \
-         patch("trading.scheduler._db_save_watchlist"), \
-         patch("trading.scheduler.alpaca_enabled", return_value=False), \
-         patch("trading.scheduler.log_scheduler_event", return_value=1), \
-         patch("trading.scheduler.finish_scheduler_event"):
+    with patch("trading.scheduler_ops.scan_all", side_effect=_slow_scan_all) as mock_scan, \
+         patch("trading.scheduler_ops.load_manifest", return_value={"AAPL": {}}), \
+         patch("trading.scheduler_ops.load_positions", return_value={"positions": []}), \
+         patch("trading.scheduler_ops.update_existing_positions", return_value={"positions": []}), \
+         patch("trading.scheduler_ops.update_daily_snapshot"), \
+         patch("trading.scheduler_ops._save_latest_scan"), \
+         patch("trading.scheduler_exec._db_save_watchlist"), \
+         patch("trading.scheduler_ops.alpaca_enabled", return_value=False), \
+         patch("trading.scheduler_ops.log_scheduler_event", return_value=1), \
+         patch("trading.scheduler_ops.finish_scheduler_event"):
         # Launch two concurrent guarded scans
         t1 = asyncio.create_task(_guarded_scan("morning"))
         t2 = asyncio.create_task(_guarded_scan("morning"))
@@ -191,9 +190,9 @@ async def test_run_daily_scan_respects_timeout():
             return []
         return await original_to_thread(func, *args, **kwargs)
 
-    with patch("trading.scheduler.load_manifest", return_value={"AAPL": {}}), \
-         patch("trading.scheduler.log_scheduler_event", return_value=1), \
-         patch("trading.scheduler.finish_scheduler_event"), \
+    with patch("trading.scheduler_ops.load_manifest", return_value={"AAPL": {}}), \
+         patch("trading.scheduler_ops.log_scheduler_event", return_value=1), \
+         patch("trading.scheduler_ops.finish_scheduler_event"), \
          patch("asyncio.to_thread", side_effect=_hanging_to_thread):
         with pytest.raises(TimeoutError):
             async with asyncio.timeout(0.05):
@@ -254,12 +253,12 @@ async def test_reconcile_loop_runs_with_empty_positions():
             raise asyncio.CancelledError  # break out after first iteration
 
     mock_fills = AsyncMock(return_value=[])
-    with patch("trading.scheduler.alpaca_enabled", return_value=True), \
-         patch("trading.scheduler.check_exit_fills", mock_fills), \
-         patch("trading.scheduler.load_positions", return_value={"positions": []}), \
+    with patch("trading.scheduler_loops.alpaca_enabled", return_value=True), \
+         patch("trading.scheduler_loops.check_exit_fills", mock_fills), \
+         patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
          patch("asyncio.sleep", side_effect=_sleep_then_stop):
         with pytest.raises(asyncio.CancelledError):
-            await scheduler._reconcile_loop()
+            await reconcile_loop(scheduler)
 
     mock_fills.assert_awaited_once_with([])
 
@@ -284,10 +283,10 @@ async def test_housekeeping_skips_outside_market_hours_without_crypto():
             raise asyncio.CancelledError
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
-         patch("trading.scheduler.load_positions", return_value={"positions": []}), \
-         patch("trading.scheduler.ASSETS", {}):
+         patch("trading.scheduler_loops.load_positions", return_value={"positions": []}), \
+         patch("rally_ml.config.ASSETS", {}):
         with pytest.raises(asyncio.CancelledError):
-            await scheduler._housekeeping_loop()
+            await housekeeping_loop(scheduler)
 
     # run_housekeeping must NOT have been called — the iteration was skipped
     scheduler._engine.run_housekeeping.assert_not_awaited()
@@ -324,10 +323,10 @@ async def test_housekeeping_runs_outside_market_hours_with_open_crypto():
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
          patch("rally_ml.config.ASSETS", {"BTC-USD": btc_asset}), \
-         patch("trading.scheduler.load_positions", return_value=crypto_positions), \
-         patch("trading.scheduler.alpaca_enabled", return_value=False):
+         patch("trading.scheduler_loops.load_positions", return_value=crypto_positions), \
+         patch("trading.scheduler_loops.alpaca_enabled", return_value=False):
         with pytest.raises(asyncio.CancelledError):
-            await scheduler._housekeeping_loop()
+            await housekeeping_loop(scheduler)
 
     # run_housekeeping MUST have been called — crypto keeps it alive
     scheduler._engine.run_housekeeping.assert_awaited_once()
@@ -360,12 +359,12 @@ async def test_retrain_fires_after_window_on_sunday():
     assert fake_now.weekday() == 6  # confirm Sunday
 
     with patch("asyncio.sleep", side_effect=_sleep_then_stop), \
-         patch("trading.scheduler.datetime") as mock_dt, \
+         patch("trading.scheduler_loops.datetime") as mock_dt, \
          patch.object(scheduler, "run_retrain", new_callable=AsyncMock) as mock_retrain:
         mock_dt.now.return_value = fake_now
         mock_dt.min = _dt.min
 
         with pytest.raises(asyncio.CancelledError):
-            await scheduler._retrain_loop()
+            await retrain_loop(scheduler)
 
     mock_retrain.assert_awaited_once()
