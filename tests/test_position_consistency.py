@@ -13,7 +13,10 @@ def models_dir(tmp_path, monkeypatch):
 
     import rally_ml.core.persistence as persist
     monkeypatch.setattr(persist, "MODELS_DIR", models)
-    monkeypatch.setattr(persist, "_store", type("FakeStore", (), {"save_entry": lambda self, t, m: None, "load_all": lambda self: {}})())
+    fake_store = type(
+        "FakeStore", (), {"save_entry": lambda self, t, m: None, "load_all": lambda self: {}}
+    )()
+    monkeypatch.setattr(persist, "_store", fake_store)
 
     return models
 
