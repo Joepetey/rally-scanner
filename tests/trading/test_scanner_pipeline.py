@@ -162,13 +162,13 @@ class TestScanAll:
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None
         mock_pool.submit = mock_submit
-        return patch("pipeline.scanner.ProcessPoolExecutor", return_value=mock_pool)
+        return patch("pipeline.scan_parallel.ProcessPoolExecutor", return_value=mock_pool)
 
-    @patch("pipeline.scanner.fetch_quotes")
-    @patch("pipeline.scanner.fetch_daily_batch")
-    @patch("pipeline.scanner.fetch_vix_safe")
+    @patch("pipeline.scan_parallel.fetch_quotes")
+    @patch("pipeline.scan_parallel.fetch_daily_batch")
+    @patch("pipeline.scan_parallel.fetch_vix_safe")
     @patch("pipeline.scanner.load_manifest")
-    @patch("pipeline.scanner.load_model")
+    @patch("pipeline.scan_parallel.load_model")
     def test_scan_all_returns_results(
         self, mock_load_model, mock_manifest, mock_vix, mock_batch, mock_quotes,
     ):
@@ -215,11 +215,11 @@ class TestScanAll:
             for k, v in original.items():
                 setattr(PARAMS, k, v)
 
-    @patch("pipeline.scanner.fetch_quotes")
-    @patch("pipeline.scanner.fetch_daily_batch")
-    @patch("pipeline.scanner.fetch_vix_safe")
+    @patch("pipeline.scan_parallel.fetch_quotes")
+    @patch("pipeline.scan_parallel.fetch_daily_batch")
+    @patch("pipeline.scan_parallel.fetch_vix_safe")
     @patch("pipeline.scanner.load_manifest")
-    @patch("pipeline.scanner.load_model")
+    @patch("pipeline.scan_parallel.load_model")
     def test_scan_all_batch_fetch_failure_falls_back(
         self, mock_load_model, mock_manifest, mock_vix, mock_batch, mock_quotes,
     ):

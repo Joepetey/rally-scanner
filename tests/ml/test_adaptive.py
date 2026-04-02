@@ -5,7 +5,7 @@ from rally_ml.config import PARAMS
 
 def test_scan_watchlist_returns_results(monkeypatch):
     """scan_watchlist returns results for valid tickers."""
-    from pipeline import scanner
+    from pipeline import scan_parallel, scanner
 
     # Mock load_manifest to return known tickers
     monkeypatch.setattr(scanner, "load_manifest", lambda: {
@@ -16,16 +16,17 @@ def test_scan_watchlist_returns_results(monkeypatch):
     cons = scanner.CONFIGS_BY_NAME["conservative"]
     monkeypatch.setattr(scanner, "resolve_config", lambda _: cons)
 
-    # Mock data fetching
-    monkeypatch.setattr(scanner, "fetch_vix_safe", lambda **kw: None)
-    monkeypatch.setattr(scanner, "fetch_daily_batch", lambda t, **kw: {})
-
     # Mock _scan_one to return test data
     def mock_scan_one(args):
         ticker = args[0]
         return {"ticker": ticker, "status": "ok", "signal": False, "p_rally": 0.40}
 
-    monkeypatch.setattr(scanner, "_scan_one", mock_scan_one)
+    monkeypatch.setattr(scan_parallel, "_scan_one", mock_scan_one)
+
+    # Mock data fetching
+    monkeypatch.setattr(
+        scan_parallel, "fetch_scan_data", lambda t, s, **kw: (None, {}),
+    )
 
     # Mock ProcessPoolExecutor to run synchronously
     from concurrent.futures import Future
@@ -36,7 +37,7 @@ def test_scan_watchlist_returns_results(monkeypatch):
         f.set_result(fn(item))
         return f
 
-    with patch("pipeline.scanner.ProcessPoolExecutor") as MockPool:
+    with patch("pipeline.scan_parallel.ProcessPoolExecutor") as MockPool:
         mock_pool = MagicMock()
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None
@@ -59,17 +60,18 @@ def test_scan_watchlist_empty_manifest(monkeypatch):
 
 def test_scan_watchlist_unknown_tickers(monkeypatch):
     """scan_watchlist skips tickers not in manifest."""
-    from pipeline import scanner
+    from pipeline import scan_parallel, scanner
     monkeypatch.setattr(scanner, "load_manifest", lambda: {"AAPL": {}})
     cons = scanner.CONFIGS_BY_NAME["conservative"]
     monkeypatch.setattr(scanner, "resolve_config", lambda _: cons)
-    monkeypatch.setattr(scanner, "fetch_vix_safe", lambda **kw: None)
-    monkeypatch.setattr(scanner, "fetch_daily_batch", lambda t, **kw: {})
 
     def mock_scan_one(args):
         return {"ticker": args[0], "status": "ok", "signal": False, "p_rally": 0.40}
 
-    monkeypatch.setattr(scanner, "_scan_one", mock_scan_one)
+    monkeypatch.setattr(scan_parallel, "_scan_one", mock_scan_one)
+    monkeypatch.setattr(
+        scan_parallel, "fetch_scan_data", lambda t, s, **kw: (None, {}),
+    )
 
     from concurrent.futures import Future
     from unittest.mock import MagicMock, patch
@@ -79,7 +81,7 @@ def test_scan_watchlist_unknown_tickers(monkeypatch):
         f.set_result(fn(item))
         return f
 
-    with patch("pipeline.scanner.ProcessPoolExecutor") as MockPool:
+    with patch("pipeline.scan_parallel.ProcessPoolExecutor") as MockPool:
         mock_pool = MagicMock()
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None
