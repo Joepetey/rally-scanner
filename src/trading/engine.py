@@ -10,9 +10,7 @@ import logging
 import os
 import zoneinfo
 from datetime import datetime
-from typing import Any, Literal, Protocol
-
-from pydantic import BaseModel
+from typing import Any, Protocol
 
 from db.events import log_order, log_price_alert
 from db.positions import save_position_meta
@@ -21,6 +19,19 @@ from integrations.alpaca.executor import (
     execute_exit,
     get_recent_sell_fills,
 )
+from trading.events import (  # noqa: F401 — re-export
+    AlertEvent,
+    ExitResult,
+    FillNotification,
+    HousekeepingResult,
+    RegimeEvent,
+    RetrainResult,
+    RiskActionEvent,
+    ScanResult,
+    StreamDegradedEvent,
+    StreamRecoveredEvent,
+    WatchlistEvent,
+)
 from trading.positions import (
     async_close_position,
     update_position_for_price,
@@ -28,86 +39,6 @@ from trading.positions import (
 
 _ET = zoneinfo.ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Scan / regime / retrain event types (MIC-26)
-# ---------------------------------------------------------------------------
-
-class ScanResult(BaseModel):
-    signals: list[dict]
-    exits: list[dict]
-    orders: list[dict]
-    positions_summary: dict
-    scan_type: str = "daily"  # "daily", "morning", "midday", "cascade", "post_retrain"
-    equity: float = 0.0  # account equity at scan time (for order embed dollar amounts)
-    error: str | None = None
-
-
-class WatchlistEvent(BaseModel):
-    signals: list[dict]
-    scan_type: str = "midday"
-
-
-class RegimeEvent(BaseModel):
-    transitions: list[dict]
-    cascade_triggered: bool
-
-
-class RetrainResult(BaseModel):
-    tickers_retrained: list[str]
-    duration_seconds: float
-    manifest_size: int
-
-
-class RiskActionEvent(BaseModel):
-    actions: list[dict]
-
-
-class StreamDegradedEvent(BaseModel):
-    disconnected_minutes: int  # consecutive market-hours minutes stream has been down
-
-
-class StreamRecoveredEvent(BaseModel):
-    downtime_minutes: int  # how long stream was down before recovery
-
-
-# ---------------------------------------------------------------------------
-# Typed event models
-# ---------------------------------------------------------------------------
-
-class AlertEvent(BaseModel):
-    ticker: str
-    alert_type: Literal["stop_breached", "target_breached", "near_stop", "near_target"]
-    current_price: float
-    level_price: float
-    level_name: str
-    entry_price: float
-    pnl_pct: float
-    distance_pct: float = 0.0
-
-
-class ExitResult(BaseModel):
-    ticker: str
-    exit_reason: str
-    fill_price: float | None = None
-    order_id: str | None = None
-    realized_pnl_pct: float | None = None
-    bars_held: int | None = None
-
-
-class FillNotification(BaseModel):
-    ticker: str
-    fill_price: float
-    qty: float | None = None
-    stop_price: float = 0.0
-    target_price: float = 0.0
-
-
-class HousekeepingResult(BaseModel):
-    fills_confirmed: list[FillNotification]
-    orders_placed: list[dict]
-    positions_synced: bool
 
 
 # ---------------------------------------------------------------------------
