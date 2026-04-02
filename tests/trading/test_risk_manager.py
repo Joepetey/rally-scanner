@@ -2,7 +2,7 @@
 
 from rally_ml.config import PARAMS
 
-from trading.risk_manager import evaluate
+from trading.risk import evaluate
 
 
 def _make_positions(n=3, pnl_pcts=None):
@@ -33,7 +33,7 @@ def test_no_actions_when_healthy(monkeypatch):
     positions = _make_positions(2, [3.0, 1.0])
 
     # Mock VIX check to return no spike
-    import trading.risk_manager as rm
+    import trading.risk as rm
     monkeypatch.setattr(rm, "check_vix_spike",
                         lambda: {"is_spike": False, "change_pct": 0.0, "vix_level": 20.0})
 
@@ -44,7 +44,7 @@ def test_no_actions_when_healthy(monkeypatch):
 def test_tier1_tightens_all_stops(monkeypatch):
     """Tier 1 (5-10% DD): all stops tightened to 1.0×ATR."""
     monkeypatch.setattr(PARAMS, "proactive_risk_enabled", True)
-    import trading.risk_manager as rm
+    import trading.risk as rm
     monkeypatch.setattr(rm, "check_vix_spike",
                         lambda: {"is_spike": False, "change_pct": 0.0, "vix_level": 20.0})
 
@@ -61,7 +61,7 @@ def test_tier1_tightens_all_stops(monkeypatch):
 def test_tier2_closes_weakest(monkeypatch):
     """Tier 2 (10-15% DD): weakest position closed + all stops tightened."""
     monkeypatch.setattr(PARAMS, "proactive_risk_enabled", True)
-    import trading.risk_manager as rm
+    import trading.risk as rm
     monkeypatch.setattr(rm, "check_vix_spike",
                         lambda: {"is_spike": False, "change_pct": 0.0, "vix_level": 20.0})
 
@@ -82,7 +82,7 @@ def test_tier2_closes_weakest(monkeypatch):
 def test_expanding_regime_tightens_individual(monkeypatch):
     """Per-position: P(expanding) > 0.8 tightens that position's stop."""
     monkeypatch.setattr(PARAMS, "proactive_risk_enabled", True)
-    import trading.risk_manager as rm
+    import trading.risk as rm
     monkeypatch.setattr(rm, "check_vix_spike",
                         lambda: {"is_spike": False, "change_pct": 0.0, "vix_level": 20.0})
 
@@ -103,7 +103,7 @@ def test_expanding_regime_tightens_individual(monkeypatch):
 def test_vix_spike_tightens_all(monkeypatch):
     """VIX spike: all stops tightened by 30%."""
     monkeypatch.setattr(PARAMS, "proactive_risk_enabled", True)
-    import trading.risk_evaluation as re
+    import trading.risk.evaluation as re
     monkeypatch.setattr(re, "check_vix_spike",
                         lambda: {"is_spike": True, "change_pct": 0.25, "vix_level": 35.0})
 

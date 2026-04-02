@@ -28,8 +28,8 @@ from datetime import datetime
 from pydantic import BaseModel
 from rally_ml.config import PARAMS
 
-from db.events import clear_price_alerts
-from db.positions import load_position_meta, save_position_meta
+from db.ops.events import clear_price_alerts
+from db.trading.positions import load_position_meta, save_position_meta
 from integrations.alpaca.account import get_snapshots
 from integrations.alpaca.entries import execute_entries
 from integrations.alpaca.exits import execute_exit, place_exit_orders

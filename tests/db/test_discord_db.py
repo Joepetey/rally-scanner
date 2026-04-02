@@ -2,25 +2,25 @@
 
 import pytest
 
-from db.conversations import (
+from db.ops.conversations import (
     clear_conversation_history,
     get_conversation_history,
     save_conversation_history,
 )
-from db.trades import (
+from db.trading.trades import (
     close_trade,
     get_open_trades,
     get_pnl_summary,
     get_trade_history,
     open_trade,
 )
-from db.users import ensure_user, get_capital, set_capital
+from db.ops.users import ensure_user, get_capital, set_capital
 
 # pg_db fixture from conftest.py handles init + truncate
 
 
 def test_init_creates_tables(pg_db):
-    from db.pool import get_conn
+    from db.core.pool import get_conn
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -33,7 +33,7 @@ def test_init_creates_tables(pg_db):
 
 def test_ensure_user_creates(pg_db):
     ensure_user(12345, "alice")
-    from db.pool import get_conn
+    from db.core.pool import get_conn
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE discord_id = 12345")
@@ -44,7 +44,7 @@ def test_ensure_user_creates(pg_db):
 def test_ensure_user_updates_username(pg_db):
     ensure_user(12345, "alice")
     ensure_user(12345, "alice_renamed")
-    from db.pool import get_conn
+    from db.core.pool import get_conn
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE discord_id = 12345")
@@ -55,7 +55,7 @@ def test_ensure_user_updates_username(pg_db):
 def test_ensure_user_no_duplicate(pg_db):
     ensure_user(12345, "alice")
     ensure_user(12345, "alice")
-    from db.pool import get_conn
+    from db.core.pool import get_conn
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) AS c FROM users")

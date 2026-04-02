@@ -204,10 +204,10 @@ class TestCheckPrices:
 class TestExecuteBreach:
 
     @pytest.mark.asyncio
-    @patch("trading.housekeeping.log_order")
-    @patch("trading.housekeeping.async_close_position", new_callable=AsyncMock)
-    @patch("trading.housekeeping.execute_exit", new_callable=AsyncMock)
-    @patch("trading.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.log_order")
+    @patch("trading.engine.housekeeping.async_close_position", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.execute_exit", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
     async def test_cancels_oco_then_exits(
         self, mock_cancel, mock_exit, mock_close, mock_log, engine,
     ):
@@ -225,11 +225,11 @@ class TestExecuteBreach:
         mock_cancel.assert_called_once_with("t_123", "s_456")
 
     @pytest.mark.asyncio
-    @patch("trading.housekeeping.log_order")
-    @patch("trading.housekeeping.async_close_position", new_callable=AsyncMock)
-    @patch("trading.housekeeping.get_recent_sell_fills", new_callable=AsyncMock)
-    @patch("trading.housekeeping.execute_exit", new_callable=AsyncMock)
-    @patch("trading.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.log_order")
+    @patch("trading.engine.housekeeping.async_close_position", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.get_recent_sell_fills", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.execute_exit", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
     async def test_oco_already_filled(
         self, mock_cancel, mock_exit, mock_fills, mock_close, mock_log, engine,
     ):
@@ -248,8 +248,8 @@ class TestExecuteBreach:
         assert result.fill_price == 95.5
 
     @pytest.mark.asyncio
-    @patch("trading.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
-    @patch("trading.housekeeping.execute_exit", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.execute_exit", new_callable=AsyncMock)
     async def test_exit_failure_returns_none(self, mock_exit, mock_cancel, engine):
         pos = _make_pos()
         mock_exit.side_effect = Exception("Alpaca API down")

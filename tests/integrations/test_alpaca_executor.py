@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from alpaca.trading.enums import OrderSide, OrderStatus
 
-from db.positions import load_positions, save_positions
+from db.trading.positions import load_positions, save_positions
 from integrations.alpaca.broker import is_enabled
 from integrations.alpaca.entries import execute_entries
 from integrations.alpaca.exits import cancel_order, execute_exit, execute_exits

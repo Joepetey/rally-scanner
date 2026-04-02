@@ -3,9 +3,9 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from db.trading.positions import load_positions, save_positions
 from rally_ml.config import PARAMS
 
-from db.positions import load_positions, save_positions
 from trading.positions import (
     add_signal_positions,
     get_merged_positions,
@@ -19,7 +19,7 @@ def update_positions(state, new_signals, all_results):
     state = update_existing_positions(state, all_results)
     state = add_signal_positions(state, new_signals)
     return state
-from trading.risk_manager import tighten_trailing_stop
+from trading.risk import tighten_trailing_stop
 
 
 def test_load_empty(tmp_models_dir):
@@ -322,7 +322,7 @@ async def test_sync_updates_qty_and_entry_keeps_metadata(tmp_models_dir):
         result = await sync_positions_from_alpaca()
 
     assert result == {"synced": 1, "closed": 0, "inserted": 0}
-    from db.positions import load_position_meta
+    from db.trading.positions import load_position_meta
     pos = load_position_meta("AAPL")
     assert pos["qty"] == 12
     assert pos["entry_price"] == 152.0
@@ -342,7 +342,7 @@ async def test_sync_inserts_untracked_alpaca_position(tmp_models_dir):
         result = await sync_positions_from_alpaca()
 
     assert result == {"synced": 0, "closed": 0, "inserted": 1}
-    from db.positions import load_position_meta
+    from db.trading.positions import load_position_meta
     pos = load_position_meta("TSLA")
     assert pos["qty"] == 5
     assert pos["entry_price"] == 200.0
@@ -366,7 +366,7 @@ async def test_sync_closes_position_missing_from_broker(tmp_models_dir):
         result = await sync_positions_from_alpaca()
 
     assert result == {"synced": 0, "closed": 1, "inserted": 0}
-    from db.positions import get_closed_today, load_position_meta
+    from db.trading.positions import get_closed_today, load_position_meta
     assert load_position_meta("MSFT") is None
     closed = get_closed_today()
     assert len(closed) == 1
@@ -379,7 +379,7 @@ def test_get_recently_closed_tickers(tmp_models_dir):
     """get_recently_closed_tickers returns tickers closed within N days."""
     from datetime import date, timedelta
 
-    from db.positions import get_recently_closed_tickers, record_closed_position
+    from db.trading.positions import get_recently_closed_tickers, record_closed_position
 
     # Insert a position closed today
     record_closed_position({

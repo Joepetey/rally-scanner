@@ -29,7 +29,7 @@ load_dotenv()
 from rally_ml.core.persistence import load_manifest
 from rally_ml.pipeline.retrain import retrain_all
 
-from db.portfolio import record_closed_trades, update_daily_snapshot
+from db.trading.portfolio import record_closed_trades, update_daily_snapshot
 from log import setup_logging
 from monitoring import init_sentry
 from pipeline.scanner import scan_all

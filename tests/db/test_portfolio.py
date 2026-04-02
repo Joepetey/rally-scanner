@@ -2,7 +2,7 @@
 
 from datetime import date, timedelta
 
-from db.portfolio import (
+from db.trading.portfolio import (
     load_equity_history,
     load_trade_journal,
     record_closed_trades,

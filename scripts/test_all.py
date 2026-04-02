@@ -36,7 +36,7 @@ from test_exits import intraday_exit_test, run_eod_suite
 from test_helpers import TestRunner, cleanup, fake_position, price_result
 
 from db import close_pool, init_pool, init_schema
-from db.positions import delete_position_meta, load_positions
+from db.trading.positions import delete_position_meta, load_positions
 from integrations.alpaca.account import get_account_equity, get_snapshots
 from integrations.alpaca.entries import execute_entries
 from integrations.alpaca.exits import execute_exit

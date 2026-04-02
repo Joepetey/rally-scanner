@@ -39,7 +39,7 @@ HWM_FILE = PROJECT_ROOT / "models" / "high_water_mark.txt"
 
 def main() -> None:
     from db import init_pool, init_schema
-    from db.pool import get_conn
+    from db.core.pool import get_conn
 
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:

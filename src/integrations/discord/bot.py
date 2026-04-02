@@ -13,9 +13,9 @@ from collections.abc import Awaitable, Callable
 import discord
 from discord.ext import commands
 
-from db.conversations import get_conversation_history, save_conversation_history
-from db.events import log_discord_message
-from db.users import ensure_user
+from db.ops.conversations import get_conversation_history, save_conversation_history
+from db.ops.events import log_discord_message
+from db.ops.users import ensure_user
 from services.async_tasks import run_retrain, run_simulation
 from trading.engine import (
     AlertEvent,

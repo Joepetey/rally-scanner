@@ -36,8 +36,8 @@ os.environ["ALPACA_SECRET_KEY"] = _sim_secret
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from db import close_pool, init_pool, init_schema
-from db.pool import get_conn
-from db.positions import delete_position_meta
+from db.core.pool import get_conn
+from db.trading.positions import delete_position_meta
 from integrations.alpaca.account import get_account_equity
 from integrations.alpaca.exits import execute_exit
 from log import setup_logging

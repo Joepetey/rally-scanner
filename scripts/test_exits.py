@@ -31,7 +31,7 @@ from rally_ml.config import PARAMS
 from test_helpers import TestRunner, cleanup, fake_position, price_result
 
 from db import close_pool, init_pool, init_schema
-from db.positions import load_position_meta, load_positions, save_position_meta
+from db.trading.positions import load_position_meta, load_positions, save_position_meta
 from integrations.alpaca.account import get_account_equity, get_snapshots
 from integrations.alpaca.entries import execute_entries
 from integrations.alpaca.exits import execute_exit
