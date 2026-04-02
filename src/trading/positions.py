@@ -71,7 +71,7 @@ async def _sync_close_broker_exits(
     closed_tickers: set[str], meta_map: dict,
 ) -> None:
     """Case 3: in DB but gone from Alpaca — broker closed the position."""
-    from integrations.alpaca.executor import get_recent_sell_fills
+    from integrations.alpaca.fills import get_recent_sell_fills
 
     fills = await get_recent_sell_fills(list(closed_tickers)) if closed_tickers else {}
     for ticker in closed_tickers:

@@ -129,7 +129,7 @@ async def run_simulation(
             equity = equity_override
         else:
             try:
-                from integrations.alpaca.executor import get_account_equity
+                from integrations.alpaca.account import get_account_equity
                 equity = await get_account_equity()
             except Exception as e:
                 await send(f"\u26a0\ufe0f Could not fetch account equity: {e}")

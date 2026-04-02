@@ -98,7 +98,7 @@ def _compute_levels(ticker: str, entry_price: float) -> dict:
 async def main() -> None:
     from db import init_pool, init_schema
     from db.positions import load_all_position_meta, save_position_meta
-    from integrations.alpaca.executor import get_all_positions
+    from integrations.alpaca.account import get_all_positions
 
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -175,7 +175,8 @@ async def main() -> None:
         if not pos.get("trail_order_id"):
             from rally_ml.config import PARAMS
 
-            from integrations.alpaca.executor import _trading_client, place_trailing_stop
+            from integrations.alpaca.broker import _trading_client
+            from integrations.alpaca.exits import place_trailing_stop
 
             atr_pct = levels["atr"] / entry_price if levels["atr"] else PARAMS.default_atr_pct
             trail_pct = round(max(PARAMS.trailing_stop_atr_mult * atr_pct * 100, 1.0), 2)

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from alpaca.trading.enums import OrderSide
 
-from integrations.alpaca.executor import check_pending_fills, check_trail_stop_fills
+from integrations.alpaca.fills import check_pending_fills, check_trail_stop_fills
 
 # ---------------------------------------------------------------------------
 # Stale fill rejection
