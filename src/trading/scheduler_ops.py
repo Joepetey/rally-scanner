@@ -26,12 +26,8 @@ from db.positions import (
 from db.positions import (
     save_latest_scan as _save_latest_scan,
 )
-from integrations.alpaca.executor import (
-    get_account_equity,
-)
-from integrations.alpaca.executor import (
-    is_enabled as alpaca_enabled,
-)
+from integrations.alpaca.account import get_account_equity
+from integrations.alpaca.models import is_enabled as alpaca_enabled
 from pipeline.scanner import scan_all, scan_watchlist
 from trading.events import (
     RetrainResult,

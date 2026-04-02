@@ -219,8 +219,8 @@ def evaluate(
 
 async def _default_close_fn(ticker: str, pos: dict) -> float:
     """Default close implementation using Alpaca + DB."""
-    from integrations.alpaca.executor import execute_exit
-    from integrations.alpaca.executor import is_enabled as alpaca_enabled
+    from integrations.alpaca.exits import execute_exit
+    from integrations.alpaca.models import is_enabled as alpaca_enabled
 
     from .positions import async_close_position
 

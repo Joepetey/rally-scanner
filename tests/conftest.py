@@ -110,8 +110,11 @@ def alpaca_mock(monkeypatch):
     to _trading_client() returns the mock without touching real Alpaca APIs.
     """
     mock = AlpacaMock()
-    monkeypatch.setattr("integrations.alpaca.executor._trading_client", lambda: mock)
     monkeypatch.setattr("integrations.alpaca.broker._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.account._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.entries._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.exits._trading_client", lambda: mock)
+    monkeypatch.setattr("integrations.alpaca.fills._trading_client", lambda: mock)
     return mock
 
 

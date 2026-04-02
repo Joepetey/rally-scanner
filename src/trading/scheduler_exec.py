@@ -24,10 +24,8 @@ from db.positions import (
     save_watchlist as _db_save_watchlist,
 )
 from integrations.alpaca.broker import get_all_positions
-from integrations.alpaca.executor import (
-    execute_entries,
-    execute_exits,
-)
+from integrations.alpaca.entries import execute_entries
+from integrations.alpaca.exits import execute_exits
 from trading.positions import (
     add_signal_positions,
     async_save_positions,

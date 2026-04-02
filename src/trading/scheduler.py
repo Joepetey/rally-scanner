@@ -25,9 +25,7 @@ from db.positions import load_positions
 from db.positions import (
     save_position_meta as _save_position_meta,
 )
-from integrations.alpaca.executor import (
-    is_enabled as alpaca_enabled,
-)
+from integrations.alpaca.models import is_enabled as alpaca_enabled
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from trading.engine import AlertEngine
 from trading.events import (
