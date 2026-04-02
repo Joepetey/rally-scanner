@@ -103,8 +103,8 @@ def test_expanding_regime_tightens_individual(monkeypatch):
 def test_vix_spike_tightens_all(monkeypatch):
     """VIX spike: all stops tightened by 30%."""
     monkeypatch.setattr(PARAMS, "proactive_risk_enabled", True)
-    import trading.risk_manager as rm
-    monkeypatch.setattr(rm, "check_vix_spike",
+    import trading.risk_evaluation as re
+    monkeypatch.setattr(re, "check_vix_spike",
                         lambda: {"is_spike": True, "change_pct": 0.25, "vix_level": 35.0})
 
     positions = _make_positions(2, [2.0, 1.0])
