@@ -13,7 +13,8 @@ def test_scan_watchlist_returns_results(monkeypatch):
     })
 
     # Mock apply_config
-    monkeypatch.setattr(scanner, "apply_config", lambda _: None)
+    cons = scanner.CONFIGS_BY_NAME["conservative"]
+    monkeypatch.setattr(scanner, "resolve_config", lambda _: cons)
 
     # Mock data fetching
     monkeypatch.setattr(scanner, "fetch_vix_safe", lambda **kw: None)
@@ -60,7 +61,8 @@ def test_scan_watchlist_unknown_tickers(monkeypatch):
     """scan_watchlist skips tickers not in manifest."""
     from pipeline import scanner
     monkeypatch.setattr(scanner, "load_manifest", lambda: {"AAPL": {}})
-    monkeypatch.setattr(scanner, "apply_config", lambda _: None)
+    cons = scanner.CONFIGS_BY_NAME["conservative"]
+    monkeypatch.setattr(scanner, "resolve_config", lambda _: cons)
     monkeypatch.setattr(scanner, "fetch_vix_safe", lambda **kw: None)
     monkeypatch.setattr(scanner, "fetch_daily_batch", lambda t, **kw: {})
 

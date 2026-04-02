@@ -12,7 +12,7 @@ from rally_ml.config import CONFIGS_BY_NAME, PARAMS, AssetConfig
 from rally_ml.core.features import ALL_FEATURE_COLS, build_features
 from rally_ml.core.train import fit_model
 
-from pipeline.scanner import apply_config, scan_single
+from pipeline.scanner import resolve_config, scan_single
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,57 +114,30 @@ class TestScanSingle:
 
 
 # ---------------------------------------------------------------------------
-# apply_config
+# resolve_config
 # ---------------------------------------------------------------------------
 
 
-class TestApplyConfig:
-
-    def _save_and_restore(self):
-        """Save current PARAMS values for restoration."""
-        return {
-            "p_rally_threshold": PARAMS.p_rally_threshold,
-            "comp_score_threshold": PARAMS.comp_score_threshold,
-            "vol_target_k": PARAMS.vol_target_k,
-            "max_risk_frac": PARAMS.max_risk_frac,
-            "profit_atr_mult": PARAMS.profit_atr_mult,
-            "time_stop_bars": PARAMS.time_stop_bars,
-        }
+class TestResolveConfig:
 
     def test_conservative_config(self):
-        original = self._save_and_restore()
-        try:
-            apply_config("conservative")
-            cfg = CONFIGS_BY_NAME["conservative"]
-            assert PARAMS.p_rally_threshold == cfg.p_rally
-            assert PARAMS.comp_score_threshold == cfg.comp_score
-        finally:
-            for k, v in original.items():
-                setattr(PARAMS, k, v)
+        cfg = resolve_config("conservative")
+        assert cfg is CONFIGS_BY_NAME["conservative"]
+        assert cfg.p_rally == CONFIGS_BY_NAME["conservative"].p_rally
 
     def test_baseline_config(self):
-        original = self._save_and_restore()
-        try:
-            apply_config("baseline")
-            cfg = CONFIGS_BY_NAME["baseline"]
-            assert PARAMS.p_rally_threshold == cfg.p_rally
-        finally:
-            for k, v in original.items():
-                setattr(PARAMS, k, v)
+        cfg = resolve_config("baseline")
+        assert cfg is CONFIGS_BY_NAME["baseline"]
 
     def test_unknown_config_raises(self):
         with pytest.raises(SystemExit):
-            apply_config("nonexistent_config")
+            resolve_config("nonexistent_config")
 
     def test_all_configs_are_valid(self):
-        """Every named config can be applied without error."""
-        original = self._save_and_restore()
-        try:
-            for name in CONFIGS_BY_NAME:
-                apply_config(name)
-        finally:
-            for k, v in original.items():
-                setattr(PARAMS, k, v)
+        """Every named config resolves without error."""
+        for name in CONFIGS_BY_NAME:
+            cfg = resolve_config(name)
+            assert cfg.p_rally > 0
 
 
 # ---------------------------------------------------------------------------

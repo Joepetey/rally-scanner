@@ -11,7 +11,8 @@ from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
-from rally_ml.config import CONFIGS_BY_NAME, PARAMS, AssetConfig
+from rally_ml.config import CONFIGS_BY_NAME, AssetConfig
+from rally_ml.config.trading import TradingConfig
 
 logger = logging.getLogger(__name__)
 from rally_ml.core.data import (
@@ -38,27 +39,24 @@ class ScanTask(NamedTuple):
     ticker: str
     vix_data: "pd.Series | None"
     ohlcv_df: "pd.DataFrame | None"
+    config: "TradingConfig | None"
 
 
-def apply_config(config_name: str) -> None:
-    """Override PARAMS with a named configuration."""
+def resolve_config(config_name: str) -> TradingConfig:
+    """Look up a named TradingConfig. Raises SystemExit if not found."""
     cfg = CONFIGS_BY_NAME.get(config_name)
     if cfg is None:
         logger.error("Unknown config '%s'. Available: %s",
                       config_name, ", ".join(CONFIGS_BY_NAME.keys()))
         raise SystemExit(1)
-    PARAMS.p_rally_threshold = cfg.p_rally
-    PARAMS.comp_score_threshold = cfg.comp_score
-    PARAMS.vol_target_k = cfg.vol_k
-    PARAMS.max_risk_frac = cfg.max_risk
-    PARAMS.profit_atr_mult = cfg.profit_atr
-    PARAMS.time_stop_bars = cfg.time_stop
+    return cfg
 
 
 def scan_single(
     ticker: str, artifacts: dict,
     vix_data: pd.Series | None = None,
     ohlcv_data: pd.DataFrame | None = None,
+    config: TradingConfig | None = None,
 ) -> dict:
     """Scan a single asset. Returns dict with signal info."""
     # Reconstruct AssetConfig
@@ -115,12 +113,12 @@ def scan_single(
     latest_pred = latest.copy()
     latest_pred["P_RALLY"] = cal_prob
 
-    signal = generate_signals(latest_pred, require_trend=True)
+    signal = generate_signals(latest_pred, require_trend=True, config=config)
     is_signal = bool(signal.iloc[0])
 
     size = 0.0
     if is_signal:
-        size = float(compute_position_size(latest_pred).iloc[0])
+        size = float(compute_position_size(latest_pred, config=config).iloc[0])
         if size == 0.0:
             is_signal = False  # below minimum position size
 
@@ -157,13 +155,14 @@ def scan_single(
 
 def _scan_one(task: ScanTask) -> dict:
     """Worker function for parallel scanning (must be top-level for pickling)."""
-    ticker, vix_data, ohlcv_df = task
+    ticker, vix_data, ohlcv_df, config = task
     try:
         artifacts = load_model(ticker)
         return scan_single(
             ticker, artifacts,
             vix_data=vix_data,
             ohlcv_data=ohlcv_df,
+            config=config,
         )
     except Exception as e:
         return {"ticker": ticker, "status": f"error: {e}"}
@@ -191,11 +190,12 @@ def _run_parallel_scan(
     vix_data: "pd.Series | None",
     ohlcv_cache: dict,
     max_workers: int,
+    config: TradingConfig | None = None,
 ) -> list[dict]:
     """Run scan across tickers using a process pool."""
     n_workers = min(max_workers, len(scan_tickers))
     work_items = [
-        ScanTask(ticker, vix_data, ohlcv_cache.get(ticker))
+        ScanTask(ticker, vix_data, ohlcv_cache.get(ticker), config)
         for ticker in scan_tickers
     ]
 
@@ -238,7 +238,7 @@ def scan_all(
     config_name: str = "conservative",
 ) -> list[dict]:
     """Scan all trained assets (or specific tickers) and return results."""
-    apply_config(config_name)
+    config = resolve_config(config_name)
 
     manifest = load_manifest()
     if not manifest:
@@ -259,10 +259,10 @@ def scan_all(
     logger.info(
         "Scanning %d assets [%s] P(rally)>%.0f%% Comp>%s",
         len(scan_tickers), config_name.upper(),
-        PARAMS.p_rally_threshold * 100, PARAMS.comp_score_threshold,
+        config.p_rally * 100, config.comp_score,
     )
 
-    results = _run_parallel_scan(scan_tickers, vix_data, ohlcv_cache, _MAX_SCAN_WORKERS)
+    results = _run_parallel_scan(scan_tickers, vix_data, ohlcv_cache, _MAX_SCAN_WORKERS, config)
 
     signals = [r for r in results if r.get("signal")]
     ok_count = sum(1 for r in results if r.get("status") == "ok")
@@ -287,7 +287,7 @@ def scan_watchlist(
     Lighter than scan_all: fewer workers.
     Returns list of result dicts (same format as scan_all).
     """
-    apply_config(config_name)
+    config = resolve_config(config_name)
 
     manifest = load_manifest()
     if not manifest:
@@ -300,7 +300,9 @@ def scan_watchlist(
     start = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     vix_data, ohlcv_cache = _fetch_scan_data(scan_tickers, start, verbose=False)
 
-    results = _run_parallel_scan(scan_tickers, vix_data, ohlcv_cache, _MAX_WATCHLIST_WORKERS)
+    results = _run_parallel_scan(
+        scan_tickers, vix_data, ohlcv_cache, _MAX_WATCHLIST_WORKERS, config,
+    )
 
     signals = [r for r in results if r.get("signal")]
     _update_signals_with_live_prices(signals)
