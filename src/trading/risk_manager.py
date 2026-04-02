@@ -235,10 +235,30 @@ async def _default_close_fn(ticker: str, pos: dict) -> float:
     return closed.get("realized_pnl_pct", 0) if closed else 0
 
 
+def tighten_trailing_stop(ticker: str, new_stop: float) -> dict | None:
+    """Tighten a position's trailing stop (only if new_stop > current).
+
+    Returns the updated position dict, or None if not found or not tightened.
+    """
+    from db.positions import load_position_meta, save_position_meta
+
+    pos = load_position_meta(ticker)
+    if pos is None:
+        return None
+    current = pos.get("trailing_stop", 0)
+    if new_stop > current:
+        pos["trailing_stop"] = round(new_stop, 2)
+        save_position_meta(pos)
+        logger.info(
+            "Tightened trailing stop for %s: %.2f → %.2f",
+            ticker, current, new_stop,
+        )
+        return pos
+    return None
+
+
 async def _default_tighten_fn(ticker: str, new_trail: float) -> bool:
     """Default tighten implementation using DB."""
-    from db.positions import tighten_trailing_stop
-
     return tighten_trailing_stop(ticker, new_trail)
 
 

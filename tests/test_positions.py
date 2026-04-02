@@ -5,13 +5,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from rally_ml.config import PARAMS
 
-from db.positions import load_positions, save_positions, tighten_trailing_stop
+from db.positions import load_positions, save_positions
 from trading.positions import (
     add_signal_positions,
     get_merged_positions,
     sync_positions_from_alpaca,
     update_positions,
 )
+from trading.risk_manager import tighten_trailing_stop
 
 
 def test_load_empty(tmp_models_dir):

@@ -21,7 +21,7 @@ from db.trades import (
 from db.trades import (
     get_trade_history as _db_get_trade_history,
 )
-from db.users import get_capital, set_capital
+from db.users import set_capital
 from pipeline.scanner import scan_all
 from trading.positions import get_merged_positions_sync
 
@@ -58,7 +58,7 @@ def dollar_metrics(
 # Query operations
 # ---------------------------------------------------------------------------
 
-def get_signals(discord_id: int, capital: float) -> dict:
+def get_signals(capital: float) -> dict:
     """Get recent entry signals (positions held <= 1 bar)."""
     state = get_merged_positions_sync()
     positions = state.get("positions", [])
@@ -94,7 +94,7 @@ def get_signals(discord_id: int, capital: float) -> dict:
     }
 
 
-def get_system_positions(discord_id: int, capital: float) -> dict:
+def get_system_positions(capital: float) -> dict:
     """Get system's open positions."""
     state = get_merged_positions_sync()
     positions = state.get("positions", [])
@@ -135,9 +135,9 @@ def get_system_positions(discord_id: int, capital: float) -> dict:
     }
 
 
-def get_user_positions(discord_id: int, capital: float) -> dict:
+def get_user_positions(capital: float) -> dict:
     """Get user's tracked open positions."""
-    trades = get_open_trades(discord_id)
+    trades = get_open_trades()
 
     if not trades:
         return {"message": "You have no open positions."}
@@ -197,7 +197,7 @@ def get_price(tickers: list[str]) -> dict:
 # Trade management
 # ---------------------------------------------------------------------------
 
-def enter_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
+def enter_trade(tool_input: dict, capital: float) -> dict:
     """Record a trade entry."""
     ticker = tool_input["ticker"].upper()
     price = tool_input["price"]
@@ -222,7 +222,6 @@ def enter_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
         size = 0.0
 
     trade_id = open_trade(
-        discord_id=discord_id,
         ticker=ticker,
         entry_price=price,
         size=size,
@@ -256,17 +255,17 @@ def enter_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
     return result
 
 
-def exit_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
+def exit_trade(tool_input: dict, capital: float) -> dict:
     """Close a trade."""
     ticker = tool_input["ticker"].upper()
     price = tool_input["price"]
     notes = tool_input.get("notes")
 
     result = close_trade(
-        discord_id=discord_id,
         ticker=ticker,
         exit_price=price,
         notes=notes,
+        capital=capital,
     )
 
     if result is None:
@@ -293,7 +292,7 @@ def exit_trade(discord_id: int, tool_input: dict, capital: float) -> dict:
 # Portfolio & PnL
 # ---------------------------------------------------------------------------
 
-def get_pnl(discord_id: int, period: str = "all") -> dict:
+def get_pnl(capital: float, period: str = "all") -> dict:
     """Get P&L summary."""
     days = None
     if period == "30d":
@@ -301,8 +300,7 @@ def get_pnl(discord_id: int, period: str = "all") -> dict:
     elif period == "7d":
         days = 7
 
-    summary = get_pnl_summary(discord_id, days=days)
-    capital = get_capital(discord_id)
+    summary = get_pnl_summary(days=days)
 
     result = {
         "period": {"all": "All Time", "30d": "Last 30 Days", "7d": "Last 7 Days"}[period],
@@ -325,7 +323,7 @@ def get_pnl(discord_id: int, period: str = "all") -> dict:
 
 
 def set_capital_amount(discord_id: int, amount: float) -> dict:
-    """Set user's portfolio capital."""
+    """Set user's portfolio capital. Still needs discord_id for the users table."""
     if amount <= 0:
         return {"error": "Capital amount must be greater than 0"}
 
@@ -339,10 +337,10 @@ def set_capital_amount(discord_id: int, amount: float) -> dict:
 
 
 def get_trade_history(
-    discord_id: int, ticker: str | None = None, limit: int = DEFAULT_TRADE_LIMIT,
+    ticker: str | None = None, limit: int = DEFAULT_TRADE_LIMIT,
 ) -> dict:
     """Get trade history."""
-    trades = _db_get_trade_history(discord_id, ticker=ticker, limit=limit)
+    trades = _db_get_trade_history(ticker=ticker, limit=limit)
 
     if not trades:
         msg = f"No trades found for {ticker.upper()}" if ticker else "No trade history"

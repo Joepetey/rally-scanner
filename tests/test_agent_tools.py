@@ -65,7 +65,7 @@ class TestEnterTrade:
         from services.trading_ops import enter_trade
 
         mock_positions.return_value = {"positions": []}
-        result = enter_trade(DISCORD_ID, {"ticker": "aapl", "price": 150.0}, 10000.0)
+        result = enter_trade({"ticker": "aapl", "price": 150.0}, 10000.0)
         assert result["ticker"] == "AAPL"
         assert result["entry_price"] == 150.0
         assert result["trade_id"] == 1
@@ -82,7 +82,6 @@ class TestEnterTrade:
             }],
         }
         result = enter_trade(
-            DISCORD_ID,
             {"ticker": "nvda", "price": 155.0},
             10000.0,
         )
@@ -111,7 +110,7 @@ class TestExitTrade:
             "pnl_pct": 10.0, "size": 0.10, "entry_date": "2024-01-10",
             "exit_date": "2024-01-20",
         }
-        result = exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
+        result = exit_trade({"ticker": "aapl", "price": 110.0}, 10000.0)
         assert result["pnl_pct"] == 10.0
         assert result["ticker"] == "AAPL"
 
@@ -119,7 +118,7 @@ class TestExitTrade:
     def test_no_open_trade(self, mock_close):
         from services.trading_ops import exit_trade
 
-        result = exit_trade(DISCORD_ID, {"ticker": "aapl", "price": 110.0}, 10000.0)
+        result = exit_trade({"ticker": "aapl", "price": 110.0}, 10000.0)
         assert "error" in result
 
 
@@ -144,7 +143,7 @@ class TestGetSystemPositions:
                  "unrealized_pnl_pct": -2.5, "bars_held": 1},
             ],
         }
-        result = get_system_positions(DISCORD_ID, 10000.0)
+        result = get_system_positions(10000.0)
         assert result["count"] == 2
         assert len(result["positions"]) == 2
         # Dollar metrics calculated

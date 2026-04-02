@@ -64,16 +64,14 @@ def test_ensure_user_no_duplicate(pg_db):
 
 
 def test_open_trade_returns_id(pg_db):
-    ensure_user(1, "bob")
-    trade_id = open_trade(1, "AAPL", 150.0, "2024-01-10")
+    trade_id = open_trade("AAPL", 150.0, "2024-01-10")
     assert isinstance(trade_id, int)
     assert trade_id > 0
 
 
 def test_open_trade_stored_correctly(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10", size=0.5, notes="test")
-    trades = get_open_trades(1)
+    open_trade("AAPL", 150.0, "2024-01-10", size=0.5, notes="test")
+    trades = get_open_trades()
     assert len(trades) == 1
     assert trades[0]["ticker"] == "AAPL"
     assert trades[0]["entry_price"] == 150.0
@@ -83,82 +81,61 @@ def test_open_trade_stored_correctly(pg_db):
 
 def test_close_trade_fifo(pg_db):
     """Closing should close the oldest open trade for the ticker."""
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10")
-    open_trade(1, "AAPL", 160.0, "2024-01-15")
+    open_trade("AAPL", 150.0, "2024-01-10")
+    open_trade("AAPL", 160.0, "2024-01-15")
 
-    result = close_trade(1, "AAPL", 155.0, "2024-01-20")
+    result = close_trade("AAPL", 155.0, "2024-01-20")
 
     assert result is not None
     assert result["entry_price"] == 150.0  # first one closed
     assert result["pnl_pct"] == pytest.approx(3.33, abs=0.01)
 
-    remaining = get_open_trades(1)
+    remaining = get_open_trades()
     assert len(remaining) == 1
     assert remaining[0]["entry_price"] == 160.0
 
 
 def test_close_trade_no_open(pg_db):
-    ensure_user(1, "bob")
-    result = close_trade(1, "MSFT", 200.0)
+    result = close_trade("MSFT", 200.0)
     assert result is None
 
 
 def test_close_trade_pnl_calculation(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "NVDA", 500.0, "2024-01-10")
-    result = close_trade(1, "NVDA", 550.0, "2024-01-20")
+    open_trade("NVDA", 500.0, "2024-01-10")
+    result = close_trade("NVDA", 550.0, "2024-01-20")
     assert result["pnl_pct"] == 10.0
 
 
 def test_get_trade_history_all(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10")
-    open_trade(1, "MSFT", 400.0, "2024-01-12")
-    close_trade(1, "AAPL", 155.0, "2024-01-20")
-    history = get_trade_history(1)
+    open_trade("AAPL", 150.0, "2024-01-10")
+    open_trade("MSFT", 400.0, "2024-01-12")
+    close_trade("AAPL", 155.0, "2024-01-20")
+    history = get_trade_history()
     assert len(history) == 2
 
 
 def test_get_trade_history_filtered(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10")
-    open_trade(1, "MSFT", 400.0, "2024-01-12")
-    history = get_trade_history(1, ticker="AAPL")
+    open_trade("AAPL", 150.0, "2024-01-10")
+    open_trade("MSFT", 400.0, "2024-01-12")
+    history = get_trade_history(ticker="AAPL")
     assert len(history) == 1
     assert history[0]["ticker"] == "AAPL"
 
 
 def test_pnl_summary_mixed(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 100.0, "2024-01-10")
-    close_trade(1, "AAPL", 110.0, "2024-01-20")
-    open_trade(1, "MSFT", 200.0, "2024-01-10")
-    close_trade(1, "MSFT", 190.0, "2024-01-20")
-    open_trade(1, "NVDA", 500.0, "2024-01-10")
-    close_trade(1, "NVDA", 600.0, "2024-01-20")
+    open_trade("AAPL", 100.0, "2024-01-10")
+    close_trade("AAPL", 110.0, "2024-01-20")
+    open_trade("MSFT", 200.0, "2024-01-10")
+    close_trade("MSFT", 190.0, "2024-01-20")
+    open_trade("NVDA", 500.0, "2024-01-10")
+    close_trade("NVDA", 600.0, "2024-01-20")
 
-    summary = get_pnl_summary(1)
+    summary = get_pnl_summary()
     assert summary["n_trades"] == 3
     assert summary["total_pnl"] == pytest.approx(25.0, abs=0.01)
     assert summary["win_rate"] == pytest.approx(66.7, abs=0.1)
     assert summary["best_trade"] == pytest.approx(20.0, abs=0.01)
     assert summary["worst_trade"] == pytest.approx(-5.0, abs=0.01)
-
-
-def test_multiple_users_isolated(pg_db):
-    ensure_user(1, "alice")
-    ensure_user(2, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10")
-    open_trade(2, "MSFT", 400.0, "2024-01-12")
-
-    alice_trades = get_open_trades(1)
-    bob_trades = get_open_trades(2)
-
-    assert len(alice_trades) == 1
-    assert alice_trades[0]["ticker"] == "AAPL"
-    assert len(bob_trades) == 1
-    assert bob_trades[0]["ticker"] == "MSFT"
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +150,8 @@ def test_set_and_get_capital(pg_db):
 
 
 def test_open_trade_with_stop_target(pg_db):
-    ensure_user(1, "bob")
-    open_trade(1, "AAPL", 150.0, "2024-01-10", stop_price=145.0, target_price=160.0)
-    trades = get_open_trades(1)
+    open_trade("AAPL", 150.0, "2024-01-10", stop_price=145.0, target_price=160.0)
+    trades = get_open_trades()
     assert trades[0]["stop_price"] == 145.0
     assert trades[0]["target_price"] == 160.0
 
@@ -186,23 +162,19 @@ def test_open_trade_with_stop_target(pg_db):
 
 
 def test_close_trade_dollar_pnl_with_capital(pg_db):
-    ensure_user(1, "bob")
-    set_capital(1, 100_000.0)
-    open_trade(1, "AAPL", 100.0, "2024-01-10", size=0.15)
-    result = close_trade(1, "AAPL", 110.0, "2024-01-20")
+    open_trade("AAPL", 100.0, "2024-01-10", size=0.15)
+    result = close_trade("AAPL", 110.0, "2024-01-20", capital=100_000.0)
     assert result["pnl_pct"] == 10.0
     # Dollar PnL: 100k * 0.15 * 0.10 = $1500
     assert result["pnl_dollar"] == pytest.approx(1500.0, abs=0.01)
 
 
 def test_pnl_summary_includes_dollar_total(pg_db):
-    ensure_user(1, "bob")
-    set_capital(1, 100_000.0)
-    open_trade(1, "AAPL", 100.0, "2024-01-10", size=0.15)
-    close_trade(1, "AAPL", 110.0, "2024-01-20")
-    open_trade(1, "MSFT", 200.0, "2024-01-10", size=0.10)
-    close_trade(1, "MSFT", 190.0, "2024-01-20")
-    summary = get_pnl_summary(1)
+    open_trade("AAPL", 100.0, "2024-01-10", size=0.15)
+    close_trade("AAPL", 110.0, "2024-01-20", capital=100_000.0)
+    open_trade("MSFT", 200.0, "2024-01-10", size=0.10)
+    close_trade("MSFT", 190.0, "2024-01-20", capital=100_000.0)
+    summary = get_pnl_summary()
     # AAPL: 100k * 0.15 * 10% = +$1500, MSFT: 100k * 0.10 * -5% = -$500
     assert summary["total_pnl_dollar"] == pytest.approx(1000.0, abs=0.01)
 

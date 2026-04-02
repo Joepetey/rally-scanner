@@ -138,7 +138,7 @@ async def run_daily_scan(
         ))
         return
 
-    results = await asyncio.to_thread(scan_all, tickers, False, "conservative")
+    results = await asyncio.to_thread(scan_all, tickers, "conservative")
     if not results:
         finish_scheduler_event(_event_id, "success", n_signals=0, n_exits=0,
                                duration_s=round(_time.time() - t0, 1))
@@ -208,7 +208,7 @@ async def run_premarket_scan(sched: TradingScheduler) -> None:
         ))
         return
 
-    results = await asyncio.to_thread(scan_all, None, False, "conservative")
+    results = await asyncio.to_thread(scan_all, None, "conservative")
     if not results:
         finish_scheduler_event(_event_id, "success", n_signals=0, n_exits=0,
                                duration_s=round(_time.time() - t0, 1))

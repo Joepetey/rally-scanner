@@ -3,11 +3,9 @@
 from datetime import datetime
 
 from db.pool import get_conn, row_to_dict
-from db.users import get_capital
 
 
 def open_trade(
-    discord_id: int,
     ticker: str,
     entry_price: float,
     entry_date: str | None = None,
@@ -22,23 +20,23 @@ def open_trade(
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO trades (discord_id, ticker, entry_price, entry_date, "
+            "INSERT INTO trades (ticker, entry_price, entry_date, "
             "size, stop_price, target_price, notes) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (discord_id, ticker.upper(), entry_price, entry_date, size,
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (ticker.upper(), entry_price, entry_date, size,
              stop_price, target_price, notes),
         )
         return cur.fetchone()["id"]
 
 
 def close_trade(
-    discord_id: int,
     ticker: str,
     exit_price: float,
     exit_date: str | None = None,
     notes: str | None = None,
+    capital: float = 0.0,
 ) -> dict | None:
-    """Close the oldest open trade for this user+ticker (FIFO). Returns closed trade or None."""
+    """Close the oldest open trade for this ticker (FIFO). Returns closed trade or None."""
     if exit_date is None:
         exit_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -49,9 +47,9 @@ def close_trade(
         cur.execute(
             "SELECT id, entry_price, entry_date, size, stop_price, target_price, notes "
             "FROM trades "
-            "WHERE discord_id = %s AND ticker = %s AND status = 'open' "
+            "WHERE ticker = %s AND status = 'open' "
             "ORDER BY entry_date ASC, id ASC LIMIT 1",
-            (discord_id, ticker.upper()),
+            (ticker.upper(),),
         )
         row = cur.fetchone()
         if row is None:
@@ -64,7 +62,6 @@ def close_trade(
         pnl_pct = round((exit_price / entry_price - 1) * 100, 2)
 
         # Dollar PnL
-        capital = get_capital(discord_id)
         pnl_dollar = None
         if capital > 0 and size > 0:
             pnl_dollar = round(capital * size * (exit_price / entry_price - 1), 2)
@@ -96,32 +93,30 @@ def close_trade(
     }
 
 
-def get_open_trades(discord_id: int) -> list[dict]:
-    """Get all open trades for a user."""
+def get_open_trades() -> list[dict]:
+    """Get all open trades."""
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT id, ticker, entry_price, entry_date, size, "
             "stop_price, target_price, notes "
-            "FROM trades WHERE discord_id = %s AND status = 'open' "
+            "FROM trades WHERE status = 'open' "
             "ORDER BY entry_date DESC",
-            (discord_id,),
         )
         return [row_to_dict(r) for r in cur.fetchall()]
 
 
 def get_trade_history(
-    discord_id: int,
     ticker: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Get trade history for a user, optionally filtered by ticker."""
+    """Get trade history, optionally filtered by ticker."""
     query = (
         "SELECT id, ticker, entry_price, entry_date, exit_price, exit_date, "
         "size, stop_price, target_price, pnl_pct, pnl_dollar, status, notes "
-        "FROM trades WHERE discord_id = %s"
+        "FROM trades WHERE 1=1"
     )
-    params: list = [discord_id]
+    params: list = []
 
     if ticker:
         query += " AND ticker = %s"
@@ -136,13 +131,13 @@ def get_trade_history(
         return [row_to_dict(r) for r in cur.fetchall()]
 
 
-def get_pnl_summary(discord_id: int, days: int | None = None) -> dict:
-    """Compute P&L summary for a user's closed trades."""
+def get_pnl_summary(days: int | None = None) -> dict:
+    """Compute P&L summary for closed trades."""
     query = (
         "SELECT pnl_pct, pnl_dollar, size FROM trades "
-        "WHERE discord_id = %s AND status = 'closed'"
+        "WHERE status = 'closed'"
     )
-    params: list = [discord_id]
+    params: list = []
 
     if days:
         query += " AND exit_date >= CURRENT_DATE - %s * INTERVAL '1 day'"

@@ -26,12 +26,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from bot.notify import (
-    notify_error,
-    notify_exits,
-    notify_retrain_complete,
-    notify_signals,
-)
 from rally_ml.core.persistence import load_manifest
 from rally_ml.pipeline.retrain import retrain_all
 
@@ -89,19 +83,16 @@ def cmd_scan(args: argparse.Namespace) -> int:
         msg = (f"{health['stale_count']}/{health['total_count']} models are stale "
                f"(oldest: {health['oldest_model_days']} days)")
         logger.warning(msg)
-        notify_error("Model staleness warning", msg)
+        logger.warning("Model staleness: %s", msg)
 
     # Run scan with position tracking
-    results = scan_all(
-        config_name=args.config,
-        show_positions=True,
-    )
+    results = scan_all(config_name=args.config)
 
     # Extract signals
     signals = [r for r in results if r.get("signal")]
     if signals:
         logger.info(f"{len(signals)} new signals detected")
-        notify_signals(signals)
+        logger.info("Signals: %s", [s.get("ticker") for s in signals])
     else:
         logger.info("No new signals")
 
@@ -110,7 +101,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     closed = positions.get("closed_today", [])
     if closed:
         logger.info(f"{len(closed)} positions closed")
-        notify_exits(closed)
+        logger.info("Exits: %s", [c.get("ticker") for c in closed])
         record_closed_trades(closed)
 
     # Update daily portfolio snapshot
@@ -130,13 +121,12 @@ def cmd_retrain(args: argparse.Namespace) -> int:
         retrain_all(tickers=args.tickers)
     except Exception as e:
         logger.exception("Retrain failed")
-        notify_error("Retrain failed", str(e))
+        logger.error("Retrain failed: %s", e)
         return 1
 
     elapsed = time.time() - t0
     health = check_model_health()
-    notify_retrain_complete(health, elapsed)
-    logger.info(f"Retrain complete: {health['fresh_count']} models ({elapsed:.1f}s)")
+    logger.info("Retrain complete: %d fresh models (%.1fs)", health["fresh_count"], elapsed)
     return 0
 
 
@@ -229,9 +219,7 @@ def main() -> int:
     try:
         return commands[args.command](args)
     except Exception:
-        logger.exception(f"Orchestrator '{args.command}' failed")
-        notify_error(f"Orchestrator {args.command} crashed",
-                     "Check logs for details")
+        logger.exception("Orchestrator '%s' crashed", args.command)
         return 1
 
 
