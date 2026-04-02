@@ -21,8 +21,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rally_ml.backtest.common import generate_signals_fast, simulate_portfolio, simulate_trades_fast
-from rally_ml.config import CONFIGS, CONFIGS_BY_NAME, TradingConfig
+from rally_ml.config import CONFIGS, CONFIGS_BY_NAME, TradingConfig  # noqa: E402
+from sweep_common import filter_tickers, run_backtest  # noqa: E402
 
 CACHE = ROOT / "backtest_cache" / "predictions.pkl"
 
@@ -33,29 +33,17 @@ def is_crypto(ticker: str) -> bool:
     return any(ticker.endswith(s) for s in CRYPTO_SUFFIXES)
 
 
-def run_sweep(
+def _run_sweep(
     cached: dict[str, pd.DataFrame],
     cfg: TradingConfig,
     cooldown: int,
     tickers: list[str] | None = None,
 ) -> tuple[dict, pd.DataFrame]:
-    """Run backtest for one config + cooldown combo, return (metrics, trades)."""
-    all_trades = []
     subset = {t: cached[t] for t in tickers} if tickers else cached
-    for ticker, preds in subset.items():
-        signal = generate_signals_fast(preds, cfg, require_trend=True)
-        trades = simulate_trades_fast(preds, signal, cfg, cooldown_days=cooldown)
-        if not trades.empty:
-            trades["asset"] = ticker
-            all_trades.append(trades)
-
-    portfolio_trades = pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
-    metrics = simulate_portfolio(portfolio_trades, cfg)
-    return metrics, portfolio_trades
+    return run_backtest(subset, cfg, cooldown_days=cooldown)
 
 
 def print_comparison_table(results: list[dict]) -> None:
-    """Print a formatted comparison table."""
     print(
         f"  {'Config':<16s} {'CD':>3s} {'Trades':>7s} {'Tr/Yr':>6s} "
         f"{'WinRate':>8s} {'AvgBars':>8s} {'CAGR':>8s} {'MaxDD':>7s} "
@@ -73,12 +61,10 @@ def print_comparison_table(results: list[dict]) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cooldown period experiment (MIC-103)")
+    parser = argparse.ArgumentParser(description="Cooldown period experiment")
     parser.add_argument("--tickers", nargs="+", metavar="T", default=None)
-    parser.add_argument("--cooldowns", nargs="+", type=int, default=[0, 3, 5, 10],
-                        help="Cooldown values to sweep (default: 0 3 5 10)")
-    parser.add_argument("--configs", nargs="+", default=None,
-                        help="Limit to specific config names (default: all)")
+    parser.add_argument("--cooldowns", nargs="+", type=int, default=[0, 3, 5, 10])
+    parser.add_argument("--configs", nargs="+", default=None)
     args = parser.parse_args()
 
     print(f"\nLoading predictions cache: {CACHE}")
@@ -86,12 +72,7 @@ def main():
         cached = pickle.load(f)
     print(f"Loaded {len(cached)} assets")
 
-    if args.tickers:
-        missing = [t for t in args.tickers if t not in cached]
-        if missing:
-            print(f"WARNING: tickers not in cache: {missing}")
-        cached = {t: cached[t] for t in args.tickers if t in cached}
-        print(f"Filtered to {len(cached)} tickers: {list(cached.keys())}")
+    cached = filter_tickers(cached, args.tickers)
 
     configs = CONFIGS
     if args.configs:
@@ -104,9 +85,6 @@ def main():
     crypto_tickers = [t for t in cached if is_crypto(t)]
     equity_tickers = [t for t in cached if not is_crypto(t)]
 
-    # ---------------------------------------------------------------
-    # Section 1: Full universe sweep
-    # ---------------------------------------------------------------
     print(f"\n{'='*110}")
     print(f"  COOLDOWN EXPERIMENT — {len(cached)} assets, cooldowns={cooldowns}")
     print(f"{'='*110}\n")
@@ -114,9 +92,9 @@ def main():
     all_results = []
     for cfg in configs:
         for cd in cooldowns:
-            metrics, trades = run_sweep(cached, cfg, cd)
+            metrics, trades = _run_sweep(cached, cfg, cd)
             avg_bars = trades["bars_held"].mean() if not trades.empty else 0
-            row = {
+            all_results.append({
                 "config": cfg.name,
                 "cooldown": cd,
                 "n_trades": metrics["n_trades"],
@@ -127,14 +105,10 @@ def main():
                 "max_dd": metrics["max_dd"],
                 "sharpe": metrics["sharpe"],
                 "pf": metrics["pf"],
-            }
-            all_results.append(row)
+            })
 
     print_comparison_table(all_results)
 
-    # ---------------------------------------------------------------
-    # Section 2: Delta vs no-cooldown (baseline = cd=0) per config
-    # ---------------------------------------------------------------
     print(f"\n{'='*110}")
     print("  DELTA vs NO-COOLDOWN (cooldown=0 baseline)")
     print(f"{'='*110}")
@@ -161,9 +135,6 @@ def main():
             )
         print("  " + "-" * 72)
 
-    # ---------------------------------------------------------------
-    # Section 3: Asset class breakdown (crypto vs equities)
-    # ---------------------------------------------------------------
     if crypto_tickers and equity_tickers:
         baseline_cfg = CONFIGS_BY_NAME["baseline"]
         print(f"\n{'='*110}")
@@ -174,7 +145,7 @@ def main():
         class_results = []
         for asset_class, tickers in [("Equities", equity_tickers), ("Crypto", crypto_tickers)]:
             for cd in cooldowns:
-                metrics, trades = run_sweep(cached, baseline_cfg, cd, tickers)
+                metrics, trades = _run_sweep(cached, baseline_cfg, cd, tickers)
                 avg_bars = trades["bars_held"].mean() if not trades.empty else 0
                 class_results.append({
                     "config": asset_class,
