@@ -1,15 +1,11 @@
 """Read-only query operations: signals, positions, watchlist, prices."""
 
-import logging
-
 from rally_ml.core.data import fetch_quotes
 
 from db.positions import load_watchlist
 from db.trades import get_open_trades
 from services._helpers import dollar_metrics
 from trading.positions import get_merged_positions_sync
-
-logger = logging.getLogger(__name__)
 
 WATCHLIST_CAP = 20
 MAX_PRICE_TICKERS = 10

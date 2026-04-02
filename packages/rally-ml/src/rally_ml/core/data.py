@@ -3,6 +3,7 @@ Data fetching — daily OHLCV via yfinance, with batch download and disk caching
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Session-level cache for VIX data (fetched once, reused across tickers)
 _vix_cache: dict[str, pd.Series] = {}
+_vix_lock = threading.Lock()
 
 OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
@@ -51,8 +53,9 @@ def fetch_daily(
 def fetch_vix(start: str = "2000-01-01", end: str | None = None) -> pd.Series:
     """Fetch VIX close prices. Cached per session to avoid redundant fetches."""
     cache_key = f"{start}_{end}"
-    if cache_key in _vix_cache:
-        return _vix_cache[cache_key]
+    with _vix_lock:
+        if cache_key in _vix_cache:
+            return _vix_cache[cache_key]
 
     ticker = yf.Ticker("^VIX")
     kwargs = {"start": start, "interval": "1d", "auto_adjust": True}
@@ -61,7 +64,8 @@ def fetch_vix(start: str = "2000-01-01", end: str | None = None) -> pd.Series:
     df = ticker.history(**kwargs)
     df.index = pd.to_datetime(df.index).tz_localize(None)
     vix = df["Close"].rename("VIX_Close")
-    _vix_cache[cache_key] = vix
+    with _vix_lock:
+        _vix_cache[cache_key] = vix
     return vix
 
 

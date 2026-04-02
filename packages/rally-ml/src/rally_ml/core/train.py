@@ -36,7 +36,8 @@ def fit_model(
     # Fit HMM; fall back to None on convergence / singular-covariance errors
     try:
         hmm_model, hmm_scaler, state_order = fit_hmm(df_train)
-    except (ValueError, np.linalg.LinAlgError):
+    except (ValueError, np.linalg.LinAlgError) as e:
+        logger.warning("HMM fit failed (%s), continuing without HMM features", e)
         hmm_model, hmm_scaler, state_order = None, None, None
 
     hmm_probs = predict_hmm_probs(hmm_model, hmm_scaler, state_order, df_train)

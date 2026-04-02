@@ -9,6 +9,7 @@ Fits a 3-state Gaussian HMM on volatility features to identify:
 States are labeled post-hoc by sorting on mean RV emission.
 """
 
+import logging
 import warnings
 
 import numpy as np
@@ -17,6 +18,8 @@ from hmmlearn.hmm import GaussianHMM
 from sklearn.preprocessing import StandardScaler
 
 from ..config import PIPELINE
+
+logger = logging.getLogger(__name__)
 
 HMM_FEATURES = ["RV", "ATR_pct", "BB_width"]
 N_STATES = 3
@@ -63,6 +66,14 @@ def predict_hmm_probs(
     If model is None, returns zeros (graceful degradation).
     """
     if model is None:
+        logger.warning("HMM model is None — returning zero probabilities")
+        return pd.DataFrame(
+            0.0, index=df.index,
+            columns=["P_compressed", "P_normal", "P_expanding", "HMM_transition_signal"],
+        )
+
+    if scaler is None:
+        logger.warning("HMM scaler is None — returning zero probabilities")
         return pd.DataFrame(
             0.0, index=df.index,
             columns=["P_compressed", "P_normal", "P_expanding", "HMM_transition_signal"],

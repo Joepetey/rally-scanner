@@ -245,6 +245,7 @@ def execute_tool(
     """Execute a tool and return results."""
     handler = _TOOL_DISPATCH.get(tool_name)
     if handler is None:
+        logger.warning("Unknown tool requested: %s (input: %s)", tool_name, tool_input)
         return {"error": f"Unknown tool: {tool_name}"}
     return handler(tool_input, discord_id, capital)
 

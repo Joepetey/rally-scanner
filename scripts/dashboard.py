@@ -38,8 +38,8 @@ def _print_open_positions(positions: list[dict], live: bool = False) -> None:
                         p["unrealized_pnl_pct"] = (price / p["entry_price"] - 1) * 100
                     except (KeyError, IndexError):
                         pass
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  (live price fetch failed: {e})")
 
     print(f"\n  OPEN POSITIONS ({len(positions)})")
     print(f"  {'='*W}")
