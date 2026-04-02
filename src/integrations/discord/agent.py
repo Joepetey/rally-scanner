@@ -11,7 +11,7 @@ import os
 import anthropic
 
 from db.users import ensure_user, get_capital
-from services import trading_ops
+from services import portfolio, queries, system, trades
 
 logger = logging.getLogger(__name__)
 
@@ -217,22 +217,22 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 
 _TOOL_DISPATCH: dict = {
-    "get_signals": lambda ti, did, cap: trading_ops.get_signals(cap),
-    "get_system_positions": lambda ti, did, cap: trading_ops.get_system_positions(cap),
-    "get_user_positions": lambda ti, did, cap: trading_ops.get_user_positions(cap),
-    "enter_trade": lambda ti, did, cap: trading_ops.enter_trade(ti, cap),
-    "exit_trade": lambda ti, did, cap: trading_ops.exit_trade(ti, cap),
-    "get_pnl": lambda ti, did, cap: trading_ops.get_pnl(cap, ti.get("period", "all")),
-    "set_capital": lambda ti, did, cap: trading_ops.set_capital_amount(did, ti.get("amount")),
-    "get_trade_history": lambda ti, did, cap: trading_ops.get_trade_history(
-        ti.get("ticker"), ti.get("limit", trading_ops.DEFAULT_TRADE_LIMIT),
+    "get_signals": lambda ti, did, cap: queries.get_signals(cap),
+    "get_system_positions": lambda ti, did, cap: queries.get_system_positions(cap),
+    "get_user_positions": lambda ti, did, cap: queries.get_user_positions(cap),
+    "enter_trade": lambda ti, did, cap: trades.enter_trade(ti, cap),
+    "exit_trade": lambda ti, did, cap: trades.exit_trade(ti, cap),
+    "get_pnl": lambda ti, did, cap: portfolio.get_pnl(cap, ti.get("period", "all")),
+    "set_capital": lambda ti, did, cap: portfolio.set_capital_amount(did, ti.get("amount")),
+    "get_trade_history": lambda ti, did, cap: trades.get_trade_history(
+        ti.get("ticker"), ti.get("limit", trades.DEFAULT_TRADE_LIMIT),
     ),
-    "get_portfolio": lambda ti, did, cap: trading_ops.get_portfolio(ti.get("days", 30)),
-    "get_health": lambda ti, did, cap: trading_ops.get_health(),
-    "run_scan": lambda ti, did, cap: trading_ops.run_scan(ti.get("config", "conservative")),
-    "run_retrain": lambda ti, did, cap: trading_ops.run_retrain_marker(ti.get("tickers")),
-    "get_price": lambda ti, did, cap: trading_ops.get_price(ti.get("tickers", [])),
-    "get_watchlist": lambda ti, did, cap: trading_ops.get_watchlist(),
+    "get_portfolio": lambda ti, did, cap: portfolio.get_portfolio(ti.get("days", 30)),
+    "get_health": lambda ti, did, cap: system.get_health(),
+    "run_scan": lambda ti, did, cap: system.run_scan(ti.get("config", "conservative")),
+    "run_retrain": lambda ti, did, cap: system.run_retrain_marker(ti.get("tickers")),
+    "get_price": lambda ti, did, cap: queries.get_price(ti.get("tickers", [])),
+    "get_watchlist": lambda ti, did, cap: queries.get_watchlist(),
 }
 
 

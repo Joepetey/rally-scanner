@@ -1,4 +1,4 @@
-"""Tests for trading ops service layer — services/trading_ops.py (MIC-99).
+"""Tests for the services layer (MIC-99).
 
 Tests tool execution functions, dollar metrics, capital validation, and tool schema.
 """
@@ -6,10 +6,8 @@ Tests tool execution functions, dollar metrics, capital validation, and tool sch
 import sys
 from unittest.mock import MagicMock, patch
 
-from services.trading_ops import (
-    dollar_metrics,
-    set_capital_amount,
-)
+from services._helpers import dollar_metrics
+from services.portfolio import set_capital_amount
 
 # Stub anthropic before importing agent (it imports at module level)
 sys.modules.setdefault("anthropic", MagicMock())
@@ -59,10 +57,10 @@ class TestSetCapital:
 
 class TestEnterTrade:
 
-    @patch("services.trading_ops.get_merged_positions_sync")
-    @patch("services.trading_ops.open_trade", return_value=1)
+    @patch("services.trades.get_merged_positions_sync")
+    @patch("services.trades.open_trade", return_value=1)
     def test_basic_entry(self, mock_open, mock_positions):
-        from services.trading_ops import enter_trade
+        from services.trades import enter_trade
 
         mock_positions.return_value = {"positions": []}
         result = enter_trade({"ticker": "aapl", "price": 150.0}, 10000.0)
@@ -70,10 +68,10 @@ class TestEnterTrade:
         assert result["entry_price"] == 150.0
         assert result["trade_id"] == 1
 
-    @patch("services.trading_ops.get_merged_positions_sync")
-    @patch("services.trading_ops.open_trade", return_value=2)
+    @patch("services.trades.get_merged_positions_sync")
+    @patch("services.trades.open_trade", return_value=2)
     def test_auto_fills_from_system_signal(self, mock_open, mock_positions):
-        from services.trading_ops import enter_trade
+        from services.trades import enter_trade
 
         mock_positions.return_value = {
             "positions": [{
@@ -101,9 +99,9 @@ class TestEnterTrade:
 
 class TestExitTrade:
 
-    @patch("services.trading_ops.close_trade")
+    @patch("services.trades.close_trade")
     def test_successful_exit(self, mock_close):
-        from services.trading_ops import exit_trade
+        from services.trades import exit_trade
 
         mock_close.return_value = {
             "ticker": "AAPL", "entry_price": 100.0, "exit_price": 110.0,
@@ -114,9 +112,9 @@ class TestExitTrade:
         assert result["pnl_pct"] == 10.0
         assert result["ticker"] == "AAPL"
 
-    @patch("services.trading_ops.close_trade", return_value=None)
+    @patch("services.trades.close_trade", return_value=None)
     def test_no_open_trade(self, mock_close):
-        from services.trading_ops import exit_trade
+        from services.trades import exit_trade
 
         result = exit_trade({"ticker": "aapl", "price": 110.0}, 10000.0)
         assert "error" in result
@@ -129,9 +127,9 @@ class TestExitTrade:
 
 class TestGetSystemPositions:
 
-    @patch("services.trading_ops.get_merged_positions_sync")
+    @patch("services.queries.get_merged_positions_sync")
     def test_with_positions(self, mock_positions):
-        from services.trading_ops import get_system_positions
+        from services.queries import get_system_positions
 
         mock_positions.return_value = {
             "positions": [
