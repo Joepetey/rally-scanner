@@ -58,6 +58,18 @@ ignore = [
 "src/backtest/optimize.py" = ["I001"]
 "src/backtest/universe_bt.py" = ["I001"]
 
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__",
+]
+
 [tool.mypy]
 python_version = "3.11"
 strict = false
