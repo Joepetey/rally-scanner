@@ -13,87 +13,51 @@ Usage:
 """
 
 import argparse
-import pickle
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
-
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import rally_ml.config.params as _params_mod  # noqa: E402 — need module ref to mutate PARAMS
-from rally_ml.backtest.common import (  # noqa: E402
-    generate_signals_fast,
-    simulate_portfolio,
-    simulate_trades_fast,
-)
+import rally_ml.config.params as _params_mod  # noqa: E402
 from rally_ml.config import CONFIGS_BY_NAME  # noqa: E402
-
-CACHE_DIR = PROJECT_ROOT / "backtest_cache"
-PREDICTIONS_CACHE = CACHE_DIR / "predictions.pkl"
+from sweep_common import compute_exit_rates, filter_tickers, load_cache, run_backtest  # noqa: E402
 
 DEFAULT_LOCK_PCTS = [0.0, 0.003, 0.005, 0.008, 0.01, 0.015, 0.02, 0.03, 0.05]
 
 
-def _load_cache() -> dict[str, pd.DataFrame]:
-    if not PREDICTIONS_CACHE.exists():
-        print("ERROR: No predictions cache found. Run backtest_universe.py first.")
-        sys.exit(1)
-    with open(PREDICTIONS_CACHE, "rb") as f:
-        cached = pickle.load(f)
-    print(f"Loaded {len(cached)} cached assets")
-    return cached
-
-
 def _run_one(cached, cfg, lock_pct: float) -> dict:
-    _params_mod.PARAMS.profit_lock_pct = lock_pct
+    # Temporarily mutate PARAMS for profit_lock_pct (simulate_trades_fast reads it)
+    original = _params_mod.PARAMS.profit_lock_pct
+    try:
+        _params_mod.PARAMS.profit_lock_pct = lock_pct
+        m, portfolio_trades = run_backtest(cached, cfg)
+    finally:
+        _params_mod.PARAMS.profit_lock_pct = original
 
-    all_trades = []
-    for preds in cached.values():
-        signal = generate_signals_fast(preds, cfg, require_trend=True)
-        trades = simulate_trades_fast(preds, signal, cfg)
-        if not trades.empty:
-            all_trades.append(trades)
-
-    portfolio_trades = (
-        pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
-    )
-    m = simulate_portfolio(portfolio_trades, cfg)
     n = m["n_trades"]
     n_years = m.get("n_years", 1)
+    rates = compute_exit_rates(portfolio_trades, n)
 
     if not portfolio_trades.empty:
-        ec = portfolio_trades["exit_reason"].value_counts().to_dict()
-        stop_rate  = ec.get("stop", 0) / n if n > 0 else 0
-        tp_rate    = ec.get("profit_target", 0) / n if n > 0 else 0
-        time_rate  = ec.get("time_stop", 0) / n if n > 0 else 0
-        trail_rate = ec.get("trail_stop", 0) / n if n > 0 else 0
-        avg_bars   = portfolio_trades["bars_held"].mean()
-        avg_pnl    = portfolio_trades["pnl_pct"].mean()
-        win_rate   = (portfolio_trades["pnl_pct"] > 0).mean()
+        avg_pnl = portfolio_trades["pnl_pct"].mean()
+        win_rate = (portfolio_trades["pnl_pct"] > 0).mean()
     else:
-        stop_rate = tp_rate = time_rate = trail_rate = avg_bars = avg_pnl = win_rate = 0.0
+        avg_pnl = win_rate = 0.0
 
     return {
         "lock_pct": lock_pct,
-        "cagr":      m["cagr"],
-        "max_dd":    m["max_dd"],
-        "sharpe":    m["sharpe"],
-        "win_rate":  win_rate,
-        "pf":        m["pf"],
-        "n_trades":  n,
-        "tr_yr":     n / n_years if n_years > 0 else 0,
-        "avg_pnl":   avg_pnl,
-        "avg_bars":  avg_bars,
-        "tp_rate":   tp_rate,
-        "stop_rate": stop_rate,
-        "time_rate": time_rate,
-        "trail_rate": trail_rate,
+        "cagr": m["cagr"],
+        "max_dd": m["max_dd"],
+        "sharpe": m["sharpe"],
+        "win_rate": win_rate,
+        "pf": m["pf"],
+        "n_trades": n,
+        "tr_yr": n / n_years if n_years > 0 else 0,
+        "avg_pnl": avg_pnl,
+        **rates,
     }
 
 
@@ -135,13 +99,7 @@ def main() -> None:
     print(f"  Lock pcts   : {args.lock_pcts}")
     print("=" * 110)
 
-    cached = _load_cache()
-    if args.tickers:
-        missing = [t for t in args.tickers if t not in cached]
-        if missing:
-            print(f"WARNING: tickers not in cache: {missing}")
-        cached = {t: cached[t] for t in args.tickers if t in cached}
-        print(f"Filtered to {len(cached)} tickers: {list(cached.keys())}")
+    cached = filter_tickers(load_cache(), args.tickers)
 
     results = []
     for pct in args.lock_pcts:
