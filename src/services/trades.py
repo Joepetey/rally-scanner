@@ -1,10 +1,10 @@
 """Trade management operations: enter, exit, history."""
 
-from db.trades import (
+from db.trading.trades import (
     close_trade,
     open_trade,
 )
-from db.trades import (
+from db.trading.trades import (
     get_trade_history as _db_get_trade_history,
 )
 from services._helpers import dollar_metrics

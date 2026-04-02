@@ -70,9 +70,9 @@ def pg_db():
 
     os.environ["DATABASE_URL"] = url
 
-    import db.pool as pool_mod
+    import db.core.pool as pool_mod
     from db import init_pool, init_schema
-    from db.pool import get_conn
+    from db.core.pool import get_conn
 
     # Re-initialize pool so it uses TEST_DATABASE_URL
     if pool_mod._pool is not None:

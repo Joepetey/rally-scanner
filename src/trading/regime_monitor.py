@@ -13,8 +13,8 @@ from rally_ml.core.features import build_features
 from rally_ml.core.hmm import predict_hmm_probs
 from rally_ml.core.persistence import load_manifest, load_model
 
-from db.models import load_regime_states as _db_load_regime_states
-from db.models import save_regime_states as _db_save_regime_states
+from db.ml.models import load_regime_states as _db_load_regime_states
+from db.ml.models import save_regime_states as _db_save_regime_states
 
 logger = logging.getLogger(__name__)
 

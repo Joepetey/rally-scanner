@@ -15,7 +15,7 @@ except ImportError:
 # local
 import rally_ml.config as config
 
-from db.positions import (
+from db.trading.positions import (
     enqueue_signal,
     load_all_position_meta,
     load_positions,
@@ -30,7 +30,7 @@ from integrations.alpaca.models import (
     OrderResult,
 )
 from trading.positions import async_close_position, get_group_exposure, get_total_exposure
-from trading.risk_manager import is_circuit_breaker_active
+from trading.risk import is_circuit_breaker_active
 
 logger = logging.getLogger(__name__)
 

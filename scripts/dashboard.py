@@ -14,8 +14,8 @@ from datetime import datetime
 
 from rally_ml.core.persistence import load_manifest
 
-from db.portfolio import load_equity_history, load_trade_journal
-from db.positions import load_positions
+from db.trading.portfolio import load_equity_history, load_trade_journal
+from db.trading.positions import load_positions
 
 W = 80
 

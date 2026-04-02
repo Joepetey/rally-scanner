@@ -1,8 +1,8 @@
 """Portfolio analytics: PnL, capital, equity history."""
 
-from db.portfolio import load_equity_history, load_trade_journal
-from db.trades import get_pnl_summary
-from db.users import set_capital
+from db.trading.portfolio import load_equity_history, load_trade_journal
+from db.trading.trades import get_pnl_summary
+from db.ops.users import set_capital
 
 
 def get_pnl(capital: float, period: str = "all") -> dict:

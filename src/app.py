@@ -21,9 +21,9 @@ try:
     from rally_ml.core.universe import configure as configure_universe
 
     from api import start_api_server
-    from db.ml_stores import PostgresManifestStore, PostgresUniverseCacheStore
-    from db.pool import init_pool
-    from db.schema import init_schema
+    from db.ml.ml_stores import PostgresManifestStore, PostgresUniverseCacheStore
+    from db.core.pool import init_pool
+    from db.core.schema import init_schema
     from integrations.discord.bot import make_bot, make_discord_event_handler
     from log import setup_logging
     from trading.scheduler import TradingScheduler

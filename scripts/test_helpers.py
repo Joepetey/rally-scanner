@@ -9,7 +9,7 @@ from datetime import date
 
 from rally_ml.config import PARAMS
 
-from db.positions import delete_position_meta, save_position_meta
+from db.trading.positions import delete_position_meta, save_position_meta
 
 
 class TestRunner:

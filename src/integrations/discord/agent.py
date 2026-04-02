@@ -10,7 +10,7 @@ import os
 
 import anthropic
 
-from db.users import ensure_user, get_capital
+from db.ops.users import ensure_user, get_capital
 from services import portfolio, queries, system, trades
 
 logger = logging.getLogger(__name__)
