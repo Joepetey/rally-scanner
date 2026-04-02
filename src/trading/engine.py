@@ -10,7 +10,7 @@ import logging
 import os
 import zoneinfo
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -111,12 +111,71 @@ class HousekeepingResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Broker operations protocol for execute_breach dependency injection
+# ---------------------------------------------------------------------------
+
+class BrokerOps(Protocol):
+    async def cancel_exit_orders(
+        self, target_order_id: str | None, trail_order_id: str | None,
+    ) -> None: ...
+
+    async def execute_exit(self, ticker: str) -> Any: ...
+
+    async def get_recent_sell_fills(
+        self, tickers: list[str],
+    ) -> dict[str, float]: ...
+
+    async def close_position(
+        self, ticker: str, fill_price: float, reason: str,
+    ) -> dict | None: ...
+
+    def log_order(
+        self, ticker: str, side: str, order_type: str, qty: float | None,
+        reason: str, order_id: str | None, status: str,
+        fill_price: float | None, error: str | None,
+    ) -> None: ...
+
+
+class _DefaultBrokerOps:
+    """Wraps existing executor/positions functions as BrokerOps."""
+
+    async def cancel_exit_orders(
+        self, target_order_id: str | None, trail_order_id: str | None,
+    ) -> None:
+        await cancel_exit_orders(target_order_id, trail_order_id)
+
+    async def execute_exit(self, ticker: str) -> Any:
+        return await execute_exit(ticker)
+
+    async def get_recent_sell_fills(
+        self, tickers: list[str],
+    ) -> dict[str, float]:
+        return await get_recent_sell_fills(tickers)
+
+    async def close_position(
+        self, ticker: str, fill_price: float, reason: str,
+    ) -> dict | None:
+        return await async_close_position(ticker, fill_price, reason)
+
+    def log_order(
+        self, ticker: str, side: str, order_type: str, qty: float | None,
+        reason: str, order_id: str | None, status: str,
+        fill_price: float | None, error: str | None,
+    ) -> None:
+        log_order(
+            ticker, side, order_type, qty, reason,
+            order_id, status, fill_price, error,
+        )
+
+
+# ---------------------------------------------------------------------------
 # AlertEngine
 # ---------------------------------------------------------------------------
 
 class AlertEngine:
-    def __init__(self) -> None:
+    def __init__(self, broker: BrokerOps | None = None) -> None:
         self._proximity_pct = float(os.environ.get("ALERT_PROXIMITY_PCT", "1.5"))
+        self._broker: BrokerOps = broker or _DefaultBrokerOps()
 
     def is_market_open(self) -> bool:
         """True if Mon-Fri 9:30 AM - 4:00 PM ET."""
@@ -235,20 +294,23 @@ class AlertEngine:
     async def execute_breach(
         self, ticker: str, pos: dict, price: float, reason: str,
     ) -> ExitResult | None:
-        """Cancel OCO exit orders then execute a market sell. Delegates to executor.py."""
-        await cancel_exit_orders(pos.get("target_order_id"), pos.get("trail_order_id"))
+        """Cancel OCO exit orders then execute a market sell via broker ops."""
+        broker = self._broker
+        await broker.cancel_exit_orders(
+            pos.get("target_order_id"), pos.get("trail_order_id"),
+        )
         try:
-            result = await execute_exit(ticker)
+            result = await broker.execute_exit(ticker)
             if result.already_closed:
                 # OCO/trailing stop already filled on the broker — fetch the actual fill
                 # price so DB closes with the real execution price, not the current quote.
-                broker_fills = await get_recent_sell_fills([ticker])
+                broker_fills = await broker.get_recent_sell_fills([ticker])
                 fill = broker_fills.get(ticker) or price
                 reason = "oco_fill"
             else:
                 fill = result.fill_price or price
-            closed = await async_close_position(ticker, fill, reason)
-            log_order(
+            closed = await broker.close_position(ticker, fill, reason)
+            broker.log_order(
                 ticker, "sell", "market", result.qty,
                 f"exit_{reason}", result.order_id,
                 "filled" if result.success else "failed",

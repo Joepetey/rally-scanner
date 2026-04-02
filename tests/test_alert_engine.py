@@ -203,57 +203,63 @@ class TestCheckPrices:
 
 class TestExecuteBreach:
 
+    def _make_broker(self, **overrides):
+        broker = MagicMock()
+        broker.cancel_exit_orders = AsyncMock()
+        broker.execute_exit = AsyncMock()
+        broker.get_recent_sell_fills = AsyncMock(return_value={})
+        broker.close_position = AsyncMock(return_value=None)
+        broker.log_order = MagicMock()
+        for k, v in overrides.items():
+            setattr(broker, k, v)
+        return broker
+
     @pytest.mark.asyncio
-    @patch("trading.engine.log_order")
-    @patch("trading.engine.async_close_position", new_callable=AsyncMock)
-    @patch("trading.engine.execute_exit", new_callable=AsyncMock)
-    @patch("trading.engine.cancel_exit_orders", new_callable=AsyncMock)
-    async def test_cancels_oco_then_exits(
-        self, mock_cancel, mock_exit, mock_close, mock_log, engine,
-    ):
-        pos = _make_pos(target_order_id="t_123", trail_order_id="s_456")
-        mock_exit.return_value = MagicMock(
+    async def test_cancels_oco_then_exits(self):
+        broker = self._make_broker()
+        broker.execute_exit.return_value = MagicMock(
             already_closed=False, fill_price=94.0, qty=10, order_id="exit_789",
             success=True, error=None,
         )
-        mock_close.return_value = {"realized_pnl_pct": -6.0, "bars_held": 3}
+        broker.close_position.return_value = {
+            "realized_pnl_pct": -6.0, "bars_held": 3,
+        }
+        engine = AlertEngine(broker=broker)
 
+        pos = _make_pos(target_order_id="t_123", trail_order_id="s_456")
         result = await engine.execute_breach("AAPL", pos, 94.0, "stop_loss")
         assert result is not None
         assert result.ticker == "AAPL"
         assert result.fill_price == 94.0
-        mock_cancel.assert_called_once_with("t_123", "s_456")
+        broker.cancel_exit_orders.assert_called_once_with("t_123", "s_456")
 
     @pytest.mark.asyncio
-    @patch("trading.engine.log_order")
-    @patch("trading.engine.async_close_position", new_callable=AsyncMock)
-    @patch("trading.engine.get_recent_sell_fills", new_callable=AsyncMock)
-    @patch("trading.engine.execute_exit", new_callable=AsyncMock)
-    @patch("trading.engine.cancel_exit_orders", new_callable=AsyncMock)
-    async def test_oco_already_filled(
-        self, mock_cancel, mock_exit, mock_fills, mock_close, mock_log, engine,
-    ):
+    async def test_oco_already_filled(self):
         """When OCO already filled, reason becomes 'oco_fill' with broker fill price."""
-        pos = _make_pos()
-        mock_exit.return_value = MagicMock(
+        broker = self._make_broker()
+        broker.execute_exit.return_value = MagicMock(
             already_closed=True, fill_price=None, qty=10, order_id="exit_789",
             success=True, error=None,
         )
-        mock_fills.return_value = {"AAPL": 95.5}
-        mock_close.return_value = {"realized_pnl_pct": -4.5, "bars_held": 2}
+        broker.get_recent_sell_fills.return_value = {"AAPL": 95.5}
+        broker.close_position.return_value = {
+            "realized_pnl_pct": -4.5, "bars_held": 2,
+        }
+        engine = AlertEngine(broker=broker)
 
+        pos = _make_pos()
         result = await engine.execute_breach("AAPL", pos, 94.0, "stop_loss")
         assert result is not None
         assert result.exit_reason == "oco_fill"
         assert result.fill_price == 95.5
 
     @pytest.mark.asyncio
-    @patch("trading.engine.cancel_exit_orders", new_callable=AsyncMock)
-    @patch("trading.engine.execute_exit", new_callable=AsyncMock)
-    async def test_exit_failure_returns_none(self, mock_exit, mock_cancel, engine):
-        pos = _make_pos()
-        mock_exit.side_effect = Exception("Alpaca API down")
+    async def test_exit_failure_returns_none(self):
+        broker = self._make_broker()
+        broker.execute_exit.side_effect = Exception("Alpaca API down")
+        engine = AlertEngine(broker=broker)
 
+        pos = _make_pos()
         result = await engine.execute_breach("AAPL", pos, 94.0, "stop_loss")
         assert result is None
 
