@@ -180,8 +180,8 @@ _ENTRY_PATCHES = [
           return_value={"positions": [], "closed_today": [], "last_updated": ""}),
     patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False),
     patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]),
-    patch("integrations.alpaca.entries.enqueue_signal"),
-    patch("integrations.alpaca.entries.log_skipped_signal"),
+    patch("integrations.alpaca.sizing.enqueue_signal"),
+    patch("integrations.alpaca.sizing.log_skipped_signal"),
     patch("integrations.alpaca.entries.remove_from_queue"),
     # Avoid real Alpaca data API calls in tests — return fallback-based limit price
     patch("integrations.alpaca.entries._compute_limit_price",
@@ -265,8 +265,8 @@ async def test_execute_entries_exposure_cap(alpaca_mock):
                return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]), \
-         patch("integrations.alpaca.entries.enqueue_signal") as mock_enqueue, \
-         patch("integrations.alpaca.entries.log_skipped_signal"), \
+         patch("integrations.alpaca.sizing.enqueue_signal") as mock_enqueue, \
+         patch("integrations.alpaca.sizing.log_skipped_signal"), \
          patch("integrations.alpaca.entries.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
@@ -292,8 +292,8 @@ async def test_execute_entries_partial_sizing(alpaca_mock):
                return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]), \
-         patch("integrations.alpaca.entries.enqueue_signal"), \
-         patch("integrations.alpaca.entries.log_skipped_signal"), \
+         patch("integrations.alpaca.sizing.enqueue_signal"), \
+         patch("integrations.alpaca.sizing.log_skipped_signal"), \
          patch("integrations.alpaca.entries.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
 
@@ -335,7 +335,8 @@ async def test_execute_entries_group_limit(alpaca_mock):
                return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]), \
-         patch("integrations.alpaca.entries.enqueue_signal"), \
+         patch("integrations.alpaca.sizing.enqueue_signal"), \
+         patch("integrations.alpaca.sizing.log_skipped_signal"), \
          patch("integrations.alpaca.entries.log_skipped_signal"), \
          patch("integrations.alpaca.entries.remove_from_queue"):
         results = await execute_entries(signals, equity=100_000.0)
@@ -502,7 +503,7 @@ def test_compute_limit_price_with_snapshot():
         "AAPL": FakeSnap(latest_quote=FakeQuote(bid_price=149.90, ask_price=150.10)),
     }
 
-    with patch("integrations.alpaca.entries._data_client", return_value=fake_client):
+    with patch("integrations.alpaca.sizing._data_client", return_value=fake_client):
         price = _compute_limit_price(150.0, "AAPL")
 
     # midpoint = 150.0, buffer = 0.2% → 150.0 * 1.002 = 150.30
@@ -513,7 +514,7 @@ def test_compute_limit_price_fallback():
     """Falls back to signal price + buffer when snapshot fails."""
     from integrations.alpaca.entries import _compute_limit_price
 
-    with patch("integrations.alpaca.entries._data_client", side_effect=Exception("no keys")):
+    with patch("integrations.alpaca.sizing._data_client", side_effect=Exception("no keys")):
         price = _compute_limit_price(100.0, "AAPL")
 
     assert price == 100.20  # 100 * 1.002
