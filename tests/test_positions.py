@@ -10,8 +10,15 @@ from trading.positions import (
     add_signal_positions,
     get_merged_positions,
     sync_positions_from_alpaca,
-    update_positions,
+    update_existing_positions,
 )
+
+
+def update_positions(state, new_signals, all_results):
+    """Test helper replacing removed backward-compat wrapper."""
+    state = update_existing_positions(state, all_results)
+    state = add_signal_positions(state, new_signals)
+    return state
 from trading.risk_manager import tighten_trailing_stop
 
 

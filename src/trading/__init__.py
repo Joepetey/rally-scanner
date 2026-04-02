@@ -13,7 +13,6 @@ from trading.positions import get_trail_order_ids as get_trail_order_ids
 from trading.positions import print_positions as print_positions
 from trading.positions import update_existing_positions as update_existing_positions
 from trading.positions import update_fill_prices as update_fill_prices
-from trading.positions import update_positions as update_positions
 from trading.regime_monitor import check_regime_shifts as check_regime_shifts
 from trading.regime_monitor import get_regime_states as get_regime_states
 from trading.regime_monitor import is_cascade as is_cascade

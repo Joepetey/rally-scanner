@@ -66,9 +66,9 @@ class TestUpdatePositionForPrice:
 
 class TestClosePositionIntraday:
 
-    @patch("trading.positions.record_closed_position")
-    @patch("trading.positions.delete_position_meta")
-    @patch("trading.positions.load_position_meta")
+    @patch("trading.intraday.record_closed_position")
+    @patch("trading.intraday.delete_position_meta")
+    @patch("trading.intraday.load_position_meta")
     def test_closes_and_records_pnl(self, mock_load, mock_delete, mock_record):
         mock_load.return_value = {
             "ticker": "AAPL", "entry_price": 100.0, "entry_date": "2024-01-10",
@@ -97,8 +97,8 @@ class TestClosePositionIntraday:
 class TestUpdateFillPrices:
 
     @pytest.mark.asyncio
-    @patch("trading.positions.save_position_meta")
-    @patch("trading.positions.load_all_position_meta")
+    @patch("trading.intraday.save_position_meta")
+    @patch("trading.intraday.load_all_position_meta")
     async def test_updates_entry_price_from_fill(self, mock_load_all, mock_save):
         mock_load_all.return_value = [{
             "ticker": "AAPL", "entry_price": 0.0, "entry_date": "2024-01-10",
@@ -125,7 +125,7 @@ class TestUpdateFillPrices:
 
 class TestExposure:
 
-    @patch("trading.positions.load_all_position_meta")
+    @patch("trading.intraday.load_all_position_meta")
     def test_total_exposure(self, mock_load_all):
         mock_load_all.return_value = [
             {"ticker": "AAPL", "size": 0.10},
