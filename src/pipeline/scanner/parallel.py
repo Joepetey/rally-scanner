@@ -10,12 +10,12 @@ from rally_ml.config.trading import TradingConfig
 from rally_ml.core.data import fetch_daily_batch, fetch_quotes, fetch_vix_safe
 from rally_ml.core.persistence import load_model
 
-from pipeline.scan_core import scan_single
+from pipeline.scanner.core import scan_single
 
 logger = logging.getLogger(__name__)
 
-_MAX_SCAN_WORKERS = 8
-_MAX_WATCHLIST_WORKERS = 4
+MAX_SCAN_WORKERS = 8
+MAX_WATCHLIST_WORKERS = 4
 
 
 class ScanTask(NamedTuple):

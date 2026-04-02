@@ -7,10 +7,10 @@ from rally_ml.config import CONFIGS_BY_NAME
 from rally_ml.config.trading import TradingConfig
 from rally_ml.core.persistence import load_manifest
 
-from pipeline.scan_core import LOOKBACK_DAYS, scan_single
-from pipeline.scan_parallel import (
-    _MAX_SCAN_WORKERS,
-    _MAX_WATCHLIST_WORKERS,
+from pipeline.scanner.core import LOOKBACK_DAYS, scan_single
+from pipeline.scanner.parallel import (
+    MAX_SCAN_WORKERS,
+    MAX_WATCHLIST_WORKERS,
     fetch_scan_data,
     run_parallel_scan,
     update_signals_with_live_prices,
@@ -18,7 +18,6 @@ from pipeline.scan_parallel import (
 
 logger = logging.getLogger(__name__)
 
-# Re-export for backwards compatibility
 __all__ = ["resolve_config", "scan_all", "scan_single", "scan_watchlist"]
 
 
@@ -66,7 +65,7 @@ def scan_all(
     )
 
     results = run_parallel_scan(
-        scan_tickers, vix_data, ohlcv_cache, _MAX_SCAN_WORKERS, config,
+        scan_tickers, vix_data, ohlcv_cache, MAX_SCAN_WORKERS, config,
     )
 
     signals = [r for r in results if r.get("signal")]
@@ -106,7 +105,7 @@ def scan_watchlist(
     )
 
     results = run_parallel_scan(
-        scan_tickers, vix_data, ohlcv_cache, _MAX_WATCHLIST_WORKERS, config,
+        scan_tickers, vix_data, ohlcv_cache, MAX_WATCHLIST_WORKERS, config,
     )
 
     signals = [r for r in results if r.get("signal")]

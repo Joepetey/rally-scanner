@@ -5,7 +5,8 @@ from rally_ml.config import PARAMS
 
 def test_scan_watchlist_returns_results(monkeypatch):
     """scan_watchlist returns results for valid tickers."""
-    from pipeline import scan_parallel, scanner
+    from pipeline import scanner
+    from pipeline.scanner import parallel as scan_parallel
 
     # Mock load_manifest to return known tickers
     monkeypatch.setattr(scanner, "load_manifest", lambda: {
@@ -37,7 +38,7 @@ def test_scan_watchlist_returns_results(monkeypatch):
         f.set_result(fn(item))
         return f
 
-    with patch("pipeline.scan_parallel.ProcessPoolExecutor") as MockPool:
+    with patch("pipeline.scanner.parallel.ProcessPoolExecutor") as MockPool:
         mock_pool = MagicMock()
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None
@@ -60,7 +61,8 @@ def test_scan_watchlist_empty_manifest(monkeypatch):
 
 def test_scan_watchlist_unknown_tickers(monkeypatch):
     """scan_watchlist skips tickers not in manifest."""
-    from pipeline import scan_parallel, scanner
+    from pipeline import scanner
+    from pipeline.scanner import parallel as scan_parallel
     monkeypatch.setattr(scanner, "load_manifest", lambda: {"AAPL": {}})
     cons = scanner.CONFIGS_BY_NAME["conservative"]
     monkeypatch.setattr(scanner, "resolve_config", lambda _: cons)
@@ -81,7 +83,7 @@ def test_scan_watchlist_unknown_tickers(monkeypatch):
         f.set_result(fn(item))
         return f
 
-    with patch("pipeline.scan_parallel.ProcessPoolExecutor") as MockPool:
+    with patch("pipeline.scanner.parallel.ProcessPoolExecutor") as MockPool:
         mock_pool = MagicMock()
         mock_pool.__enter__ = lambda s: s
         mock_pool.__exit__ = lambda s, *a: None

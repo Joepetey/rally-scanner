@@ -108,7 +108,7 @@ def test_features_incomplete_check_catches_inf(ohlcv_df, monkeypatch):
     status='features_incomplete'."""
     from unittest.mock import MagicMock
 
-    import pipeline.scan_core as scan_core_mod
+    import pipeline.scanner.core as scan_core_mod
     from pipeline.scanner import scan_single
 
     # Build real features, then inject Inf
