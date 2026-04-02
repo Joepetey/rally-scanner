@@ -6,7 +6,6 @@ Separated from evaluation (risk_evaluation.py) to keep side effects isolated.
 import logging
 
 from db.trading.positions import load_position_meta, save_position_meta
-
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.exits import execute_exit
 from trading.positions import async_close_position

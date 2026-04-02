@@ -8,9 +8,10 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from db.trading.portfolio import get_high_water_mark, set_high_water_mark
 from rally_ml.config import PARAMS
 from rally_ml.core.data import fetch_vix
+
+from db.trading.portfolio import get_high_water_mark, set_high_water_mark
 
 logger = logging.getLogger(__name__)
 

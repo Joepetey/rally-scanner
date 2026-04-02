@@ -12,6 +12,9 @@ import logging
 from collections.abc import Awaitable, Callable
 
 import sentry_sdk
+from rally_ml.config import ASSETS, PARAMS
+from rally_ml.core.persistence import load_manifest
+
 from db.trading.positions import (
     load_position_meta as _load_position_meta,
 )
@@ -21,9 +24,6 @@ from db.trading.positions import (
 from db.trading.positions import (
     save_position_meta as _save_position_meta,
 )
-from rally_ml.config import ASSETS, PARAMS
-from rally_ml.core.persistence import load_manifest
-
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.stream import AlpacaStreamManager, is_stream_enabled
 from trading.engine import AlertEngine

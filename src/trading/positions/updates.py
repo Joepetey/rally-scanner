@@ -2,12 +2,13 @@
 
 import logging
 
+from rally_ml.config import PARAMS
+
 from db.trading.positions import (
     delete_position_meta,
     record_closed_position,
     save_position_meta,
 )
-from rally_ml.config import PARAMS
 
 logger = logging.getLogger(__name__)
 

@@ -2,13 +2,14 @@
 
 import logging
 
+from rally_ml.config import PARAMS, TICKER_TO_GROUP
+
 from db.trading.positions import (
     clear_expired_queue,
     dequeue_signals,
     get_unevaluated_skipped,
     update_skipped_outcome,
 )
-from rally_ml.config import PARAMS, TICKER_TO_GROUP
 
 logger = logging.getLogger(__name__)
 

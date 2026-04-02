@@ -7,11 +7,11 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from db.trading.positions import load_position_meta as _load_position_meta
-from db.trading.positions import load_positions
 from rally_ml.config import PARAMS
 from rally_ml.core.data import fetch_quotes
 
+from db.trading.positions import load_position_meta as _load_position_meta
+from db.trading.positions import load_positions
 from integrations.alpaca.account import get_snapshots
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from trading.scheduler.loops._crypto import has_open_crypto_positions

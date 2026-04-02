@@ -7,12 +7,12 @@ import logging
 import time as _time
 from typing import TYPE_CHECKING
 
-from db.ops.events import finish_scheduler_event, log_scheduler_event
-from db.trading.positions import load_positions
 from rally_ml.config import PARAMS
 from rally_ml.core.persistence import load_manifest
 from rally_ml.pipeline.retrain import retrain_all
 
+from db.ops.events import finish_scheduler_event, log_scheduler_event
+from db.trading.positions import load_positions
 from integrations.alpaca.account import get_account_equity
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from trading.events import RegimeEvent, RetrainResult, RiskActionEvent

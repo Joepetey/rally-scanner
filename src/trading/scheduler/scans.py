@@ -12,10 +12,10 @@ import time as _time
 from datetime import date as _date
 from typing import TYPE_CHECKING
 
-from db.ops.events import finish_scheduler_event, log_scheduler_event
-from db.trading.positions import load_current_signals, load_positions
 from rally_ml.config import PARAMS
 
+from db.ops.events import finish_scheduler_event, log_scheduler_event
+from db.trading.positions import load_current_signals, load_positions
 from integrations.alpaca.account import get_account_equity
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from pipeline.scanner import scan_watchlist

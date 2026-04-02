@@ -7,7 +7,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from db.trading.positions import load_positions
-
 from integrations.alpaca.account import get_snapshots
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from trading.events import StreamDegradedEvent, StreamRecoveredEvent

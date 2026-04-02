@@ -4,6 +4,8 @@ import asyncio
 import logging
 from datetime import datetime
 
+from rally_ml.config import PARAMS
+
 from db.trading.positions import (
     delete_position_meta,
     load_all_position_meta,
@@ -11,8 +13,6 @@ from db.trading.positions import (
     record_closed_position,
     save_position_meta,
 )
-from rally_ml.config import PARAMS
-
 from integrations.alpaca.broker import get_all_positions
 
 logger = logging.getLogger(__name__)

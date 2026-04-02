@@ -6,9 +6,9 @@ Extracted from engine.py to keep AlertEngine focused on price evaluation.
 import logging
 
 import rally_ml.config as config
+
 from db.ops.events import log_order, update_order_fill
 from db.trading.positions import load_positions
-
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.exits import (
     cancel_exit_orders,

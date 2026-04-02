@@ -8,9 +8,9 @@ Actual logic lives in focused submodules:
 - display: terminal position display
 """
 
-from db.trading.positions import save_position_meta
 from rally_ml.config import PARAMS
 
+from db.trading.positions import save_position_meta
 from trading.positions.broker_sync import (
     build_untracked_position,
     compute_sync_updates,

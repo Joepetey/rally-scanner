@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from db.trading.portfolio import record_closed_trades
 from db.trading.positions import load_positions
-
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.fills import check_exit_fills
 from trading.events import ExitResult

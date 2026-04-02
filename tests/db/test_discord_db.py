@@ -7,6 +7,7 @@ from db.ops.conversations import (
     get_conversation_history,
     save_conversation_history,
 )
+from db.ops.users import ensure_user, get_capital, set_capital
 from db.trading.trades import (
     close_trade,
     get_open_trades,
@@ -14,7 +15,6 @@ from db.trading.trades import (
     get_trade_history,
     open_trade,
 )
-from db.ops.users import ensure_user, get_capital, set_capital
 
 # pg_db fixture from conftest.py handles init + truncate
 

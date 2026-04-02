@@ -13,7 +13,6 @@ from datetime import datetime
 
 from db.ops.events import log_price_alert
 from db.trading.positions import save_position_meta
-
 from trading.engine.housekeeping import (
     confirm_pending_fills,
     execute_breach,

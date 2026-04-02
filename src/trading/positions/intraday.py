@@ -3,6 +3,8 @@
 import logging
 from datetime import datetime
 
+from rally_ml.config import PARAMS, TICKER_TO_GROUP
+
 from db.trading.positions import (
     delete_position_meta,
     load_all_position_meta,
@@ -11,7 +13,6 @@ from db.trading.positions import (
     save_position_meta,
     save_positions,
 )
-from rally_ml.config import PARAMS, TICKER_TO_GROUP
 
 logger = logging.getLogger(__name__)
 
