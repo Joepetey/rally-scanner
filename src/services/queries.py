@@ -2,7 +2,7 @@
 
 from rally_ml.core.data import fetch_quotes
 
-from db.trading.positions import load_watchlist
+from db.trading.scan_results import load_watchlist
 from db.trading.trades import get_open_trades
 from services._helpers import dollar_metrics
 from trading.positions import get_merged_positions_sync

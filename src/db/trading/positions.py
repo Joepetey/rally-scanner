@@ -4,21 +4,6 @@ import logging
 from datetime import datetime
 
 from db.core.pool import get_conn, row_to_dict
-from db.trading.scan_results import (  # noqa: F401 — re-export
-    load_current_signals,
-    load_watchlist,
-    save_latest_scan,
-    save_watchlist,
-)
-from db.trading.signal_queue import (  # noqa: F401 — re-export
-    clear_expired_queue,
-    dequeue_signals,
-    enqueue_signal,
-    get_unevaluated_skipped,
-    log_skipped_signal,
-    remove_from_queue,
-    update_skipped_outcome,
-)
 
 logger = logging.getLogger(__name__)
 

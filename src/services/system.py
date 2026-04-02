@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 from rally_ml.core.persistence import load_manifest
 
-from db.trading.positions import save_watchlist
+from db.trading.scan_results import save_watchlist
 from pipeline.scanner import scan_all
 from trading.positions import get_merged_positions_sync
 

@@ -4,7 +4,7 @@ import logging
 
 from rally_ml.config import PARAMS, TICKER_TO_GROUP
 
-from db.trading.positions import (
+from db.trading.signal_queue import (
     clear_expired_queue,
     dequeue_signals,
     get_unevaluated_skipped,

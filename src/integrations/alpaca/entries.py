@@ -16,12 +16,10 @@ except ImportError:
 import rally_ml.config as config
 
 from db.trading.positions import (
-    enqueue_signal,
     load_all_position_meta,
     load_positions,
-    log_skipped_signal,
-    remove_from_queue,
 )
+from db.trading.signal_queue import enqueue_signal, log_skipped_signal, remove_from_queue
 from integrations.alpaca.broker import _alpaca_symbol, _data_client, _trading_client
 from integrations.alpaca.exits import execute_exit
 from integrations.alpaca.models import (
