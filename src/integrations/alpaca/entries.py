@@ -16,9 +16,8 @@ import rally_ml.config as config
 from db.trading.positions import (
     load_all_position_meta,
     load_positions,
-    log_skipped_signal,
-    remove_from_queue,
 )
+from db.trading.signal_queue import log_skipped_signal, remove_from_queue
 from integrations.alpaca.broker import _alpaca_symbol, _trading_client
 from integrations.alpaca.models import _ERR_NOT_TRADABLE, EntryPlan, OrderResult
 from integrations.alpaca.sizing import (

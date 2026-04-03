@@ -20,7 +20,7 @@ from db.trading.positions import load_positions
 from db.trading.positions import (
     record_closed_position as _rec_closed,
 )
-from db.trading.positions import (
+from db.trading.scan_results import (
     save_watchlist as _db_save_watchlist,
 )
 from integrations.alpaca.broker import get_all_positions
