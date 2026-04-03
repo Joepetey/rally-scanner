@@ -11,7 +11,7 @@ except ImportError:
 
 import rally_ml.config as config
 
-from db.trading.positions import enqueue_signal, log_skipped_signal
+from db.trading.signal_queue import enqueue_signal, log_skipped_signal
 from integrations.alpaca.broker import _data_client
 from integrations.alpaca.exits import execute_exit
 from integrations.alpaca.models import OrderResult
