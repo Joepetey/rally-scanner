@@ -108,18 +108,18 @@ def test_features_incomplete_check_catches_inf(ohlcv_df, monkeypatch):
     status='features_incomplete'."""
     from unittest.mock import MagicMock
 
-    import pipeline.scanner as scanner_mod
+    import pipeline.scanner.core as scan_core_mod
     from pipeline.scanner import scan_single
 
     # Build real features, then inject Inf
     real_df = build_features(ohlcv_df, live=True)
     real_df.iloc[-1, real_df.columns.get_loc("COMP_SCORE")] = float("inf")
 
-    # Patch build_features inside scanner to return our corrupted df
-    monkeypatch.setattr(scanner_mod, "build_features", lambda df, live=False: real_df)
+    # Patch build_features inside scan_core to return our corrupted df
+    monkeypatch.setattr(scan_core_mod, "build_features", lambda df, live=False: real_df)
     # Patch predict_hmm_probs to return empty frame (no HMM columns needed)
     monkeypatch.setattr(
-        scanner_mod, "predict_hmm_probs",
+        scan_core_mod, "predict_hmm_probs",
         lambda *args, **kwargs: pd.DataFrame(index=real_df.index),
     )
 
