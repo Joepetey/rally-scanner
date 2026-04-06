@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 IDLE_WAIT_SECONDS = 5.0
 INITIAL_BACKOFF_SECONDS = 1.0
 MAX_BACKOFF_SECONDS = 60.0
+# When Alpaca rejects with "connection limit exceeded" / HTTP 429,
+# retrying quickly just burns through the limit.  Wait much longer.
+RATE_LIMIT_BACKOFF_SECONDS = 300.0
+_RATE_LIMIT_ERRORS = ("connection limit exceeded", "429")
 
 try:
     from alpaca.data.enums import DataFeed
@@ -77,6 +81,8 @@ def run_supervisor(
             run_fn()
             if stop_event.is_set():
                 break
+            # Stream ran successfully for a while then disconnected — reset backoff
+            backoff = INITIAL_BACKOFF_SECONDS
             if not has_symbols_fn():
                 logger.debug("%s stream: no symbols, idle for %.0fs", label, IDLE_WAIT_SECONDS)
                 attempt -= 1
@@ -87,6 +93,19 @@ def run_supervisor(
                 label, attempt, backoff,
             )
         except Exception as e:
+            err_msg = str(e).lower()
+            if any(hint in err_msg for hint in _RATE_LIMIT_ERRORS):
+                logger.error(
+                    "%s stream: connection limit exceeded (attempt %d) "
+                    "— backing off for %.0fs to let connections drain",
+                    label, attempt, RATE_LIMIT_BACKOFF_SECONDS,
+                )
+                connected_event.clear()
+                stop_event.wait(timeout=RATE_LIMIT_BACKOFF_SECONDS)
+                if stop_event.is_set():
+                    break
+                backoff = INITIAL_BACKOFF_SECONDS
+                continue
             logger.warning(
                 "%s stream error (attempt %d): %s — restarting in %.0fs",
                 label, attempt, e, backoff,
