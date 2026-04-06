@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+import re
 import time
 
 try:
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import ClosePositionRequest
 
     _ALPACA_AVAILABLE = True
 except ImportError:
@@ -18,6 +20,8 @@ from integrations.alpaca.models import (
     _ERR_SHARES_HELD,
     OrderResult,
 )
+
+_INSUFFICIENT_QTY_RE = re.compile(r"insufficient qty available.*available:\s*(\d+)")
 
 # Re-export order management for backwards compatibility
 from integrations.alpaca.orders import (  # noqa: F401
@@ -71,6 +75,28 @@ def _retry_close_position(
                     ticker=ticker, side="sell", qty=0,
                     success=True, already_closed=True,
                 )
+            elif (m := _INSUFFICIENT_QTY_RE.search(err_str)):
+                avail = int(m.group(1))
+                if avail > 0:
+                    logger.warning(
+                        "Partial close for %s: only %d shares available",
+                        ticker, avail,
+                    )
+                    order = client.close_position(
+                        symbol_or_asset_id=alpaca_sym,
+                        close_options=ClosePositionRequest(qty=str(avail)),
+                    )
+                    fill_price = (
+                        float(order.filled_avg_price)
+                        if order.filled_avg_price
+                        else None
+                    )
+                    return OrderResult(
+                        ticker=ticker, side="sell", qty=_safe_qty(avail),
+                        success=True, order_id=str(order.id),
+                        fill_price=fill_price,
+                    )
+                raise
             else:
                 raise
     raise last_err  # unreachable, but satisfies type checker

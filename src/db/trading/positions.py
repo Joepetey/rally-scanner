@@ -131,7 +131,7 @@ def get_recently_closed_tickers(days: int) -> set[str]:
             "SELECT DISTINCT ticker FROM closed_positions WHERE exit_date >= CURRENT_DATE - %s",
             (days,),
         )
-        return {row[0] for row in cur.fetchall()}
+        return {row["ticker"] for row in cur.fetchall()}
 
 
 # ---------------------------------------------------------------------------
