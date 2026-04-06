@@ -18,9 +18,9 @@ def init_sentry() -> None:
             exc_value = str(hint["exc_info"][1])
             if "42210000" in exc_value:  # Alpaca "order already filled" — benign
                 return None
-        # Drop yfinance internal errors — noisy third-party download failures
+        # Drop noisy third-party warnings
         logger_name = event.get("logger", "")
-        if logger_name.startswith("yfinance"):
+        if logger_name.startswith(("yfinance", "discord", "hmmlearn")):
             return None
         return event
 

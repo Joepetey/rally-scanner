@@ -103,7 +103,7 @@ def analyze_regime_states(
                     })
 
         except Exception as e:
-            logger.warning("Regime check failed for %s: %s", ticker, e)
+            logger.info("Regime check failed for %s: %s", ticker, e)
 
     return new_states, transitions
 

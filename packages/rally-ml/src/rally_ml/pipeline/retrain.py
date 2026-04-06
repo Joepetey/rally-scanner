@@ -218,11 +218,11 @@ def retrain_all(
     logger.info("Fetch: %.1fs  |  Train: %.1fs  |  Total: %.1fs",
                 fetch_time, train_time, total_time)
     if failed:
-        logger.warning("Failed:")
+        logger.info("Failed:")
         for t, reason in failed[:20]:
-            logger.warning("  %s: %s", t, reason)
+            logger.info("  %s: %s", t, reason)
         if len(failed) > 20:
-            logger.warning("  ... and %d more", len(failed) - 20)
+            logger.info("  ... and %d more", len(failed) - 20)
     logger.info("=" * 70)
 
 

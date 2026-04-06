@@ -56,7 +56,7 @@ async def check_stale_tickers(sched: TradingScheduler) -> None:
     )
     stale = new_stale + known_stale + never_traded
     if new_stale:
-        logger.warning(
+        logger.info(
             "No stream trade in 5 min for %d ticker(s): %s — "
             "possible subscription issue",
             len(new_stale), sorted(new_stale),
