@@ -34,13 +34,14 @@ def ratchet_trailing_stop(
 
 
 def _apply_profit_lock(pos: dict, current_price: float, p) -> bool:
-    """Raise hard stop floor once price reaches lock level. Returns True if changed."""
+    """Raise hard stop to floor level once price reaches trigger. Returns True if changed."""
     if p.profit_lock_pct <= 0:
         return False
     entry = pos["entry_price"]
-    lock_price = round(entry * (1 + p.profit_lock_pct), 4)
-    if current_price >= lock_price and pos.get("stop_price", 0) < lock_price:
-        pos["stop_price"] = lock_price
+    trigger = round(entry * (1 + p.profit_lock_pct), 4)
+    floor = round(entry * (1 + p.profit_lock_floor_pct), 4)
+    if current_price >= trigger and pos.get("stop_price", 0) < floor:
+        pos["stop_price"] = floor
         return True
     return False
 

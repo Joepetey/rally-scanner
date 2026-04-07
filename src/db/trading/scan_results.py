@@ -134,9 +134,14 @@ def _insert_watchlist_snapshot_row(cur, r: dict, p_rally_pct: float) -> None:
     )
 
 
-def save_latest_scan(results: list[dict], positions: dict) -> None:
+def save_latest_scan(
+    results: list[dict],
+    positions: dict,
+    cooldown_tickers: set[str] | None = None,
+) -> None:
     """Replace current-state scan tables atomically on each scan."""
     open_tickers = {p["ticker"] for p in positions.get("positions", [])}
+    cooldown_tickers = cooldown_tickers or set()
     ok = [r for r in results if r.get("status") == "ok"]
 
     with get_conn() as conn:
@@ -149,7 +154,7 @@ def save_latest_scan(results: list[dict], positions: dict) -> None:
             p_rally_pct = round(r.get("p_rally", 0) * 100, 1)
 
             _insert_scan_result_row(cur, r, is_sig, is_pos, p_rally_pct)
-            if is_sig:
+            if is_sig and r["ticker"] not in cooldown_tickers:
                 _insert_current_signal_row(cur, r, is_pos, p_rally_pct)
             if not is_sig and not is_pos:
                 _insert_watchlist_snapshot_row(cur, r, p_rally_pct)

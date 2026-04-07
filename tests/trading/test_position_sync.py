@@ -43,7 +43,8 @@ class TestUpdatePositionForPrice:
 
     def test_profit_lock_raises_stop(self):
         entry = 100.0
-        lock_price = round(entry * (1 + PARAMS.profit_lock_pct), 4)
+        trigger = round(entry * (1 + PARAMS.profit_lock_pct), 4)
+        floor = round(entry * (1 + PARAMS.profit_lock_floor_pct), 4)
         pos = {
             "ticker": "AAPL",
             "entry_price": entry,
@@ -52,10 +53,10 @@ class TestUpdatePositionForPrice:
             "stop_price": 95.0,
             "atr": 2.0,
         }
-        # Price reaches profit lock level
-        changed = update_position_for_price(pos, lock_price + 1)
+        # Price reaches profit lock trigger — stop should go to floor, not trigger
+        changed = update_position_for_price(pos, trigger + 1)
         assert changed is True
-        assert pos["stop_price"] >= lock_price
+        assert pos["stop_price"] == floor
 
 
 
@@ -181,3 +182,53 @@ class TestAddSignalGroupCaps:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _sync_close_broker_exits — pending order protection (MIC-209)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncSkipsPendingOrders:
+
+    @pytest.mark.asyncio
+    @patch("trading.positions.broker_sync.record_closed_position")
+    @patch("trading.positions.broker_sync.delete_position_meta")
+    @patch("integrations.alpaca.fills.get_recent_sell_fills",
+           return_value={})
+    async def test_pending_order_not_deleted(
+        self, _mock_fills, mock_delete, mock_record,
+    ):
+        """Position with a pending order_id should NOT be marked broker_closed."""
+        from trading.positions.broker_sync import _sync_close_broker_exits
+
+        meta_map = {
+            "CGON": {
+                "ticker": "CGON", "entry_price": 68.0, "entry_date": "2024-04-06",
+                "order_id": "ord_pending_123", "size": 0.10, "status": "open",
+            },
+        }
+        await _sync_close_broker_exits({"CGON"}, meta_map)
+
+        mock_delete.assert_not_called()
+        mock_record.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("trading.positions.broker_sync.record_closed_position")
+    @patch("trading.positions.broker_sync.delete_position_meta")
+    @patch("integrations.alpaca.fills.get_recent_sell_fills",
+           return_value={"AAPL": 155.0})
+    async def test_filled_position_still_closed(
+        self, _mock_fills, mock_delete, mock_record,
+    ):
+        """Position without order_id (filled) should be closed normally."""
+        from trading.positions.broker_sync import _sync_close_broker_exits
+
+        meta_map = {
+            "AAPL": {
+                "ticker": "AAPL", "entry_price": 150.0, "entry_date": "2024-04-01",
+                "order_id": None, "size": 0.10, "status": "open",
+            },
+        }
+        await _sync_close_broker_exits({"AAPL"}, meta_map)
+
+        mock_delete.assert_called_once_with("AAPL")
+        mock_record.assert_called_once()

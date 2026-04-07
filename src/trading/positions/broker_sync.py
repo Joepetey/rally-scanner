@@ -81,8 +81,15 @@ async def _sync_close_broker_exits(
     """Case 3: in DB but gone from Alpaca — broker closed the position."""
     from integrations.alpaca.fills import get_recent_sell_fills
 
-    fills = await get_recent_sell_fills(list(closed_tickers)) if closed_tickers else {}
-    for ticker in closed_tickers:
+    # Skip tickers with pending buy orders — unfilled limit orders aren't
+    # Alpaca "positions", so they'd be wrongly marked as broker_closed.
+    pending = {t for t in closed_tickers if meta_map[t].get("order_id")}
+    if pending:
+        logger.info("sync: skipping %s — pending buy order(s)", sorted(pending))
+    actual_closed = closed_tickers - pending
+
+    fills = await get_recent_sell_fills(list(actual_closed)) if actual_closed else {}
+    for ticker in actual_closed:
         pos = meta_map[ticker]
         fill_price = fills.get(ticker, 0.0)
         pnl = (

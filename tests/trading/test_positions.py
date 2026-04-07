@@ -72,6 +72,57 @@ def test_update_adds_new_signal(tmp_models_dir):
     assert updated["positions"][0]["entry_price"] == 400.0
 
 
+def test_add_signal_fallback_stop_when_range_low_above_entry(tmp_models_dir):
+    """stop_price falls back to entry * (1 - fallback_stop_pct) when range_low >= entry."""
+    state = {"positions": [], "closed_today": []}
+    signals = [{
+        "ticker": "STZ",
+        "date": "2024-01-15",
+        "close": 150.51,
+        "size": 0.08,
+        "range_low": 153.52,
+        "atr_pct": 0.02,
+    }]
+    updated = add_signal_positions(state, signals)
+    pos = updated["positions"][0]
+    expected_stop = round(150.51 * (1 - PARAMS.fallback_stop_pct), 2)
+    assert pos["stop_price"] == expected_stop
+    assert pos["stop_price"] < pos["entry_price"]
+
+
+def test_add_signal_fallback_stop_when_range_low_equals_entry(tmp_models_dir):
+    """stop_price uses fallback when range_low == entry."""
+    state = {"positions": [], "closed_today": []}
+    signals = [{
+        "ticker": "XYZ",
+        "date": "2024-01-15",
+        "close": 100.0,
+        "size": 0.05,
+        "range_low": 100.0,
+        "atr_pct": 0.02,
+    }]
+    updated = add_signal_positions(state, signals)
+    pos = updated["positions"][0]
+    expected_stop = round(100.0 * (1 - PARAMS.fallback_stop_pct), 2)
+    assert pos["stop_price"] == expected_stop
+
+
+def test_add_signal_uses_range_low_when_valid(tmp_models_dir):
+    """stop_price uses range_low when it is below entry."""
+    state = {"positions": [], "closed_today": []}
+    signals = [{
+        "ticker": "MSFT",
+        "date": "2024-01-15",
+        "close": 400.0,
+        "size": 0.08,
+        "range_low": 390.0,
+        "atr_pct": 0.02,
+    }]
+    updated = add_signal_positions(state, signals)
+    pos = updated["positions"][0]
+    assert pos["stop_price"] == 390.0
+
+
 def test_update_exits_on_stop(tmp_models_dir):
     state = {
         "positions": [{

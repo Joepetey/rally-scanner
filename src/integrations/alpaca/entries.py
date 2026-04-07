@@ -14,6 +14,7 @@ except ImportError:
 import rally_ml.config as config
 
 from db.trading.positions import (
+    get_recently_closed_tickers,
     load_all_position_meta,
     load_positions,
 )
@@ -68,6 +69,9 @@ async def prepare_entry_plan(
     open_tickers = {
         p["ticker"] for p in load_positions().get("positions", [])
     }
+    cooldown_tickers: set[str] = set()
+    if config.PARAMS.cooldown_days > 0:
+        cooldown_tickers = get_recently_closed_tickers(config.PARAMS.cooldown_days)
 
     plans: list[EntryPlan] = []
     for sig in signals:
@@ -75,6 +79,13 @@ async def prepare_entry_plan(
 
         if ticker in open_tickers:
             logger.info("Skipping %s: already in open positions", ticker)
+            continue
+
+        if ticker in cooldown_tickers:
+            logger.info(
+                "Skipping %s: in cooldown period (%dd)",
+                ticker, config.PARAMS.cooldown_days,
+            )
             continue
 
         is_crypto = (

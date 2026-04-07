@@ -81,22 +81,28 @@ def add_signal_positions(state: dict, new_signals: list[dict]) -> dict:
 
     for sig in accepted:
         atr_pct = sig.get("atr_pct", p.default_atr_pct)
-        atr_val = sig["close"] * atr_pct
+        entry_price = sig["close"]
+        atr_val = entry_price * atr_pct
+        raw_stop = sig.get("range_low", 0) or 0
+        if not raw_stop or raw_stop >= entry_price:
+            stop_price = round(entry_price * (1 - p.fallback_stop_pct), 2)
+        else:
+            stop_price = round(raw_stop, 2)
         new_pos = {
             "ticker": sig["ticker"],
             "entry_date": sig["date"],
-            "entry_price": sig["close"],
+            "entry_price": entry_price,
             "size": sig["size"],
             "p_rally": sig.get("p_rally", 0),
-            "stop_price": sig["range_low"],
-            "target_price": round(sig["close"] + p.profit_atr_mult * atr_val, 2),
+            "stop_price": stop_price,
+            "target_price": round(entry_price + p.profit_atr_mult * atr_val, 2),
             "trailing_stop": round(
-                sig["close"] - p.trailing_stop_atr_mult * atr_val, 2
+                entry_price - p.trailing_stop_atr_mult * atr_val, 2
             ),
-            "highest_close": sig["close"],
+            "highest_close": entry_price,
             "atr": round(atr_val, 4),
             "bars_held": 0,
-            "current_price": sig["close"],
+            "current_price": entry_price,
             "unrealized_pnl_pct": 0.0,
             "status": "open",
         }

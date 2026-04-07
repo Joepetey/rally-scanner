@@ -180,6 +180,7 @@ _ENTRY_PATCHES = [
           return_value={"positions": [], "closed_today": [], "last_updated": ""}),
     patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False),
     patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]),
+    patch("integrations.alpaca.entries.get_recently_closed_tickers", return_value=set()),
     patch("integrations.alpaca.sizing.enqueue_signal"),
     patch("integrations.alpaca.sizing.log_skipped_signal"),
     patch("integrations.alpaca.entries.remove_from_queue"),
@@ -265,6 +266,7 @@ async def test_execute_entries_exposure_cap(alpaca_mock):
                return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]), \
+         patch("integrations.alpaca.entries.get_recently_closed_tickers", return_value=set()), \
          patch("integrations.alpaca.sizing.enqueue_signal") as mock_enqueue, \
          patch("integrations.alpaca.sizing.log_skipped_signal"), \
          patch("integrations.alpaca.entries.remove_from_queue"):
@@ -292,6 +294,7 @@ async def test_execute_entries_partial_sizing(alpaca_mock):
                return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]), \
+         patch("integrations.alpaca.entries.get_recently_closed_tickers", return_value=set()), \
          patch("integrations.alpaca.sizing.enqueue_signal"), \
          patch("integrations.alpaca.sizing.log_skipped_signal"), \
          patch("integrations.alpaca.entries.remove_from_queue"):
@@ -335,6 +338,7 @@ async def test_execute_entries_group_limit(alpaca_mock):
                return_value={"positions": [], "closed_today": [], "last_updated": ""}), \
          patch("integrations.alpaca.entries.is_circuit_breaker_active", return_value=False), \
          patch("integrations.alpaca.entries.load_all_position_meta", return_value=[]), \
+         patch("integrations.alpaca.entries.get_recently_closed_tickers", return_value=set()), \
          patch("integrations.alpaca.sizing.enqueue_signal"), \
          patch("integrations.alpaca.sizing.log_skipped_signal"), \
          patch("integrations.alpaca.entries.log_skipped_signal"), \
@@ -362,6 +366,23 @@ async def test_execute_entries_not_tradable(alpaca_mock):
     assert results[0].success is False
     assert results[0].skipped is True
     assert results[0].ticker == "RGC"
+
+
+@pytest.mark.asyncio
+async def test_execute_entries_cooldown_skips_ticker(alpaca_mock):
+    """Ticker in cooldown period should be skipped by prepare_entry_plan."""
+    signals = [
+        {"ticker": "CGON", "close": 68.0, "size": 0.10, "atr_pct": 0.02},
+    ]
+
+    with _apply_entry_patches(), \
+         patch("integrations.alpaca.entries.get_recently_closed_tickers",
+               return_value={"CGON"}):
+        results = await execute_entries(signals, equity=100_000.0)
+
+    # CGON should be silently skipped (no order attempted, no result)
+    assert len(results) == 0
+    alpaca_mock.submit_order.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

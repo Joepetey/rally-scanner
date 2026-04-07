@@ -119,11 +119,12 @@ def simulate_trades_fast(
                 new_trail = highest_close - p.trailing_stop_atr_mult * atr[signal_idx]
                 trailing_stop = max(trailing_stop, new_trail)
 
-            # Profit lock: raise hard stop floor once intraday high reaches lock level
+            # Profit lock: raise hard stop to floor level once trigger is reached
             if p.profit_lock_pct > 0 and not profit_lock_triggered:
-                lock_price = entry_price * (1 + p.profit_lock_pct)
-                if high[i] >= lock_price:
-                    stop_price = max(stop_price, lock_price)
+                trigger = entry_price * (1 + p.profit_lock_pct)
+                floor = entry_price * (1 + p.profit_lock_floor_pct)
+                if high[i] >= trigger:
+                    stop_price = max(stop_price, floor)
                     profit_lock_triggered = True
 
             exit_reason = None

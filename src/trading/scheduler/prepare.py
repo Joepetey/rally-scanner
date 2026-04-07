@@ -75,17 +75,21 @@ async def persist_and_filter(
     Returns (signals, positions_for_embed).
     """
     save_watchlist(results, positions)
-    await asyncio.to_thread(_save_latest_scan, results, positions)
+
+    # Compute cooldown before saving so current_signals excludes blocked tickers
+    open_tickers = {p["ticker"] for p in positions.get("positions", [])}
+    cooldown_tickers: set[str] = set()
+    if PARAMS.cooldown_days > 0:
+        cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+
+    await asyncio.to_thread(_save_latest_scan, results, positions, cooldown_tickers)
 
     manifest = load_manifest()
     if manifest:
         sched.state.watchlist_tickers = sorted(manifest.keys())
 
     all_signals = [r for r in results if r.get("signal")]
-    open_tickers = {p["ticker"] for p in positions.get("positions", [])}
-    cooldown_tickers: set[str] = set()
-    if PARAMS.cooldown_days > 0:
-        cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+    if cooldown_tickers:
         cooled = [s["ticker"] for s in all_signals
                   if s["ticker"] not in open_tickers and s["ticker"] in cooldown_tickers]
         if cooled:

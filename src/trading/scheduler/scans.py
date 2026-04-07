@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from rally_ml.config import PARAMS
 
 from db.ops.events import finish_scheduler_event, log_scheduler_event
-from db.trading.positions import load_positions
+from db.trading.positions import get_recently_closed_tickers, load_positions
 from db.trading.scan_results import load_current_signals
 from integrations.alpaca.account import get_account_equity
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
@@ -123,6 +123,14 @@ async def run_market_open_execute(sched: TradingScheduler) -> None:
     if not sched.state.pending_signals and not sched.state.pending_exits:
         if sched.state.ran_morning_scan == _date.today().isoformat():
             db_signals = load_current_signals()
+            if db_signals:
+                # Re-apply cooldown filter — current_signals may predate this check
+                open_tickers = {p["ticker"] for p in load_positions().get("positions", [])}
+                cooldown_tickers: set[str] = set()
+                if PARAMS.cooldown_days > 0:
+                    cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+                blocked = open_tickers | cooldown_tickers
+                db_signals = [s for s in db_signals if s["ticker"] not in blocked]
             if db_signals:
                 logger.info(
                     "Restart fallback: loaded %d signals from current_signals table",

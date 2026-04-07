@@ -79,7 +79,11 @@ def _compute_levels(ticker: str, entry_price: float) -> dict:
     above_entry = recent_closes[recent_closes >= entry_price]
     highest_close = float(above_entry.max()) if len(above_entry) else entry_price
 
-    stop_price   = round(range_low, 2)
+    stop_price = (
+        round(range_low, 2)
+        if range_low < entry_price
+        else round(entry_price * (1 - PARAMS.fallback_stop_pct), 2)
+    )
     target_price = round(entry_price + PARAMS.profit_atr_mult * atr_val, 2)
     trailing_stop = round(
         max(entry_price - PARAMS.trailing_stop_atr_mult * atr_val, range_low),

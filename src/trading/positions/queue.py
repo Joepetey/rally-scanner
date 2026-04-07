@@ -4,10 +4,12 @@ import logging
 
 from rally_ml.config import PARAMS, TICKER_TO_GROUP
 
+from db.trading.positions import get_recently_closed_tickers, load_positions
 from db.trading.signal_queue import (
     clear_expired_queue,
     dequeue_signals,
     get_unevaluated_skipped,
+    remove_from_queue,
     update_skipped_outcome,
 )
 
@@ -66,7 +68,26 @@ def process_signal_queue() -> list[dict]:
     if expired:
         logger.info("Cleared %d expired signals from queue", expired)
 
-    return dequeue_signals(PARAMS.signal_queue_max_age_days)
+    signals = dequeue_signals(PARAMS.signal_queue_max_age_days)
+    if not signals:
+        return []
+
+    open_tickers = {p["ticker"] for p in load_positions().get("positions", [])}
+    cooldown_tickers: set[str] = set()
+    if PARAMS.cooldown_days > 0:
+        cooldown_tickers = get_recently_closed_tickers(PARAMS.cooldown_days)
+    blocked = open_tickers | cooldown_tickers
+
+    valid: list[dict] = []
+    for sig in signals:
+        ticker = sig["ticker"]
+        if ticker in blocked:
+            reason = "cooldown" if ticker in cooldown_tickers else "already_open"
+            logger.info("Removing %s from queue: %s", ticker, reason)
+            remove_from_queue(ticker)
+        else:
+            valid.append(sig)
+    return valid
 
 
 def update_skipped_outcomes(results: list[dict]) -> int:
