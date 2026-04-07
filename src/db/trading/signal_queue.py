@@ -45,7 +45,11 @@ def dequeue_signals(max_age_days: int) -> list[dict]:
                ORDER BY p_rally DESC""",
             (str(max_age_days),),
         )
-        return [row_to_dict(r) for r in cur.fetchall()]
+        rows = [row_to_dict(r) for r in cur.fetchall()]
+        for row in rows:
+            if "signal_date" in row and "date" not in row:
+                row["date"] = row["signal_date"]
+        return rows
 
 
 def remove_from_queue(ticker: str) -> None:
