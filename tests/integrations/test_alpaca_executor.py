@@ -380,8 +380,11 @@ async def test_execute_entries_cooldown_skips_ticker(alpaca_mock):
                return_value={"CGON"}):
         results = await execute_entries(signals, equity=100_000.0)
 
-    # CGON should be silently skipped (no order attempted, no result)
-    assert len(results) == 0
+    # CGON should be skipped with an informative result (no order attempted)
+    assert len(results) == 1
+    assert results[0].skipped is True
+    assert results[0].success is False
+    assert "cooldown" in results[0].error
     alpaca_mock.submit_order.assert_not_called()
 
 

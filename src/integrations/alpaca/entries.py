@@ -79,6 +79,10 @@ async def prepare_entry_plan(
 
         if ticker in open_tickers:
             logger.info("Skipping %s: already in open positions", ticker)
+            skipped.append(OrderResult(
+                ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+                error="Already in open positions",
+            ))
             continue
 
         if ticker in cooldown_tickers:
@@ -86,6 +90,10 @@ async def prepare_entry_plan(
                 "Skipping %s: in cooldown period (%dd)",
                 ticker, config.PARAMS.cooldown_days,
             )
+            skipped.append(OrderResult(
+                ticker=ticker, side="buy", qty=0, success=False, skipped=True,
+                error=f"In cooldown period ({config.PARAMS.cooldown_days}d)",
+            ))
             continue
 
         is_crypto = (

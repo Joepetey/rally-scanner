@@ -134,6 +134,15 @@ def get_recently_closed_tickers(days: int) -> set[str]:
         return {row["ticker"] for row in cur.fetchall()}
 
 
+def clear_cooldown(ticker: str) -> None:
+    """Delete recent closed_positions rows for a ticker so it passes cooldown checks."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM closed_positions WHERE ticker = %s", (ticker,))
+        conn.commit()
+        logger.info("Cleared cooldown for %s (%d rows)", ticker, cur.rowcount)
+
+
 # ---------------------------------------------------------------------------
 # Bulk state operations
 # ---------------------------------------------------------------------------

@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from rally_ml.config import PARAMS
 
 from db.ops.events import clear_price_alerts
-from db.trading.positions import load_position_meta, save_position_meta
+from db.trading.positions import clear_cooldown, load_position_meta, save_position_meta
 from integrations.alpaca.account import get_snapshots
 from integrations.alpaca.entries import execute_entries
 from integrations.alpaca.exits import execute_exit, place_exit_orders
@@ -123,6 +123,8 @@ class SimulationRunner:
         # scenarios (e.g. stop then trail) can each fire stop_breached.
         today = datetime.now().strftime("%Y-%m-%d")
         clear_price_alerts(TICKER, today)
+        # Clear cooldown so a recently-closed BTC doesn't block the sim entry.
+        clear_cooldown(TICKER)
 
         # 1. Live BTC price
         snapshots = await get_snapshots([TICKER])
