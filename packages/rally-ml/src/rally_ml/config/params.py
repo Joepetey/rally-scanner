@@ -46,6 +46,7 @@ class Params(BaseModel):
     limit_order_buffer_pct: float = 0.002  # limit price = midpoint(bid,ask) * (1 + buffer)
     profit_lock_pct: float = 0.02         # trigger: activate lock once +2% profit is reached
     profit_lock_floor_pct: float = 0.015   # floor: set hard stop to +1.5% when lock triggers
+    let_it_ride_trail_pct: float = 1.5    # trailing stop % for Alpaca order after target hit
     default_atr_pct: float = 0.02        # fallback ATR % when real ATR unavailable
 
     # --- Portfolio-level risk ---

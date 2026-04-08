@@ -241,14 +241,31 @@ class TradingScheduler:
             self.state.exiting_tickers.add(ticker)
 
         try:
-            reason = alert_type.replace("_breached", "")
-            exit_result = await self._engine.execute_breach(ticker, pos, price, reason)
-            if exit_result:
-                await self._on_event(exit_result)
-                await self.run_risk_evaluation()
-                if self._stream:
-                    all_pos = load_positions().get("positions", [])
-                    self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+            if alert_type == "target_breached" and alpaca_enabled():
+                from trading.engine.housekeeping import convert_to_trailing_stop
+                event = await convert_to_trailing_stop(ticker, pos, price)
+                if event:
+                    await self._on_event(event)
+                else:
+                    # Crypto or failed — fall through to normal exit
+                    exit_result = await self._engine.execute_breach(
+                        ticker, pos, price, "target",
+                    )
+                    if exit_result:
+                        await self._on_event(exit_result)
+                        await self.run_risk_evaluation()
+                        if self._stream:
+                            all_pos = load_positions().get("positions", [])
+                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
+            else:
+                reason = alert_type.replace("_breached", "")
+                exit_result = await self._engine.execute_breach(ticker, pos, price, reason)
+                if exit_result:
+                    await self._on_event(exit_result)
+                    await self.run_risk_evaluation()
+                    if self._stream:
+                        all_pos = load_positions().get("positions", [])
+                        self._stream.update_subscriptions({p["ticker"] for p in all_pos})
         finally:
             async with self.state.exit_lock:
                 self.state.exiting_tickers.discard(ticker)

@@ -41,6 +41,7 @@ from integrations.discord.notify import (
 )
 from simulation.scenarios import (
     TICKER,
+    VALID_SCENARIOS,
     get_inject_prices,
     get_signal_for_scenario,
     setup_position_for_scenario,
@@ -90,7 +91,7 @@ class SimulationRunner:
         send_embed: SendEmbed,
     ) -> SimulationResult:
         """Run the full simulation. Emits embeds via send_embed at each milestone."""
-        valid = {"target", "stop", "trail", "time"}
+        valid = VALID_SCENARIOS
         if scenario not in valid:
             return SimulationResult(
                 scenario=scenario, success=False,
@@ -276,6 +277,10 @@ class SimulationRunner:
             self._inject_fn(TICKER, low_price)
             exit_reason_hint = "trail_stop"
             exit_price_hint = low_price
+
+        elif scenario == "let_it_ride":
+            return await self._run_let_it_ride(pos, inject_prices)
+
         else:
             price = inject_prices[0]
             self._inject_fn(TICKER, price)
@@ -289,6 +294,55 @@ class SimulationRunner:
             if load_position_meta(TICKER) is None:
                 logger.info("sim[%s]: position closed by scheduler", scenario)
                 return exit_reason_hint, exit_price_hint
+
+        return None, 0.0
+
+    async def _run_let_it_ride(
+        self, pos: dict, inject_prices: list[float],
+    ) -> tuple[str | None, float]:
+        """Phase 1: hit target → convert to trailing stop. Phase 2: drop below trailing stop."""
+        # Phase 1: inject above target to trigger let-it-ride conversion
+        above_target = inject_prices[0]
+        self._inject_fn(TICKER, above_target)
+        logger.info("sim[let_it_ride]: Phase 1 injected above_target=%.2f", above_target)
+
+        # Wait for convert_to_trailing_stop to run (position stays open, target_price → 0)
+        converted = False
+        for _ in range(_EXIT_POLL_ATTEMPTS):
+            await asyncio.sleep(_EXIT_POLL_INTERVAL)
+            fresh = load_position_meta(TICKER)
+            if fresh is None:
+                # Position was sold instead of converted — the let-it-ride failed
+                logger.error("sim[let_it_ride]: position was closed instead of converted!")
+                return "target", above_target
+            if fresh.get("let_it_ride"):
+                converted = True
+                logger.info(
+                    "sim[let_it_ride]: converted! trail_order_id=%s trailing_stop=%.4f",
+                    fresh.get("trail_order_id"), fresh.get("trailing_stop", 0),
+                )
+                break
+
+        if not converted:
+            logger.error("sim[let_it_ride]: conversion did not happen within timeout")
+            return None, 0.0
+
+        # Phase 2: inject below trailing stop to trigger stop_breached exit
+        new_trail = fresh.get("trailing_stop", 0)
+        effective_stop = max(fresh.get("stop_price", 0), new_trail)
+        low_price = round(effective_stop * 0.996, 2)
+        logger.info(
+            "sim[let_it_ride]: Phase 2 effective_stop=%.4f → injecting low=%.2f",
+            effective_stop, low_price,
+        )
+        self._inject_fn(TICKER, low_price)
+
+        # Wait for position to close
+        for _ in range(_EXIT_POLL_ATTEMPTS):
+            await asyncio.sleep(_EXIT_POLL_INTERVAL)
+            if load_position_meta(TICKER) is None:
+                logger.info("sim[let_it_ride]: position closed by trailing stop breach")
+                return "stop", low_price
 
         return None, 0.0
 

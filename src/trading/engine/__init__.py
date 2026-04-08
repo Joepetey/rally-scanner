@@ -137,7 +137,7 @@ class AlertEngine:
         today = datetime.now(_ET).strftime("%Y-%m-%d")
         entry = pos["entry_price"]
         stop = pos.get("stop_price", 0)
-        target = pos.get("target_price", 0)
+        target = 0 if pos.get("let_it_ride") else pos.get("target_price", 0)
         trailing = pos.get("trailing_stop", 0)
         pnl_pct = round((price / entry - 1) * 100, 2) if entry else 0
         effective_stop = max(stop, trailing)

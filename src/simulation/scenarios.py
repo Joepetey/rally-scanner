@@ -17,6 +17,7 @@ from rally_ml.config import PARAMS
 
 TICKER = "BTC"
 _SIM_SIZE = 0.05  # 5% of equity — small enough to always fit within any cap
+VALID_SCENARIOS = {"target", "stop", "trail", "time", "let_it_ride"}
 
 
 def get_signal_for_scenario(scenario: str, entry_price: float) -> dict:
@@ -57,6 +58,11 @@ def setup_position_for_scenario(scenario: str, entry_price: float) -> dict:
         # Far stop and target; position expires via bars_held
         stop_price = round(entry_price * 0.97, 2)
         target_price = round(entry_price * 1.10, 2)
+    elif scenario == "let_it_ride":
+        # Tight target 1% above entry; Phase 1 hits target → converts to
+        # trailing stop. Phase 2 drops below trailing stop → exit.
+        target_price = round(entry_price * 1.01, 2)
+        stop_price = round(entry_price * 0.97, 2)
     else:
         raise ValueError(f"Unknown scenario: {scenario!r}")
 
@@ -109,6 +115,16 @@ def get_inject_prices(scenario: str, pos: dict) -> list[float]:
 
     elif scenario == "time":
         return [entry]  # price is irrelevant for time stop
+
+    elif scenario == "let_it_ride":
+        # Phase 1: inject above target to trigger let-it-ride conversion
+        above_target = round(pos["target_price"] * 1.002, 2)
+        # Phase 2: after conversion, inject below trailing stop to trigger exit
+        # Runner re-reads trailing_stop after Phase 1 completes
+        atr_val = pos.get("atr", entry * p.default_atr_pct)
+        trail_est = round(above_target - p.trailing_stop_atr_mult * atr_val, 4)
+        low_est = round(trail_est * 0.996, 2)
+        return [above_target, low_est]
 
     else:
         raise ValueError(f"Unknown scenario: {scenario!r}")

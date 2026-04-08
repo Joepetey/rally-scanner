@@ -50,7 +50,7 @@ def _evaluate_exit_conditions(pos: dict, current: dict, p) -> str | None:
     """Return exit reason string if any condition triggered, else None."""
     if current["close"] <= pos["stop_price"]:
         return "stop"
-    if current["close"] >= pos["target_price"]:
+    if not pos.get("let_it_ride") and current["close"] >= pos["target_price"]:
         return "profit_target"
     if pos["bars_held"] >= 2 and current["close"] < pos.get("trailing_stop", 0):
         return "trail_stop"

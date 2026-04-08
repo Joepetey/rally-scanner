@@ -87,12 +87,22 @@ class HousekeepingResult(BaseModel):
     positions_synced: bool
 
 
+class LetItRideEvent(BaseModel):
+    ticker: str
+    entry_price: float
+    target_price: float
+    current_price: float
+    trail_pct: float
+    trail_order_id: str | None = None
+    pnl_pct: float
+
+
 # ---------------------------------------------------------------------------
 # Union of all events the scheduler can emit
 # ---------------------------------------------------------------------------
 
 TradingEvent = (
-    AlertEvent | ExitResult | HousekeepingResult |
+    AlertEvent | ExitResult | HousekeepingResult | LetItRideEvent |
     ScanResult | WatchlistEvent | RegimeEvent | RetrainResult | RiskActionEvent |
     StreamDegradedEvent | StreamRecoveredEvent
 )

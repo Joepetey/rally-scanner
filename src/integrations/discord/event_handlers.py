@@ -25,12 +25,14 @@ from trading.engine import (
     StreamRecoveredEvent,
     WatchlistEvent,
 )
+from trading.events import LetItRideEvent
 
 from .notify import (
     _approaching_alert_embed,
     _error_embed,
     _exit_embed,
     _fill_confirmation_embed,
+    _let_it_ride_embed,
     _order_embed,
     _order_failure_embed,
     _positions_embed,
@@ -222,10 +224,18 @@ async def _handle_stream_recovered(
     )
 
 
+async def _handle_let_it_ride(
+    event: LetItRideEvent, send_alert: Callable,
+) -> None:
+    embed = discord.Embed.from_dict(_let_it_ride_embed(event.model_dump()))
+    await send_alert(embed, "let_it_ride")
+
+
 _EVENT_HANDLERS: dict[type, Callable] = {
     AlertEvent: _handle_alert_event,
     ExitResult: _handle_exit_result,
     HousekeepingResult: _handle_housekeeping_result,
+    LetItRideEvent: _handle_let_it_ride,
     ScanResult: _handle_scan_result,
     WatchlistEvent: _handle_watchlist_event,
     RegimeEvent: _handle_regime_event,

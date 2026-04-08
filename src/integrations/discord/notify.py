@@ -9,6 +9,7 @@ from integrations.discord.embeds import (  # noqa: F401
     _error_embed,
     _exit_embed,
     _fill_confirmation_embed,
+    _let_it_ride_embed,
     _order_embed,
     _order_failure_embed,
     _positions_embed,

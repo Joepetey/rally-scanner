@@ -405,6 +405,10 @@ def _run_migrations(cur) -> None:
         ALTER TABLE system_positions
         ADD COLUMN IF NOT EXISTS target_order_id TEXT
     """)
+    cur.execute("""
+        ALTER TABLE system_positions
+        ADD COLUMN IF NOT EXISTS let_it_ride BOOLEAN DEFAULT FALSE
+    """)
 
     # current_signals: add range_low if missing
     cur.execute("""

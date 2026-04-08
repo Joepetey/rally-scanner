@@ -8,18 +8,19 @@ import logging
 import rally_ml.config as config
 
 from db.ops.events import log_order, update_order_fill
-from db.trading.positions import load_positions
+from db.trading.positions import load_positions, save_position_meta
 from integrations.alpaca.broker import is_enabled as alpaca_enabled
 from integrations.alpaca.exits import (
     cancel_exit_orders,
     execute_exit,
     place_exit_orders,
+    place_trailing_stop,
 )
 from integrations.alpaca.fills import (
     check_pending_fills,
     get_recent_sell_fills,
 )
-from trading.events import ExitResult, FillNotification, HousekeepingResult
+from trading.events import ExitResult, FillNotification, HousekeepingResult, LetItRideEvent
 from trading.positions import (
     async_close_position,
     async_save_positions,
@@ -61,6 +62,64 @@ async def execute_breach(
     except Exception:
         logger.exception("Alpaca exit failed for %s", ticker)
         return None
+
+
+async def convert_to_trailing_stop(
+    ticker: str, pos: dict, price: float,
+) -> LetItRideEvent | None:
+    """Cancel OCO, place Alpaca trailing stop, let position ride."""
+    from rally_ml.config import PARAMS
+
+    is_crypto = (
+        ticker in config.ASSETS
+        and config.ASSETS[ticker].asset_class == "crypto"
+    )
+    if is_crypto:
+        logger.info("Skipping let-it-ride for crypto %s — selling at target", ticker)
+        return None
+
+    await cancel_exit_orders(pos.get("target_order_id"), pos.get("trail_order_id"))
+
+    trail_pct = PARAMS.let_it_ride_trail_pct
+    qty = pos.get("qty", 0)
+    trail_order_id = await place_trailing_stop(ticker, qty, trail_pct) if qty else None
+
+    entry = pos["entry_price"]
+    floor = round(entry * (1 + PARAMS.profit_lock_floor_pct), 4)
+    if pos.get("stop_price", 0) < floor:
+        pos["stop_price"] = floor
+
+    original_target = pos.get("target_price", 0)
+    pos["let_it_ride"] = True
+    pos["target_order_id"] = None
+    pos["trail_order_id"] = trail_order_id
+
+    save_position_meta(pos)
+
+    pnl_pct = round((price / entry - 1) * 100, 2) if entry else 0
+
+    log_order(
+        ticker, "sell", "trailing_stop", qty,
+        "let_it_ride", trail_order_id,
+        "pending" if trail_order_id else "failed",
+        None, None,
+    )
+
+    logger.info(
+        "Let-it-ride: %s target $%.2f hit at $%.2f (+%.1f%%), "
+        "trailing stop %.1f%% placed (order %s)",
+        ticker, original_target, price, pnl_pct, trail_pct, trail_order_id,
+    )
+
+    return LetItRideEvent(
+        ticker=ticker,
+        entry_price=entry,
+        target_price=original_target,
+        current_price=price,
+        trail_pct=trail_pct,
+        trail_order_id=trail_order_id,
+        pnl_pct=pnl_pct,
+    )
 
 
 async def confirm_pending_fills(

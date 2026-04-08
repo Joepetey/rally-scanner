@@ -29,10 +29,14 @@ async def reconcile_loop(sched: TradingScheduler) -> None:
             state = load_positions()
             positions = state.get("positions", [])
             filled = await check_exit_fills(positions)
+            pos_map = {p["ticker"]: p for p in positions}
             for fill in filled:
                 ticker = fill["ticker"]
                 fill_price = fill["fill_price"]
                 exit_reason = fill["exit_reason"]
+                # Let-it-ride positions exiting via trailing stop; relabel for clarity
+                if exit_reason == "stop" and pos_map.get(ticker, {}).get("let_it_ride"):
+                    exit_reason = "trail_stop_filled"
                 logger.info(
                     "Broker exit filled for %s at %.2f (%s) — syncing DB",
                     ticker, fill_price, exit_reason,

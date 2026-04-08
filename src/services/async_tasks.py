@@ -113,7 +113,7 @@ async def run_simulation(
     if not scenario:
         await send(
             "Usage: `!simulate <scenario> [equity]`\n"
-            "Scenarios: `target` `stop` `trail` `time`"
+            "Scenarios: `target` `stop` `trail` `time` `let_it_ride`"
         )
         return
 

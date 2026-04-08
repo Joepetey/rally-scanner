@@ -266,6 +266,26 @@ def _error_embed(title: str, details: str) -> dict:
     return _build_embed(f"Error: {title}", colors.RED, description=details[:4096])
 
 
+def _let_it_ride_embed(event: dict) -> dict:
+    pnl = event.get("pnl_pct", 0)
+    trail_id = event.get("trail_order_id") or "failed"
+    return _build_embed(
+        f"Let It Ride: {event['ticker']}", colors.GREEN,
+        fields=[{
+            "name": f"{colors.EMOJI_TARGET} {event['ticker']}",
+            "value": (
+                f"**Target hit** at ${event['current_price']:.2f}\n"
+                f"Entry: ${event['entry_price']:.2f}\n"
+                f"PnL: **{_pnl_sign(pnl)}{pnl:.2f}%**\n"
+                f"Trailing stop: {event['trail_pct']:.1f}%\n"
+                f"Order: `{trail_id[:8] if len(trail_id) > 8 else trail_id}`"
+            ),
+            "inline": True,
+        }],
+        footer="Position continues running with trailing stop",
+    )
+
+
 def _stream_degraded_embed(disconnected_minutes: int) -> dict:
     return _build_embed(
         "Stream Degraded \u2014 Polling-Only Mode", colors.ORANGE,
