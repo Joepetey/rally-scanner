@@ -52,7 +52,7 @@ logging.getLogger("alpaca.data.live.websocket").setLevel(logging.CRITICAL)
 logging.getLogger("alpaca.trading.stream").setLevel(logging.CRITICAL)
 logger = logging.getLogger("simulate")
 
-SCENARIOS = ("target", "stop", "trail", "time")
+SCENARIOS = ("target", "stop", "trail", "time", "let_it_ride")
 
 
 def _print_embed(embed_dict: dict) -> None:
@@ -178,7 +178,7 @@ async def main(scenarios: tuple[str, ...], equity_override: float) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run BTC paper trading simulations")
     parser.add_argument(
-        "scenario", nargs="?", choices=SCENARIOS,
+        "scenario", nargs="?", choices=list(SCENARIOS),
         help="Single scenario to run (default: all)",
     )
     parser.add_argument("--equity", type=float, default=0.0,
