@@ -243,9 +243,16 @@ class TradingScheduler:
         try:
             if alert_type == "target_breached" and alpaca_enabled():
                 from trading.engine.housekeeping import convert_to_trailing_stop
+                from trading.events import ExitResult as _ExitResult
                 event = await convert_to_trailing_stop(ticker, pos, price)
                 if event:
                     await self._on_event(event)
+                    if isinstance(event, _ExitResult):
+                        # OCO already filled — position closed, run post-exit tasks
+                        await self.run_risk_evaluation()
+                        if self._stream:
+                            all_pos = load_positions().get("positions", [])
+                            self._stream.update_subscriptions({p["ticker"] for p in all_pos})
                 else:
                     # Crypto or failed — fall through to normal exit
                     exit_result = await self._engine.execute_breach(

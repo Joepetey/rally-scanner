@@ -64,10 +64,25 @@ async def execute_breach(
         return None
 
 
+async def _check_broker_position(ticker: str) -> float | None:
+    """Return broker qty for ticker, or None if no position held."""
+    from integrations.alpaca.broker import get_all_positions
+    broker_positions = await get_all_positions()
+    for bp in broker_positions:
+        if bp["ticker"] == ticker:
+            return bp["qty"]
+    return None
+
+
 async def convert_to_trailing_stop(
     ticker: str, pos: dict, price: float,
-) -> LetItRideEvent | None:
-    """Cancel OCO, place Alpaca trailing stop, let position ride."""
+) -> LetItRideEvent | ExitResult | None:
+    """Cancel OCO, place Alpaca trailing stop, let position ride.
+
+    If the OCO target already filled at the broker (no position held),
+    closes the position in DB using the broker fill price and returns
+    an ExitResult instead.
+    """
     from rally_ml.config import PARAMS
 
     is_crypto = (
@@ -79,6 +94,29 @@ async def convert_to_trailing_stop(
         return None
 
     await cancel_exit_orders(pos.get("target_order_id"), pos.get("trail_order_id"))
+
+    # Guard: verify broker still holds the position. The OCO target may have
+    # already filled before our polling detected the breach.
+    broker_qty = await _check_broker_position(ticker)
+    if not broker_qty:
+        logger.warning(
+            "Let-it-ride aborted for %s — no broker position "
+            "(OCO target likely already filled)", ticker,
+        )
+        from integrations.alpaca.fills import get_recent_sell_fills
+        fills = await get_recent_sell_fills([ticker])
+        fill_price = fills.get(ticker, price)
+        closed = await async_close_position(ticker, fill_price, "oco_fill")
+        if closed:
+            return ExitResult(
+                ticker=ticker,
+                exit_reason="oco_fill",
+                fill_price=fill_price,
+                order_id=pos.get("target_order_id"),
+                realized_pnl_pct=closed.get("realized_pnl_pct"),
+                bars_held=closed.get("bars_held"),
+            )
+        return None
 
     trail_pct = PARAMS.let_it_ride_trail_pct
     qty = pos.get("qty", 0)

@@ -116,16 +116,14 @@ class TestLetItRideEODGuard:
 
 class TestLetItRideIntraday:
 
-    @patch("trading.engine.log_price_alert", return_value=True)
-    def test_let_it_ride_no_target_breach(self, mock_log):
+    def test_let_it_ride_no_target_breach(self, pg_db):
         """evaluate_single_ticker must not fire target_breached for let-it-ride positions."""
         engine = AlertEngine()
         pos = _make_pos(entry=270.0, target=280.0, stop=274.0, trailing=275.0, let_it_ride=True)
         event = engine.evaluate_single_ticker("FDX", 282.0, pos)
         assert event is None
 
-    @patch("trading.engine.log_price_alert", return_value=True)
-    def test_stop_still_fires_for_let_it_ride(self, mock_log):
+    def test_stop_still_fires_for_let_it_ride(self, pg_db):
         """A let-it-ride position should still exit on stop breach."""
         engine = AlertEngine()
         pos = _make_pos(entry=270.0, target=280.0, stop=274.0, trailing=275.0, let_it_ride=True)
@@ -146,12 +144,14 @@ class TestConvertToTrailingStop:
     @patch("trading.engine.housekeeping.save_position_meta")
     @patch("trading.engine.housekeeping.place_trailing_stop", new_callable=AsyncMock)
     @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping._check_broker_position", new_callable=AsyncMock)
     async def test_converts_position(
-        self, mock_cancel, mock_place_trail, mock_save, mock_log,
+        self, mock_broker_pos, mock_cancel, mock_place_trail, mock_save, mock_log,
     ):
         """Full convert flow: cancel OCO → place trailing stop → update position."""
         from trading.engine.housekeeping import convert_to_trailing_stop
 
+        mock_broker_pos.return_value = 10.0  # Broker still holds shares
         mock_place_trail.return_value = "trail_order_999"
         pos = _make_pos(entry=270.0, target=280.0, stop=262.0, trailing=265.0)
 
@@ -186,12 +186,14 @@ class TestConvertToTrailingStop:
     @patch("trading.engine.housekeeping.save_position_meta")
     @patch("trading.engine.housekeeping.place_trailing_stop", new_callable=AsyncMock)
     @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping._check_broker_position", new_callable=AsyncMock)
     async def test_trailing_stop_failure_still_updates_position(
-        self, mock_cancel, mock_place_trail, mock_save, mock_log,
+        self, mock_broker_pos, mock_cancel, mock_place_trail, mock_save, mock_log,
     ):
         """If Alpaca trailing stop fails, position still converts (internal stop protects)."""
         from trading.engine.housekeeping import convert_to_trailing_stop
 
+        mock_broker_pos.return_value = 10.0  # Broker still holds shares
         mock_place_trail.return_value = None  # Alpaca call failed
         pos = _make_pos(entry=270.0, target=280.0)
 
@@ -201,6 +203,41 @@ class TestConvertToTrailingStop:
         assert pos["trail_order_id"] is None
         assert event is not None
         assert event.trail_order_id is None
+
+    @pytest.mark.asyncio
+    @patch("trading.engine.housekeeping.async_close_position", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
+    @patch("trading.engine.housekeeping._check_broker_position", new_callable=AsyncMock)
+    async def test_oco_already_filled_closes_position(
+        self, mock_broker_pos, mock_cancel, mock_close,
+    ):
+        """If OCO target already filled at broker, close in DB instead of placing trailing stop."""
+        from trading.engine.housekeeping import convert_to_trailing_stop
+        from trading.events import ExitResult
+
+        mock_broker_pos.return_value = None  # No position at broker — OCO already sold
+        mock_close.return_value = {
+            "ticker": "FDX",
+            "realized_pnl_pct": 3.7,
+            "bars_held": 2,
+        }
+        pos = _make_pos(entry=270.0, target=280.0, stop=262.0, trailing=265.0)
+
+        with patch(
+            "integrations.alpaca.fills.get_recent_sell_fills",
+            new_callable=AsyncMock,
+            return_value={"FDX": 280.5},
+        ):
+            event = await convert_to_trailing_stop("FDX", pos, 281.0)
+
+        # Should return ExitResult, not LetItRideEvent
+        assert isinstance(event, ExitResult)
+        assert event.exit_reason == "oco_fill"
+        assert event.fill_price == 280.5
+        assert event.realized_pnl_pct == 3.7
+
+        # Should have closed in DB with the broker fill price
+        mock_close.assert_called_once_with("FDX", 280.5, "oco_fill")
 
     @pytest.mark.asyncio
     @patch("trading.engine.housekeeping.cancel_exit_orders", new_callable=AsyncMock)
